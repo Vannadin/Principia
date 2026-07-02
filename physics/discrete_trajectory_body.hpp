@@ -360,6 +360,14 @@ void DiscreteTrajectory<Frame>::ForgetBefore(iterator const it) {
 }
 
 template<typename Frame>
+void DiscreteTrajectory<Frame>::Translate(
+    Displacement<Frame> const& displacement) {
+  for (auto& segment : *segments_) {
+    segment.Translate(displacement);
+  }
+}
+
+template<typename Frame>
 absl::Status DiscreteTrajectory<Frame>::Append(
     Instant const& t,
     DegreesOfFreedom<Frame> const& degrees_of_freedom) {

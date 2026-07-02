@@ -101,6 +101,10 @@ class DiscreteTrajectory : public Trajectory<Frame> {
   void ForgetBefore(Instant const& t);
   void ForgetBefore(iterator it);
 
+  // Translates all the positions of this trajectory by `displacement`.  The
+  // times and velocities are unaffected.
+  void Translate(Displacement<Frame> const& displacement);
+
   // Return an error if downsampling was aborted.
   absl::Status Append(Instant const& t,
                       DegreesOfFreedom<Frame> const& degrees_of_freedom);

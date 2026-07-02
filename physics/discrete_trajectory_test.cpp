@@ -546,6 +546,33 @@ TEST_F(DiscreteTrajectoryTest, ForgetAfter) {
   }
 }
 
+TEST_F(DiscreteTrajectoryTest, Translate) {
+  auto trajectory = MakeTrajectory();
+  auto const untranslated_trajectory = MakeTrajectory();
+  Displacement<World> const displacement(
+      {1000 * Metre, -2000 * Metre, 3000 * Metre});
+
+  trajectory.Translate(displacement);
+
+  EXPECT_EQ(3, trajectory.segments().size());
+  EXPECT_EQ(untranslated_trajectory.size(), trajectory.size());
+  for (auto const& [t, degrees_of_freedom] : untranslated_trajectory) {
+    auto const it = trajectory.find(t);
+    ASSERT_TRUE(it != trajectory.end());
+    EXPECT_EQ(degrees_of_freedom.position() + displacement,
+              it->degrees_of_freedom.position());
+    EXPECT_EQ(degrees_of_freedom.velocity(),
+              it->degrees_of_freedom.velocity());
+  }
+
+  // Interpolated evaluation must see the translation too.
+  Instant const t = t0_ + 4.5 * Second;
+  EXPECT_EQ(untranslated_trajectory.EvaluatePosition(t) + displacement,
+            trajectory.EvaluatePosition(t));
+  EXPECT_EQ(untranslated_trajectory.EvaluateVelocity(t),
+            trajectory.EvaluateVelocity(t));
+}
+
 TEST_F(DiscreteTrajectoryTest, ForgetBefore) {
   auto trajectory = MakeTrajectory();
 

@@ -168,6 +168,10 @@ class DiscreteTrajectorySegment : public Trajectory<Frame> {
   void ForgetBefore(Instant const& t);
   void ForgetBefore(typename Timeline::const_iterator end);
 
+  // Translates all the positions of this segment by `displacement`.  The
+  // times and velocities are unaffected.
+  void Translate(Displacement<Frame> const& displacement);
+
   absl::Status Append(Instant const& t,
                       DegreesOfFreedom<Frame> const& degrees_of_freedom);
 

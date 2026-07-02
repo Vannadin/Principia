@@ -571,6 +571,41 @@ void DiscreteTrajectorySegment<Frame>::SetForkPoint(value_type const& point) {
 }
 
 template<typename Frame>
+void DiscreteTrajectorySegment<Frame>::Translate(
+    Displacement<Frame> const& displacement) {
+  Timeline translated_timeline;
+  DegreesOfFreedom<Frame> const* previous_degrees_of_freedom = nullptr;
+  Instant previous_time;
+  for (auto const& point : timeline_) {
+    DegreesOfFreedom<Frame> const translated_degrees_of_freedom(
+        point.degrees_of_freedom.position() + displacement,
+        point.degrees_of_freedom.velocity());
+    // The translated interpolation is the translated Hermite interpolation of
+    // the translated endpoints, with an unchanged error.
+    std::unique_ptr<Interpolation<Frame>> interpolation;
+    if (point.interpolation != nullptr) {
+      CHECK(previous_degrees_of_freedom != nullptr);
+      interpolation = NewInterpolation(
+          Hermite3<Position<Frame>, Instant>(
+              std::pair{previous_time, point.time},
+              std::pair{previous_degrees_of_freedom->position(),
+                        translated_degrees_of_freedom.position()},
+              std::pair{previous_degrees_of_freedom->velocity(),
+                        translated_degrees_of_freedom.velocity()}),
+          point.interpolation->error);
+    }
+    auto const it =
+        translated_timeline.emplace_hint(translated_timeline.cend(),
+                                         point.time,
+                                         translated_degrees_of_freedom,
+                                         std::move(interpolation));
+    previous_degrees_of_freedom = &it->degrees_of_freedom;
+    previous_time = point.time;
+  }
+  timeline_ = std::move(translated_timeline);
+}
+
+template<typename Frame>
 void DiscreteTrajectorySegment<Frame>::CreateInterpolation(
     typename Timeline::iterator const upper) {
   CHECK(upper != timeline_.cbegin());
