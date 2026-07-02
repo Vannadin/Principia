@@ -378,7 +378,9 @@ class Ephemeris {
   // (with index `b1` in the `positions` and `jacobians` arrays) and the bodies
   // `bodies2` (with indices [b2_begin, b2_end[ in the `bodies2`, `positions`
   // and `jacobians` arrays).  This assumes that the bodies are point masses
-  // (that is, it doesn't take the geopotential into account).
+  // (that is, it doesn't take the geopotential into account).  The positions
+  // are relative to the local origin of the subsystem of each body, as
+  // described by `subsystem_of_body` and `subsystem_origin_offset`.
   template<typename MassiveBodyConstPtr>
   static void ComputeJacobianByMassiveBodyOnMassiveBodies(
       MassiveBody const& body1,
@@ -387,13 +389,18 @@ class Ephemeris {
       std::size_t b2_begin,
       std::size_t b2_end,
       std::vector<Position<Frame>> const& positions,
-      std::vector<JacobianOfAcceleration<Frame>>& jacobians);
+      std::vector<JacobianOfAcceleration<Frame>>& jacobians,
+      std::vector<int> const& subsystem_of_body,
+      std::vector<DoublePrecision<Displacement<Frame>>> const&
+          subsystem_origin_offset);
 
   // Computes the jerk between one body, `body1` (with index `b1` in the
   // `degrees_of_freedom` and `jerks` arrays) and the bodies `bodies2` (with
   // indices [b2_begin, b2_end[ in the `bodies2`, `degrees_of_freedom` and
   // `jerks` arrays).  This assumes that the bodies are point masses
-  // (that is, it doesn't take the geopotential into account).
+  // (that is, it doesn't take the geopotential into account).  The positions
+  // are relative to the local origin of the subsystem of each body, as
+  // described by `subsystem_of_body` and `subsystem_origin_offset`.
   template<typename MassiveBodyConstPtr>
   static void ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
       MassiveBody const& body1,
@@ -402,7 +409,10 @@ class Ephemeris {
       std::size_t b2_begin,
       std::size_t b2_end,
       std::vector<DegreesOfFreedom<Frame>> const& degrees_of_freedom,
-      std::vector<Vector<Jerk, Frame>>& jerks);
+      std::vector<Vector<Jerk, Frame>>& jerks,
+      std::vector<int> const& subsystem_of_body,
+      std::vector<DoublePrecision<Displacement<Frame>>> const&
+          subsystem_origin_offset);
 
   // Returns the gravitational acceleration on the massive `body` at time `t`.
   // The `positions` must be for all the bodies in this object, in the order of
