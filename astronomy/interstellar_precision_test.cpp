@@ -8,6 +8,7 @@
 #include "absl/log/log.h"
 #include "astronomy/frames.hpp"
 #include "base/not_null.hpp"
+#include "geometry/frame.hpp"
 #include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
 #include "geometry/space.hpp"
@@ -17,10 +18,12 @@
 #include "integrators/symmetric_linear_multistep_integrator.hpp"
 #include "numerics/elementary_functions.hpp"
 #include "physics/apsides.hpp"
+#include "physics/body_centred_body_direction_reference_frame.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/discrete_trajectory.hpp"
 #include "physics/ephemeris.hpp"
 #include "physics/massive_body.hpp"
+#include "physics/rigid_motion.hpp"
 #include "quantities/astronomy.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
@@ -37,6 +40,7 @@ using ::testing::Gt;
 using ::testing::Lt;
 using namespace principia::astronomy::_frames;
 using namespace principia::base::_not_null;
+using namespace principia::geometry::_frame;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
 using namespace principia::geometry::_space;
@@ -45,10 +49,12 @@ using namespace principia::integrators::_methods;
 using namespace principia::integrators::_symmetric_linear_multistep_integrator;
 using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_apsides;
+using namespace principia::physics::_body_centred_body_direction_reference_frame;  // NOLINT
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
+using namespace principia::physics::_rigid_motion;
 using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
@@ -368,6 +374,45 @@ TEST_F(InterstellarPrecisionTest, MasslessProbe) {
             << error_with_subsystems;
   EXPECT_THAT(error_without_subsystems, Gt(1 * Metre));
   EXPECT_THAT(error_with_subsystems, Lt(1 * Milli(Metre)));
+}
+
+// Checks that a reference frame whose primary and secondary belong to
+// different subsystems reconstitutes their true relative geometry: the X axis
+// of a frame defined by star A and star B points from star A to star B.
+TEST_F(InterstellarPrecisionTest, CrossSubsystemReferenceFrame) {
+  using Navigation = Frame<serialization::Frame::TestTag,
+                           Arbitrary,
+                           Handedness::Right,
+                           serialization::Frame::TEST>;
+  auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  Instant const t = Instant() + Period();
+  EXPECT_OK(ephemeris->Prolong(t));
+
+  auto const star_a = ephemeris->bodies()[0];
+  auto const star_b = ephemeris->bodies()[2];
+  BodyCentredBodyDirectionReferenceFrame<ICRS, Navigation> const frame(
+      ephemeris.get(), star_a, star_b);
+  EXPECT_EQ(0, frame.subsystem());
+
+  // The degrees of freedom of star B, represented relative to the local
+  // origin of the subsystem of star A.
+  Displacement<ICRS> const conversion =
+      ephemeris->subsystem_conversion(/*s1=*/1, /*s2=*/0);
+  DegreesOfFreedom<ICRS> const star_b_degrees_of_freedom = {
+      ephemeris->trajectory(star_b)->EvaluatePosition(t) + conversion,
+      ephemeris->trajectory(star_b)->EvaluateVelocity(t)};
+  Length const separation =
+      (star_b_degrees_of_freedom.position() -
+       ephemeris->trajectory(star_a)->EvaluatePosition(t)).Norm();
+
+  RigidMotion<ICRS, Navigation> const to_this_frame =
+      frame.ToThisFrameAtTime(t);
+  Displacement<Navigation> const star_b_in_frame =
+      to_this_frame(star_b_degrees_of_freedom).position() - Navigation::origin;
+  EXPECT_THAT(AbsoluteError(separation, star_b_in_frame.coordinates().x),
+              Lt(100 * Metre));
+  EXPECT_THAT(Abs(star_b_in_frame.coordinates().y), Lt(100 * Metre));
+  EXPECT_THAT(Abs(star_b_in_frame.coordinates().z), Lt(100 * Metre));
 }
 
 TEST_F(InterstellarPrecisionTest, Serialization) {

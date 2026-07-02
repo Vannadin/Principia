@@ -56,6 +56,7 @@ class BodySurfaceReferenceFrame : public RigidReferenceFrame<InertialFrame,
 
   Instant t_min() const override;
   Instant t_max() const override;
+  int subsystem() const override;
 
   RigidMotion<InertialFrame, ThisFrame> ToThisFrameAtTime(
       Instant const& t) const override;
@@ -80,6 +81,7 @@ class BodySurfaceReferenceFrame : public RigidReferenceFrame<InertialFrame,
   not_null<Ephemeris<InertialFrame> const*> const ephemeris_;
   not_null<RotatingBody<InertialFrame> const*> const centre_;
   not_null<ContinuousTrajectory<InertialFrame> const*> const centre_trajectory_;
+  int const subsystem_;
 };
 
 }  // namespace internal

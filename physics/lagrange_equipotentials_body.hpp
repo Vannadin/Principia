@@ -133,19 +133,31 @@ LagrangeEquipotentials<Inertial, RotatingPulsating>::ComputeLines(
     maximum_maximorum = std::max(maximum_maximorum, maximum);
   }
 
+  // The position of `body`, represented relative to the local origin of the
+  // subsystem of `reference_frame`.
+  auto const body_Inertial_position =
+      [this, &reference_frame, &t](not_null<MassiveBody const*> const body) {
+    Position<Inertial> position = ephemeris_->trajectory(body)->
+        EvaluatePosition(t);
+    if (int const s = ephemeris_->subsystem_of_body(body);
+        s != reference_frame.subsystem()) {
+      position +=
+          ephemeris_->subsystem_conversion(s, reference_frame.subsystem());
+    }
+    return position;
+  };
+
   BarycentreCalculator<Position<Inertial>, GravitationalParameter>
       primary_Inertial_position;
   for (not_null const primary : parameters.primaries) {
-    primary_Inertial_position.Add(
-        ephemeris_->trajectory(primary)->EvaluatePosition(t),
-        primary->gravitational_parameter());
+    primary_Inertial_position.Add(body_Inertial_position(primary),
+                                  primary->gravitational_parameter());
   }
   BarycentreCalculator<Position<Inertial>, GravitationalParameter>
       secondary_Inertial_position;
   for (not_null const secondary : parameters.secondaries) {
-    secondary_Inertial_position.Add(
-        ephemeris_->trajectory(secondary)->EvaluatePosition(t),
-        secondary->gravitational_parameter());
+    secondary_Inertial_position.Add(body_Inertial_position(secondary),
+                                    secondary->gravitational_parameter());
   }
   Length const r =
       (secondary_Inertial_position.Get() - primary_Inertial_position.Get())
@@ -168,8 +180,7 @@ LagrangeEquipotentials<Inertial, RotatingPulsating>::ComputeLines(
       primary_radius =
           std::max(primary_radius,
                    (primary_Inertial_position.Get() -
-                    ephemeris_->trajectory(primary)->EvaluatePosition(t))
-                           .Norm() +
+                    body_Inertial_position(primary)).Norm() +
                        primary->min_radius());
     }
   }
@@ -182,8 +193,7 @@ LagrangeEquipotentials<Inertial, RotatingPulsating>::ComputeLines(
       secondary_radius =
           std::max(secondary_radius,
                    (secondary_Inertial_position.Get() -
-                    ephemeris_->trajectory(secondary)->EvaluatePosition(t))
-                           .Norm() +
+                    body_Inertial_position(secondary)).Norm() +
                        secondary->min_radius());
     }
   }

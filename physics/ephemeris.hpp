@@ -167,6 +167,12 @@ class Ephemeris {
       int s1,
       int s2) const;
 
+  // Returns the displacement to add to a position represented relative to the
+  // local origin of subsystem `s1` so that it becomes represented relative to
+  // the local origin of subsystem `s2`, rounded to a single displacement.
+  // Zero when `s1 == s2`.
+  virtual Displacement<Frame> subsystem_conversion(int s1, int s2) const;
+
   // Returns the trajectory for the given `body`.
   virtual not_null<ContinuousTrajectory<Frame> const*> trajectory(
       not_null<MassiveBody const*> body) const;

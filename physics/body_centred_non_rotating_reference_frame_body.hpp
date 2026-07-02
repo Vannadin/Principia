@@ -30,6 +30,7 @@ BodyCentredNonRotatingReferenceFrame(
     : ephemeris_(ephemeris),
       centre_(centre),
       centre_trajectory_(ephemeris_->trajectory(centre_)),
+      subsystem_(ephemeris_->subsystem_of_body(centre_)),
       orthogonal_map_([this]() {
         // Note that we cannot do this by making `equatorial` and
         // `biequatorial` virtual members of `MassiveBody`, because that
@@ -59,6 +60,12 @@ template<typename InertialFrame, typename ThisFrame>
 Instant BodyCentredNonRotatingReferenceFrame<InertialFrame, ThisFrame>::t_max()
     const {
   return centre_trajectory_->t_max();
+}
+
+template<typename InertialFrame, typename ThisFrame>
+int BodyCentredNonRotatingReferenceFrame<InertialFrame,
+                                         ThisFrame>::subsystem() const {
+  return subsystem_;
 }
 
 template<typename InertialFrame, typename ThisFrame>
@@ -102,14 +109,15 @@ Vector<Acceleration, InertialFrame>
 BodyCentredNonRotatingReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalAcceleration(Instant const& t,
                           Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(q, t);
+  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(
+      q, t, subsystem_);
 }
 
 template<typename InertialFrame, typename ThisFrame>
 SpecificEnergy BodyCentredNonRotatingReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalPotential(Instant const& t,
                        Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalPotential(q, t);
+  return ephemeris_->ComputeGravitationalPotential(q, t, subsystem_);
 }
 
 template<typename InertialFrame, typename ThisFrame>

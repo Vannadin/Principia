@@ -27,7 +27,8 @@ BodySurfaceReferenceFrame(
     not_null<RotatingBody<InertialFrame> const*> centre)
     : ephemeris_(std::move(ephemeris)),
       centre_(std::move(centre)),
-      centre_trajectory_(ephemeris_->trajectory(centre_)) {}
+      centre_trajectory_(ephemeris_->trajectory(centre_)),
+      subsystem_(ephemeris_->subsystem_of_body(centre_)) {}
 
 template<typename InertialFrame, typename ThisFrame>
 not_null<RotatingBody<InertialFrame> const*>
@@ -45,6 +46,11 @@ template<typename InertialFrame, typename ThisFrame>
 Instant BodySurfaceReferenceFrame<InertialFrame, ThisFrame>::t_max()
     const {
   return centre_trajectory_->t_max();
+}
+
+template<typename InertialFrame, typename ThisFrame>
+int BodySurfaceReferenceFrame<InertialFrame, ThisFrame>::subsystem() const {
+  return subsystem_;
 }
 
 template<typename InertialFrame, typename ThisFrame>
@@ -93,14 +99,15 @@ Vector<Acceleration, InertialFrame>
 BodySurfaceReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalAcceleration(Instant const& t,
                           Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(q, t);
+  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(
+      q, t, subsystem_);
 }
 
 template<typename InertialFrame, typename ThisFrame>
 SpecificEnergy BodySurfaceReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalPotential(Instant const& t,
                        Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalPotential(q, t);
+  return ephemeris_->ComputeGravitationalPotential(q, t, subsystem_);
 }
 
 template<typename InertialFrame, typename ThisFrame>

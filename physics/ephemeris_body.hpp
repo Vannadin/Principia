@@ -299,6 +299,14 @@ Ephemeris<Frame>::inter_subsystem_offset(int const s1, int const s2) const {
 }
 
 template<typename Frame>
+Displacement<Frame> Ephemeris<Frame>::subsystem_conversion(
+    int const s1, int const s2) const {
+  DoublePrecision<Displacement<Frame>> const& offset =
+      inter_subsystem_offset(s1, s2);
+  return offset.value + offset.error;
+}
+
+template<typename Frame>
 void Ephemeris<Frame>::ComputeInterSubsystemOffsets() {
   int const number_of_subsystems = subsystem_origin_offset_.size();
   inter_subsystem_offsets_.resize(number_of_subsystems * number_of_subsystems);

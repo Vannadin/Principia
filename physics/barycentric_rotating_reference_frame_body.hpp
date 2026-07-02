@@ -61,7 +61,17 @@ BarycentricRotatingReferenceFrame<InertialFrame, ThisFrame>::
           std::accumulate(secondaries_.begin(),
                           secondaries_.end(),
                           GravitationalParameter{},
-                          &add_gravitational_parameter)) {
+                          &add_gravitational_parameter)),
+      subsystem_(ephemeris_->subsystem_of_body(primaries_.front())) {
+  for (auto const& bodies : {primaries_, secondaries_}) {
+    for (not_null const body : bodies) {
+      if (int const s = ephemeris_->subsystem_of_body(body);
+          s != subsystem_) {
+        body_offsets_.emplace(
+            body, ephemeris_->subsystem_conversion(s, subsystem_));
+      }
+    }
+  }
   absl::btree_set<not_null<MassiveBody const*>> primary_set(primaries_.begin(),
                                                             primaries_.end());
   absl::btree_set<not_null<MassiveBody const*>> secondary_set(
@@ -133,6 +143,12 @@ Instant BarycentricRotatingReferenceFrame<InertialFrame, ThisFrame>::t_min()
     const {
   // We depend on all bodies via the gravitational acceleration.
   return ephemeris_->t_min();
+}
+
+template<typename InertialFrame, typename ThisFrame>
+int BarycentricRotatingReferenceFrame<InertialFrame, ThisFrame>::subsystem()
+    const {
+  return subsystem_;
 }
 
 template<typename InertialFrame, typename ThisFrame>
@@ -279,16 +295,21 @@ BarycentreDerivative(
 
     if constexpr (degree == 0) {
       for (not_null const body : this->*bodies) {
+        Position<InertialFrame> position;
         if (bodies_to_positions != nullptr) {
-          result.Add(bodies_to_positions->at(body),
-                     body->gravitational_parameter());
+          position = bodies_to_positions->at(body);
         } else if (bodies_to_degrees_of_freedom != nullptr) {
-          result.Add(bodies_to_degrees_of_freedom->at(body).position(),
-                     body->gravitational_parameter());
+          position = bodies_to_degrees_of_freedom->at(body).position();
         } else {
-          result.Add(ephemeris_->trajectory(body)->EvaluatePosition(t),
-                     body->gravitational_parameter());
+          position = ephemeris_->trajectory(body)->EvaluatePosition(t);
         }
+        if (!body_offsets_.empty()) {
+          if (auto const it = body_offsets_.find(body);
+              it != body_offsets_.end()) {
+            position += it->second;
+          }
+        }
+        result.Add(position, body->gravitational_parameter());
       }
     } else if constexpr (degree == 1) {
       for (not_null const body : this->*bodies) {
@@ -353,14 +374,15 @@ Vector<Acceleration, InertialFrame>
 BarycentricRotatingReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalAcceleration(Instant const& t,
                           Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(q, t);
+  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(
+      q, t, subsystem_);
 }
 
 template<typename InertialFrame, typename ThisFrame>
 SpecificEnergy BarycentricRotatingReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalPotential(Instant const& t,
                        Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalPotential(q, t);
+  return ephemeris_->ComputeGravitationalPotential(q, t, subsystem_);
 }
 
 template<typename InertialFrame, typename ThisFrame>

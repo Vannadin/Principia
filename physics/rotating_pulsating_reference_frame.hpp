@@ -69,6 +69,7 @@ class RotatingPulsatingReferenceFrame
 
   Instant t_min() const override;
   Instant t_max() const override;
+  int subsystem() const override;
 
   SimilarMotion<InertialFrame, ThisFrame> ToThisFrameAtTimeSimilarly(
       Instant const& t) const override;

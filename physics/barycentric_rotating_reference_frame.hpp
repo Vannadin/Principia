@@ -11,6 +11,7 @@
 #include <memory>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "base/algebra.hpp"
 #include "base/not_null.hpp"
 #include "geometry/barycentre_calculator.hpp"
@@ -84,6 +85,7 @@ class BarycentricRotatingReferenceFrame
 
   Instant t_min() const override;
   Instant t_max() const override;
+  int subsystem() const override;
 
   RigidMotion<InertialFrame, ThisFrame> ToThisFrameAtTime(
       Instant const& t) const override;
@@ -162,6 +164,14 @@ class BarycentricRotatingReferenceFrame
   std::vector<not_null<MassiveBody const*>> const secondaries_;
   GravitationalParameter const primary_gravitational_parameter_;
   GravitationalParameter const secondary_gravitational_parameter_;
+  // The subsystem of the first primary, relative to whose local origin the
+  // frame is defined.
+  int const subsystem_;
+  // For each body of a subsystem other than `subsystem_`, the displacement
+  // that converts its positions to that subsystem; empty when all the bodies
+  // are in `subsystem_`.
+  absl::flat_hash_map<not_null<MassiveBody const*>,
+                      Displacement<InertialFrame>> body_offsets_;
   mutable absl::Mutex lock_;
   // These members optimize costly computations from `BarycentreDerivative` in
   // the frequent case where properties of the frame are repeatedly requested

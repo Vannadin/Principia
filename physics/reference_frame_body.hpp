@@ -22,6 +22,11 @@ using namespace principia::physics::_rotating_pulsating_reference_frame;
 using namespace principia::quantities::_si;
 
 template<typename InertialFrame, typename ThisFrame>
+int ReferenceFrame<InertialFrame, ThisFrame>::subsystem() const {
+  return 0;
+}
+
+template<typename InertialFrame, typename ThisFrame>
 SimilarMotion<InertialFrame, ThisFrame>
 ReferenceFrame<InertialFrame, ThisFrame>::ToThisFrameAtTimeSimilarly(
     Instant const& t) const {

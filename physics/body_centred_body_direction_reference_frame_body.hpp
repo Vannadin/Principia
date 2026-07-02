@@ -34,6 +34,8 @@ BodyCentredBodyDirectionReferenceFrame(
     : ephemeris_(ephemeris),
       primary_(primary),
       secondary_(secondary),
+      primary_subsystem_(
+          [s = ephemeris->subsystem_of_body(primary)]() { return s; }),
       compute_gravitational_acceleration_on_primary_(
           [this](Position<InertialFrame> const& /*position*/,
                  Instant const& t) {
@@ -55,20 +57,24 @@ BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 BodyCentredBodyDirectionReferenceFrame(
     not_null<Ephemeris<InertialFrame> const*> const ephemeris,
     std::function<Trajectory<InertialFrame> const&()> primary_trajectory,
-    not_null<MassiveBody const*> const secondary)
+    not_null<MassiveBody const*> const secondary,
+    std::function<int()> primary_subsystem)
     : ephemeris_(ephemeris),
       primary_(nullptr),
       secondary_(secondary),
+      primary_subsystem_(primary_subsystem == nullptr
+                             ? std::function<int()>([]() { return 0; })
+                             : std::move(primary_subsystem)),
       compute_gravitational_acceleration_on_primary_(
           [this](Position<InertialFrame> const& position, Instant const& t) {
             return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(
-                position, t);
+                position, t, primary_subsystem_());
           }),
       compute_gravitational_jerk_on_primary_(
           [this](DegreesOfFreedom<InertialFrame> const& degrees_of_freedom,
                  Instant const& t) {
             return ephemeris_->ComputeGravitationalJerkOnMasslessBody(
-                degrees_of_freedom, t);
+                degrees_of_freedom, t, primary_subsystem_());
           }),
       primary_trajectory_(std::move(primary_trajectory)),
       secondary_trajectory_(ephemeris_->trajectory(secondary_)) {}
@@ -104,13 +110,19 @@ Instant BodyCentredBodyDirectionReferenceFrame<InertialFrame,
 }
 
 template<typename InertialFrame, typename ThisFrame>
+int BodyCentredBodyDirectionReferenceFrame<InertialFrame,
+                                           ThisFrame>::subsystem() const {
+  return primary_subsystem_();
+}
+
+template<typename InertialFrame, typename ThisFrame>
 RigidMotion<InertialFrame, ThisFrame>
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 ToThisFrameAtTime(Instant const& t) const {
   DegreesOfFreedom<InertialFrame> const primary_degrees_of_freedom =
       primary_trajectory_().EvaluateDegreesOfFreedom(t);
   DegreesOfFreedom<InertialFrame> const secondary_degrees_of_freedom =
-      secondary_trajectory_->EvaluateDegreesOfFreedom(t);
+      SecondaryDegreesOfFreedom(t);
 
   Vector<Acceleration, InertialFrame> const primary_acceleration =
       compute_gravitational_acceleration_on_primary_(
@@ -153,7 +165,8 @@ Vector<Acceleration, InertialFrame>
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalAcceleration(Instant const& t,
                           Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(q, t);
+  return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(
+      q, t, primary_subsystem_());
 }
 
 template<typename InertialFrame, typename ThisFrame>
@@ -161,7 +174,7 @@ SpecificEnergy
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalPotential(Instant const& t,
                        Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalPotential(q, t);
+  return ephemeris_->ComputeGravitationalPotential(q, t, primary_subsystem_());
 }
 
 template<typename InertialFrame, typename ThisFrame>
@@ -171,7 +184,7 @@ MotionOfThisFrame(Instant const& t) const {
   DegreesOfFreedom<InertialFrame> const primary_degrees_of_freedom =
       primary_trajectory_().EvaluateDegreesOfFreedom(t);
   DegreesOfFreedom<InertialFrame> const secondary_degrees_of_freedom =
-      secondary_trajectory_->EvaluateDegreesOfFreedom(t);
+      SecondaryDegreesOfFreedom(t);
 
   Vector<Acceleration, InertialFrame> const primary_acceleration =
       compute_gravitational_acceleration_on_primary_(
@@ -225,6 +238,22 @@ MotionOfThisFrame(Instant const& t) const {
              to_this_frame,
              angular_acceleration_of_to_frame,
              acceleration_of_to_frame_origin);}
+
+template<typename InertialFrame, typename ThisFrame>
+DegreesOfFreedom<InertialFrame>
+BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
+SecondaryDegreesOfFreedom(Instant const& t) const {
+  DegreesOfFreedom<InertialFrame> secondary_degrees_of_freedom =
+      secondary_trajectory_->EvaluateDegreesOfFreedom(t);
+  int const s1 = ephemeris_->subsystem_of_body(secondary_);
+  if (int const s2 = primary_subsystem_(); s1 != s2) {
+    secondary_degrees_of_freedom = {
+        secondary_degrees_of_freedom.position() +
+            ephemeris_->subsystem_conversion(s1, s2),
+        secondary_degrees_of_freedom.velocity()};
+  }
+  return secondary_degrees_of_freedom;
+}
 
 template<typename InertialFrame, typename ThisFrame>
 RigidMotion<InertialFrame, ThisFrame>

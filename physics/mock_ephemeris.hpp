@@ -42,6 +42,10 @@ class MockEphemeris : public Ephemeris<Frame> {
               (not_null<MassiveBody const*> body),
               (const, override));
   MOCK_METHOD(int, number_of_subsystems, (), (const, override));
+  MOCK_METHOD(Displacement<Frame>,
+              subsystem_conversion,
+              (int s1, int s2),
+              (const, override));
   MOCK_METHOD(bool, empty, (), (const, override));
   MOCK_METHOD(Instant, t_min, (), (const, override));
   MOCK_METHOD(Instant, t_max, (), (const, override));

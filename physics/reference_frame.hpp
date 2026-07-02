@@ -54,6 +54,11 @@ class ReferenceFrame {
   virtual Instant t_min() const = 0;
   virtual Instant t_max() const = 0;
 
+  // The subsystem of the ephemeris relative to whose local origin the
+  // `InertialFrame` degrees of freedom consumed and produced by this frame are
+  // represented.
+  virtual int subsystem() const;
+
   // At least one of `ToThisFrameAtTimeSimilarly` and
   // `FromThisFrameAtTimeSimilarly` must be overriden in derived classes; the
   // default implementation inverts the other one.

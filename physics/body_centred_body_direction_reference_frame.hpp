@@ -58,16 +58,21 @@ class BodyCentredBodyDirectionReferenceFrame
       not_null<MassiveBody const*> primary,
       not_null<MassiveBody const*> secondary);
 
+  // The positions of `primary_trajectory` must be represented relative to the
+  // local origin of the subsystem returned by `primary_subsystem`; if the
+  // latter is omitted, subsystem 0 is assumed.
   BodyCentredBodyDirectionReferenceFrame(
       not_null<Ephemeris<InertialFrame> const*> ephemeris,
       std::function<Trajectory<InertialFrame> const&()> primary_trajectory,
-      not_null<MassiveBody const*> secondary);
+      not_null<MassiveBody const*> secondary,
+      std::function<int()> primary_subsystem = nullptr);
 
   not_null<MassiveBody const*> primary() const;
   not_null<MassiveBody const*> secondary() const;
 
   Instant t_min() const override;
   Instant t_max() const override;
+  int subsystem() const override;
 
   RigidMotion<InertialFrame, ThisFrame> ToThisFrameAtTime(
       Instant const& t) const override;
@@ -103,9 +108,15 @@ class BodyCentredBodyDirectionReferenceFrame
       Vector<Acceleration, InertialFrame> const& primary_acceleration,
       Vector<Acceleration, InertialFrame> const& secondary_acceleration);
 
+  // The degrees of freedom of the secondary, represented relative to the local
+  // origin of the subsystem of this frame.
+  DegreesOfFreedom<InertialFrame> SecondaryDegreesOfFreedom(
+      Instant const& t) const;
+
   not_null<Ephemeris<InertialFrame> const*> const ephemeris_;
   MassiveBody const* const primary_;
   not_null<MassiveBody const*> const secondary_;
+  std::function<int()> const primary_subsystem_;
   std::function<Vector<Acceleration, InertialFrame>(
       Position<InertialFrame> const& position,
       Instant const& t)> compute_gravitational_acceleration_on_primary_;

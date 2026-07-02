@@ -91,6 +91,12 @@ Instant RotatingPulsatingReferenceFrame<InertialFrame, ThisFrame>::t_max()
 }
 
 template<typename InertialFrame, typename ThisFrame>
+int RotatingPulsatingReferenceFrame<InertialFrame, ThisFrame>::subsystem()
+    const {
+  return rotating_frame_.subsystem();
+}
+
+template<typename InertialFrame, typename ThisFrame>
 SimilarMotion<InertialFrame, ThisFrame> RotatingPulsatingReferenceFrame<
     InertialFrame,
     ThisFrame>::ToThisFrameAtTimeSimilarly(Instant const& t) const {
