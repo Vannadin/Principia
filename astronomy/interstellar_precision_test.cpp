@@ -21,6 +21,7 @@
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
+#include "serialization/physics.pb.h"
 #include "testing_utilities/matchers.hpp"  // 🧙 For EXPECT_OK.
 #include "testing_utilities/numerics.hpp"
 
@@ -44,6 +45,7 @@ using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
+using namespace principia::testing_utilities::_matchers;
 using namespace principia::testing_utilities::_numerics;
 
 // Two star-planet systems with bit-identical initial conditions (up to a
@@ -188,6 +190,37 @@ TEST_F(InterstellarPrecisionTest, JacobianAndJerk) {
   EXPECT_THAT(RelativeError(jerks_with_subsystems[0].Norm(),
                             jerks_with_subsystems[2].Norm()),
               Lt(1e-9));
+}
+
+TEST_F(InterstellarPrecisionTest, Serialization) {
+  auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  EXPECT_OK(ephemeris->Prolong(Instant() + Period()));
+
+  serialization::Ephemeris message;
+  ephemeris->WriteToMessage(&message);
+  EXPECT_EQ(4, message.body_subsystem_size());
+  EXPECT_EQ(2, message.subsystem_origin_offset_size());
+
+  auto const ephemeris_read = Ephemeris<ICRS>::ReadFromMessage(
+      /*desired_t_min=*/InfiniteFuture, message);
+  // After deserialization, the client must prolong as needed.
+  EXPECT_OK(ephemeris_read->Prolong(ephemeris->t_max()));
+
+  EXPECT_EQ(ephemeris->t_min(), ephemeris_read->t_min());
+  for (Instant t = ephemeris->t_min(); t <= ephemeris->t_max();
+       t += (ephemeris->t_max() - ephemeris->t_min()) / 100) {
+    EXPECT_OK(ephemeris_read->Prolong(t));
+    for (int b = 0; b < 4; ++b) {
+      EXPECT_EQ(ephemeris->trajectory(ephemeris->bodies()[b])
+                    ->EvaluateDegreesOfFreedom(t),
+                ephemeris_read->trajectory(ephemeris_read->bodies()[b])
+                    ->EvaluateDegreesOfFreedom(t));
+    }
+  }
+
+  serialization::Ephemeris second_message;
+  ephemeris_read->WriteToMessage(&second_message);
+  EXPECT_THAT(message, EqualsProto(second_message));
 }
 
 #endif

@@ -846,6 +846,18 @@ void Ephemeris<Frame>::WriteToMessage(
       message->mutable_fixed_step_parameters());
   accuracy_parameters_.WriteToMessage(
       message->mutable_accuracy_parameters());
+  // The subsystems are only serialized if there are at least two of them, so
+  // that the common case remains unchanged.  The subsystems are serialized in
+  // the order in which the bodies were given at construction.
+  if (subsystem_origin_offset_.size() > 1) {
+    for (auto const& unowned_body : unowned_bodies_) {
+      message->add_body_subsystem(
+          subsystem_of_body_[FindOrDie(bodies_indices_, unowned_body)]);
+    }
+    for (auto const& offset : subsystem_origin_offset_) {
+      offset.WriteToMessage(message->add_subsystem_origin_offset());
+    }
+  }
   LOG(INFO) << NAMED(message->SpaceUsedLong());
   LOG(INFO) << NAMED(message->ByteSizeLong());
 }
@@ -879,6 +891,9 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
   FixedStepParameters const fixed_step_parameters =
       FixedStepParameters::ReadFromMessage(message.fixed_step_parameters());
 
+  std::vector<int> const subsystems(message.body_subsystem().begin(),
+                                    message.body_subsystem().end());
+
   // Dummy initial state and time.  We'll overwrite them later.
   std::vector<DegreesOfFreedom<Frame>> const initial_state(
       bodies.size(),
@@ -889,7 +904,20 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
                        initial_state,
                        initial_time,
                        accuracy_parameters,
-                       fixed_step_parameters);
+                       fixed_step_parameters,
+                       subsystems);
+
+  // The origin offsets computed by the constructor are wrong because the
+  // initial state is a dummy; overwrite them from the message.
+  if (message.subsystem_origin_offset_size() > 0) {
+    CHECK_EQ(message.subsystem_origin_offset_size(),
+             ephemeris->subsystem_origin_offset_.size());
+    for (int s = 0; s < message.subsystem_origin_offset_size(); ++s) {
+      ephemeris->subsystem_origin_offset_[s] =
+          DoublePrecision<Displacement<Frame>>::ReadFromMessage(
+              message.subsystem_origin_offset(s));
+    }
+  }
 
   int index = 0;
   ephemeris->bodies_to_trajectories_.clear();
