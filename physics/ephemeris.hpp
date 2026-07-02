@@ -19,6 +19,7 @@
 #include "google/protobuf/repeated_field.h"
 #include "integrators/integrators.hpp"
 #include "integrators/ordinary_differential_equations.hpp"
+#include "numerics/double_precision.hpp"
 #include "physics/apsides.hpp"
 #include "physics/checkpointer.hpp"
 #include "physics/clientele.hpp"
@@ -48,6 +49,7 @@ using namespace principia::geometry::_instant;
 using namespace principia::geometry::_space;
 using namespace principia::integrators::_integrators;
 using namespace principia::integrators::_ordinary_differential_equations;
+using namespace principia::numerics::_double_precision;
 using namespace principia::physics::_apsides;
 using namespace principia::physics::_checkpointer;
 using namespace principia::physics::_clientele;
@@ -120,12 +122,20 @@ class Ephemeris {
   };
 
   // Constructs an Ephemeris that owns the `bodies`.  The elements of vectors
-  // `bodies` and `initial_state` correspond to one another.
+  // `bodies` and `initial_state` correspond to one another.  If `subsystems`
+  // is nonempty, it must be parallel to `bodies` and partition them into
+  // subsystems identified by dense indices starting at 0; the positions of the
+  // bodies of each subsystem are then represented relative to a local origin
+  // anchored at the initial position of its first body, which preserves
+  // precision when the subsystems are very far apart.  If `subsystems` is
+  // empty, all the bodies belong to subsystem 0 and the positions are
+  // represented as given.
   Ephemeris(std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies,
             std::vector<DegreesOfFreedom<Frame>> const& initial_state,
             Instant const& initial_time,
             AccuracyParameters const& accuracy_parameters,
-            FixedStepParameters fixed_step_parameters);
+            FixedStepParameters fixed_step_parameters,
+            std::vector<int> const& subsystems = {});
 
   virtual ~Ephemeris();
 
@@ -419,7 +429,9 @@ class Ephemeris {
   // `accelerations` arrays).  The template parameters specify what we know
   // about the bodies, and therefore what forces apply.  Works for both owning
   // and non-owning pointers thanks to the `MassiveBodyConstPtr` template
-  // parameter.
+  // parameter.  The positions are relative to the local origin of the
+  // subsystem of each body, as described by `subsystem_of_body` and
+  // `subsystem_origin_offset`.
   template<bool body1_is_oblate,
            bool body2_is_oblate,
            typename MassiveBodyConstPtr>
@@ -432,7 +444,10 @@ class Ephemeris {
       std::size_t b2_end,
       std::vector<Position<Frame>> const& positions,
       std::vector<Vector<Acceleration, Frame>>& accelerations,
-      std::vector<Geopotential<Frame>> const& geopotentials);
+      std::vector<Geopotential<Frame>> const& geopotentials,
+      std::vector<int> const& subsystem_of_body,
+      std::vector<DoublePrecision<Displacement<Frame>>> const&
+          subsystem_origin_offset);
 
   // Computes the accelerations due to one body, `body1` (with index `b1` in the
   // `bodies_` and `trajectories_` arrays) on massless bodies at the given
@@ -533,6 +548,14 @@ class Ephemeris {
 
   int number_of_oblate_bodies_ = 0;
   int number_of_spherical_bodies_ = 0;
+
+  // The subsystem of each body, parallel to `bodies_`.  All the entries are 0
+  // unless subsystems were given at construction.
+  std::vector<int> subsystem_of_body_;
+
+  // For each subsystem, the displacement from the local origin of subsystem 0
+  // to its local origin.  Indexed by subsystem; the entry at index 0 is zero.
+  std::vector<DoublePrecision<Displacement<Frame>>> subsystem_origin_offset_;
 
   not_null<
       std::unique_ptr<Checkpointer<serialization::Ephemeris>>> checkpointer_;
