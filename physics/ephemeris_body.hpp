@@ -288,6 +288,11 @@ int Ephemeris<Frame>::subsystem_of_body(
 }
 
 template<typename Frame>
+int Ephemeris<Frame>::number_of_subsystems() const {
+  return subsystem_origin_offset_.size();
+}
+
+template<typename Frame>
 DoublePrecision<Displacement<Frame>> const&
 Ephemeris<Frame>::inter_subsystem_offset(int const s1, int const s2) const {
   return inter_subsystem_offsets_[s1 * subsystem_origin_offset_.size() + s2];

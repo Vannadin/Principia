@@ -157,6 +157,16 @@ class Ephemeris {
   // Returns the subsystem of the given `body`.
   virtual int subsystem_of_body(not_null<MassiveBody const*> body) const;
 
+  // Returns the number of subsystems; 1 unless subsystems were given at
+  // construction.
+  virtual int number_of_subsystems() const;
+
+  // Returns the displacement from the local origin of subsystem `s2` to that
+  // of subsystem `s1`.
+  DoublePrecision<Displacement<Frame>> const& inter_subsystem_offset(
+      int s1,
+      int s2) const;
+
   // Returns the trajectory for the given `body`.
   virtual not_null<ContinuousTrajectory<Frame> const*> trajectory(
       not_null<MassiveBody const*> body) const;
@@ -563,12 +573,6 @@ class Ephemeris {
       Instant const& t,
       _integration_parameters::AdaptiveStepParameters<ODE> const& parameters,
       std::int64_t max_ephemeris_steps) EXCLUDES(lock_);
-
-  // Returns the displacement from the local origin of subsystem `s2` to that
-  // of subsystem `s1`.
-  DoublePrecision<Displacement<Frame>> const& inter_subsystem_offset(
-      int s1,
-      int s2) const;
 
   // Fills `inter_subsystem_offsets_` from `subsystem_origin_offset_`.
   void ComputeInterSubsystemOffsets();
