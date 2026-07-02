@@ -106,6 +106,10 @@ class Vessel {
   virtual not_null<Celestial const*> parent() const;
   virtual void set_parent(not_null<Celestial const*> parent);
 
+  // Returns the subsystem relative to whose local origin the Barycentric
+  // positions of the trajectories of this vessel are represented.
+  virtual int subsystem() const;
+
   // Adds the given part to this vessel.  Note that this does not add the part
   // to the set of kept parts, and that unless `KeepPart` is called, the part
   // will be removed by the next call to `FreeParts`.
@@ -415,6 +419,7 @@ class Vessel {
   // The parent body for the 2-body approximation.
   not_null<Celestial const*> parent_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
+  int subsystem_;
   std::optional<DiscreteTrajectorySegment<Barycentric>::DownsamplingParameters>
       downsampling_parameters_;
 

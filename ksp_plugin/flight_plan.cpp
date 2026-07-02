@@ -66,7 +66,8 @@ FlightPlan::FlightPlan(
     not_null<Ephemeris<Barycentric>*> const ephemeris,
     Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters,
     Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
-        generalized_adaptive_step_parameters)
+        generalized_adaptive_step_parameters,
+    int const subsystem)
     : initial_mass_(initial_mass),
       initial_time_(initial_time),
       initial_degrees_of_freedom_(initial_degrees_of_freedom),
@@ -74,7 +75,8 @@ FlightPlan::FlightPlan(
       desired_final_time_(desired_final_time),
       adaptive_step_parameters_(std::move(adaptive_step_parameters)),
       generalized_adaptive_step_parameters_(
-          std::move(generalized_adaptive_step_parameters)) {
+          std::move(generalized_adaptive_step_parameters)),
+      subsystem_(subsystem) {
   CHECK(desired_final_time_ >= initial_time_);
   MakeProlongator(desired_final_time_);
 
@@ -97,6 +99,7 @@ FlightPlan::FlightPlan(FlightPlan const& other)
       ephemeris_(other.ephemeris_),
       desired_final_time_(other.desired_final_time_),
       anomalous_segments_(other.anomalous_segments_),
+      subsystem_(other.subsystem_),
       manœuvres_(other.manœuvres_),
       analysis_is_enabled_(other.analysis_is_enabled_),
       adaptive_step_parameters_(other.adaptive_step_parameters_),
@@ -330,6 +333,7 @@ void FlightPlan::EnableAnalysis(bool const enabled) {
           coast_analysers_[index / 2]->RequestAnalysis(
               {.first_time = first_time,
                .first_degrees_of_freedom = first_degrees_of_freedom,
+               .subsystem = subsystem_,
                .mission_duration = coast->back().time - first_time,
                .extended_mission_duration = desired_final_time_ - first_time});
         }
@@ -362,7 +366,8 @@ void FlightPlan::WriteToMessage(
 
 std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
     serialization::FlightPlan const& message,
-    not_null<Ephemeris<Barycentric>*> const ephemeris) {
+    not_null<Ephemeris<Barycentric>*> const ephemeris,
+    int const subsystem) {
   Instant const initial_time = Instant::ReadFromMessage(message.initial_time());
   std::unique_ptr<DegreesOfFreedom<Barycentric>> initial_degrees_of_freedom;
   CHECK(message.has_adaptive_step_parameters());
@@ -399,7 +404,8 @@ std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
       Instant::ReadFromMessage(message.desired_final_time()),
       ephemeris,
       *adaptive_step_parameters,
-      *generalized_adaptive_step_parameters);
+      *generalized_adaptive_step_parameters,
+      subsystem);
 
   for (int i = 0; i < message.manoeuvre_size(); ++i) {
     auto const& manoeuvre = message.manoeuvre(i);
@@ -485,14 +491,16 @@ absl::Status FlightPlan::BurnSegment(
                              manœuvre.InertialIntrinsicAcceleration(),
                              final_time,
                              adaptive_step_parameters_,
-                             max_ephemeris_steps);
+                             max_ephemeris_steps,
+                             subsystem_);
     } else {
       return ephemeris_->FlowWithAdaptiveStep(
                              &trajectory_,
                              manœuvre.FrenetIntrinsicAcceleration(),
                              final_time,
                              generalized_adaptive_step_parameters_,
-                             max_ephemeris_steps);
+                             max_ephemeris_steps,
+                             subsystem_);
     }
   } else {
     return absl::OkStatus();
@@ -515,7 +523,8 @@ absl::Status FlightPlan::CoastSegment(
                          Ephemeris<Barycentric>::NoIntrinsicAcceleration,
                          desired_final_time,
                          adaptive_step_parameters_,
-                         max_ephemeris_steps);
+                         max_ephemeris_steps,
+                         subsystem_);
 }
 
 absl::Status FlightPlan::ComputeSegments(
@@ -552,6 +561,7 @@ absl::Status FlightPlan::ComputeSegments(
         analyser->RequestAnalysis(
             {.first_time = first_time,
              .first_degrees_of_freedom = first_degrees_of_freedom,
+             .subsystem = subsystem_,
              .mission_duration = coast->back().time - first_time,
              .extended_mission_duration = desired_final_time_ - first_time});
       }
@@ -589,6 +599,7 @@ absl::Status FlightPlan::ComputeSegments(
       analyser->RequestAnalysis(
           {.first_time = first_time,
            .first_degrees_of_freedom = first_degrees_of_freedom,
+           .subsystem = subsystem_,
            .mission_duration = desired_final_time_ - first_time});
     }
     absl::Status const status = CoastSegment(desired_final_time_,

@@ -60,6 +60,7 @@ PileUp::PileUp(
       history_(trajectory_.segments().begin()),
       deletion_callback_(std::move(deletion_callback)) {
   LOG(INFO) << "Constructing pile up at " << this;
+  subsystem_ = parts_.front()->subsystem();
   MechanicalSystem<Barycentric, NonRotatingPileUp> mechanical_system;
   for (not_null<Part*> const part : parts_) {
     mechanical_system.AddRigidBody(
@@ -397,6 +398,7 @@ PileUp::PileUp(
       trajectory_(std::move(trajectory)),
       angular_momentum_(angular_momentum),
       deletion_callback_(std::move(deletion_callback)) {
+  subsystem_ = parts_.front()->subsystem();
   if (history.has_value()) {
     history_ = history.value();
   } else {
@@ -579,7 +581,8 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
       fixed_instance_ = ephemeris_->NewInstance(
           {&trajectory_},
           Ephemeris<Barycentric>::NoIntrinsicAccelerations,
-          fixed_step_parameters_);
+          fixed_step_parameters_,
+          {subsystem_});
     }
     CHECK_LT(history_->back().time, t);
     status = ephemeris_->FlowWithFixedStep(t, *fixed_instance_);
@@ -591,7 +594,9 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           &trajectory_,
           Ephemeris<Barycentric>::NoIntrinsicAcceleration,
           t,
-          adaptive_step_parameters_));
+          adaptive_step_parameters_,
+          Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
+          subsystem_));
     }
   } else {
     // Destroy the fixed instance, it wouldn't be correct to use it the next
@@ -612,10 +617,13 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
 
     auto const intrinsic_acceleration =
         [a = intrinsic_force_ / mass_](Instant const& /*t*/) { return a; };
-    status = ephemeris_->FlowWithAdaptiveStep(&trajectory_,
-                                              intrinsic_acceleration,
-                                              t,
-                                              adaptive_step_parameters_);
+    status = ephemeris_->FlowWithAdaptiveStep(
+        &trajectory_,
+        intrinsic_acceleration,
+        t,
+        adaptive_step_parameters_,
+        Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
+        subsystem_);
     psychohistory_ = trajectory_.NewSegment();
   }
 

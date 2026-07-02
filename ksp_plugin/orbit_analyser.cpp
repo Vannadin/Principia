@@ -257,7 +257,8 @@ absl::Status OrbitAnalyser::FlowWithProgressBar(
   auto instance = ephemeris_->StoppableNewInstance(
       trajectories,
       Ephemeris<Barycentric>::NoIntrinsicAccelerations,
-      analysed_trajectory_parameters_);
+      analysed_trajectory_parameters_,
+      {parameters.subsystem});
   RETURN_IF_STOPPED;
 
   constexpr double progress_bar_steps = 0x1p10;

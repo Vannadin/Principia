@@ -105,6 +105,9 @@ class OrbitAnalyser {
   struct Parameters {
     Instant first_time;
     DegreesOfFreedom<Barycentric> first_degrees_of_freedom;
+    // The subsystem in whose representation `first_degrees_of_freedom` is
+    // expressed.
+    int subsystem = 0;
     Time mission_duration;
     // The analyser may compute the trajectory up to `extended_mission_duration`
     // to ensure that at least one revolution is analysed.

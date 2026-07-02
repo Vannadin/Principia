@@ -40,6 +40,8 @@ class FlightPlan {
   // trajectories are computed using the given parameters by the given
   // `ephemeris`.  The flight plan contains a single coast which, if possible
   // ends at `desired_final_time`.
+  // `subsystem` is the subsystem in whose representation
+  // `initial_degrees_of_freedom` (and hence the whole plan) is expressed.
   FlightPlan(Mass const& initial_mass,
              Instant const& initial_time,
              DegreesOfFreedom<Barycentric> const& initial_degrees_of_freedom,
@@ -48,7 +50,8 @@ class FlightPlan {
              Ephemeris<Barycentric>::AdaptiveStepParameters
                  adaptive_step_parameters,
              Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
-                 generalized_adaptive_step_parameters);
+                 generalized_adaptive_step_parameters,
+             int subsystem = 0);
 
   explicit FlightPlan(FlightPlan const& other);
 
@@ -147,7 +150,8 @@ class FlightPlan {
   // `message` is anomalous.
   static std::unique_ptr<FlightPlan> ReadFromMessage(
       serialization::FlightPlan const& message,
-      not_null<Ephemeris<Barycentric>*> ephemeris);
+      not_null<Ephemeris<Barycentric>*> ephemeris,
+      int subsystem = 0);
 
   static constexpr std::int64_t max_ephemeris_steps_per_frame = 1000;
 
@@ -266,6 +270,7 @@ class FlightPlan {
   Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters_;
   Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
       generalized_adaptive_step_parameters_;
+  int subsystem_ = 0;
 };
 
 }  // namespace internal

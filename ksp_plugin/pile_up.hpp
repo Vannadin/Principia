@@ -189,6 +189,9 @@ class PileUp {
 
   std::list<not_null<Part*>> parts_;
   not_null<Ephemeris<Barycentric>*> ephemeris_;
+  // The subsystem relative to whose local origin the Barycentric degrees of
+  // freedom of this pile-up are represented; deduced from the parts.
+  int subsystem_ = 0;
   Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters_;
   Ephemeris<Barycentric>::FixedStepParameters fixed_step_parameters_;
 

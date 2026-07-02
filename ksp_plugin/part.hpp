@@ -76,6 +76,11 @@ class Part final {
   bool truthful() const;
   void make_truthful();
 
+  // Sets or returns the subsystem relative to whose local origin the
+  // Barycentric degrees of freedom of this part are represented.
+  void set_subsystem(int subsystem);
+  int subsystem() const;
+
   // Sets or returns the mass and inertia tensor.  Even though a part is
   // massless in the sense that it doesn't exert gravity, it has a mass and an
   // inertia used to determine its intrinsic acceleration and rotational
@@ -194,6 +199,7 @@ class Part final {
   PartId const part_id_;
   std::string const name_;
   bool truthful_;
+  int subsystem_ = 0;
   Mass mass_;
   Position<EccentricPart> centre_of_mass_ = EccentricPart::origin;
   // NOTE(eggrobin): `mass_change_` and `is_solid_rocket_motor_` are set by

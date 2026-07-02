@@ -82,6 +82,14 @@ void Part::make_truthful() {
   truthful_ = true;
 }
 
+void Part::set_subsystem(int const subsystem) {
+  subsystem_ = subsystem;
+}
+
+int Part::subsystem() const {
+  return subsystem_;
+}
+
 void Part::set_mass(Mass const& mass) {
   mass_change_ = mass - mass_;
   mass_ = mass;

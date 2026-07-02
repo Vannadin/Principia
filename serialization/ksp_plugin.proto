@@ -178,6 +178,8 @@ message Vessel {
   optional DiscreteTrajectory prediction = 18;  // Pre-Chasles.
   repeated FlightPlan flight_plans = 4;  // Optional before Hilbert.
   optional int32 selected_flight_plan_index = 24;  // Added in Hilbert.
+  // Added for per-subsystem local origins; absent for subsystem 0.
+  optional int32 subsystem = 25;
   optional bool is_collapsible = 22;  // Added in हरीश चंद्र.
   repeated Checkpoint checkpoint = 21;  // Added in हरीश चंद्र.
   optional DiscreteTrajectorySegment.DownsamplingParameters

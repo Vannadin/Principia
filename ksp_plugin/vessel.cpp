@@ -82,6 +82,7 @@ Vessel::Vessel(
           std::move(prediction_adaptive_step_parameters)),
       parent_(parent),
       ephemeris_(ephemeris),
+      subsystem_(ephemeris->subsystem_of_body(parent->body())),
       downsampling_parameters_(downsampling_parameters),
       checkpointer_(make_not_null_unique<Checkpointer<serialization::Vessel>>(
           MakeCheckpointerWriterFromPileUp(),
@@ -131,6 +132,10 @@ not_null<Celestial const*> Vessel::parent() const {
   return parent_;
 }
 
+int Vessel::subsystem() const {
+  return subsystem_;
+}
+
 void Vessel::set_parent(not_null<Celestial const*> const parent) {
   LOG(INFO) << "Vessel " << ShortDebugString() << " switches parent from "
             << parent_->body()->name() << " to " << parent->body()->name();
@@ -140,6 +145,7 @@ void Vessel::set_parent(not_null<Celestial const*> const parent) {
 void Vessel::AddPart(not_null<std::unique_ptr<Part>> part) {
   LOG(INFO) << "Adding part " << part->ShortDebugString() << " to vessel "
             << ShortDebugString();
+  part->set_subsystem(subsystem_);
   parts_.emplace(part->part_id(), std::move(part));
 }
 
@@ -336,7 +342,8 @@ void Vessel::ReadFlightPlanFromMessage() {
     auto const& message =
         std::get<serialization::FlightPlan>(selected_flight_plan());
     selected_flight_plan() = OptimizableFlightPlan{
-        .flight_plan = FlightPlan::ReadFromMessage(message, ephemeris_),
+        .flight_plan = FlightPlan::ReadFromMessage(
+            message, ephemeris_, subsystem_),
         .optimization_driver = nullptr};
   }
 }
@@ -478,7 +485,8 @@ void Vessel::CreateFlightPlan(
           final_time,
           ephemeris_,
           flight_plan_adaptive_step_parameters,
-          flight_plan_generalized_adaptive_step_parameters),
+          flight_plan_generalized_adaptive_step_parameters,
+          subsystem_),
       .optimization_driver = nullptr});
   selected_flight_plan_index_ = flight_plans_.size() - 1;
 }
@@ -545,7 +553,8 @@ absl::Status Vessel::RebaseFlightPlan(Mass const& initial_mass) {
       new_desired_final_time,
       ephemeris_,
       original_flight_plan->adaptive_step_parameters(),
-      original_flight_plan->generalized_adaptive_step_parameters());
+      original_flight_plan->generalized_adaptive_step_parameters(),
+      subsystem_);
   for (int i = first_manœuvre_kept;
        i < original_flight_plan->number_of_manœuvres();
        ++i) {
@@ -609,6 +618,7 @@ void Vessel::RequestOrbitAnalysis(Time const& mission_duration) {
   orbit_analyser_->RequestAnalysis(
       {.first_time = psychohistory_->back().time,
        .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
+       .subsystem = subsystem_,
        .mission_duration = mission_duration});
 }
 
@@ -642,6 +652,9 @@ void Vessel::WriteToMessage(not_null<serialization::Vessel*> const message,
                                 serialization_index_for_pile_up) const {
   message->set_guid(guid_);
   message->set_name(name_);
+  if (subsystem_ != 0) {
+    message->set_subsystem(subsystem_);
+  }
   body_.WriteToMessage(message->mutable_body());
   prediction_adaptive_step_parameters_.WriteToMessage(
       message->mutable_prediction_adaptive_step_parameters());
@@ -752,6 +765,7 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
       Ephemeris<Barycentric>::AdaptiveStepParameters::ReadFromMessage(
           message.prediction_adaptive_step_parameters()),
       DefaultDownsamplingParameters());
+  vessel->subsystem_ = message.subsystem();
   for (auto const& serialized_part : message.parts()) {
     PartId const part_id = serialized_part.part_id();
     auto part =
@@ -760,6 +774,7 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
             deletion_callback(part_id);
           }
         });
+    part->set_subsystem(vessel->subsystem_);
     vessel->parts_.emplace(part_id, std::move(part));
   }
   for (PartId const part_id : message.kept_parts()) {
@@ -1182,7 +1197,8 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
   auto fixed_instance =
       ephemeris_->NewInstance({&reanimated_trajectory},
                               Ephemeris<Barycentric>::NoIntrinsicAccelerations,
-                              collapsible_fixed_step_parameters);
+                              collapsible_fixed_step_parameters,
+                              {subsystem_});
 
   auto const status = ephemeris_->FlowWithFixedStep(t_final, *fixed_instance);
   RETURN_IF_ERROR(status);
@@ -1223,7 +1239,8 @@ absl::StatusOr<DiscreteTrajectory<Barycentric>> Vessel::FlowPrognostication(
       Ephemeris<Barycentric>::NoIntrinsicAcceleration,
       ephemeris_->t_max(),
       prognosticator_parameters.adaptive_step_parameters,
-      FlightPlan::max_ephemeris_steps_per_frame);
+      FlightPlan::max_ephemeris_steps_per_frame,
+      subsystem_);
   bool const reached_t_max = status.ok();
   if (reached_t_max) {
     // This will prolong the ephemeris by `max_ephemeris_steps_per_frame`.
@@ -1232,7 +1249,8 @@ absl::StatusOr<DiscreteTrajectory<Barycentric>> Vessel::FlowPrognostication(
         Ephemeris<Barycentric>::NoIntrinsicAcceleration,
         InfiniteFuture,
         prognosticator_parameters.adaptive_step_parameters,
-        FlightPlan::max_ephemeris_steps_per_frame);
+        FlightPlan::max_ephemeris_steps_per_frame,
+        subsystem_);
   }
   LOG_IF_EVERY_N(INFO, !status.ok(), 50)
       << "Prognostication from " << prognosticator_parameters.first_time
