@@ -879,11 +879,15 @@ void Ephemeris<Frame>::ComputeApsides(
       trajectory(body1);
   not_null<ContinuousTrajectory<Frame> const*> const body2_trajectory =
       trajectory(body2);
+  int const s1 = subsystem_of_body(body1);
+  int const s2 = subsystem_of_body(body2);
+  DoublePrecision<Displacement<Frame>> const& offset =
+      inter_subsystem_offset(s1, s2);
 
   // Computes the derivative of the squared distance between `body1` and `body2`
   // at time `t`.
   auto const evaluate_square_distance_derivative =
-      [body1_trajectory, body2_trajectory](
+      [body1_trajectory, body2_trajectory, s1, s2, &offset](
           Instant const& t) -> Variation<Square<Length>> {
     DegreesOfFreedom<Frame> const body1_degrees_of_freedom =
         body1_trajectory->EvaluateDegreesOfFreedomLocked(t);
@@ -891,7 +895,11 @@ void Ephemeris<Frame>::ComputeApsides(
         body2_trajectory->EvaluateDegreesOfFreedomLocked(t);
     RelativeDegreesOfFreedom<Frame> const relative =
         body1_degrees_of_freedom - body2_degrees_of_freedom;
-    return 2.0 * InnerProduct(relative.displacement(), relative.velocity());
+    Displacement<Frame> displacement = relative.displacement();
+    if (s1 != s2) {
+      displacement = AddInterSubsystemOffset(offset, displacement);
+    }
+    return 2.0 * InnerProduct(displacement, relative.velocity());
   };
 
   std::optional<Instant> previous_time;

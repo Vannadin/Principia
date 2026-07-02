@@ -16,6 +16,7 @@
 #include "integrators/methods.hpp"
 #include "integrators/symmetric_linear_multistep_integrator.hpp"
 #include "numerics/elementary_functions.hpp"
+#include "physics/apsides.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/discrete_trajectory.hpp"
 #include "physics/ephemeris.hpp"
@@ -43,6 +44,7 @@ using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_
 using namespace principia::integrators::_methods;
 using namespace principia::integrators::_symmetric_linear_multistep_integrator;
 using namespace principia::numerics::_elementary_functions;
+using namespace principia::physics::_apsides;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
@@ -310,6 +312,48 @@ TEST_F(InterstellarPrecisionTest, ClusterSubsystems) {
   EXPECT_EQ(0, ephemeris->subsystem_of_body(ephemeris->bodies()[1]));
   EXPECT_EQ(1, ephemeris->subsystem_of_body(ephemeris->bodies()[2]));
   EXPECT_EQ(1, ephemeris->subsystem_of_body(ephemeris->bodies()[3]));
+}
+
+// Checks that the apsides of a cross-subsystem pair are those of the true
+// relative trajectory.  The two systems are congruent and synchronized, so the
+// separation between planet A and star B oscillates exactly between
+// `to_remote_system.Norm() ∓ orbit_radius`.
+TEST_F(InterstellarPrecisionTest, Apsides) {
+  Displacement<ICRS> const to_remote_system(
+      {4.0e16 * Metre, 0 * Metre, 0 * Metre});
+  auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  EXPECT_OK(ephemeris->Prolong(Instant() + 2 * Period()));
+
+  DistinguishedPoints<ICRS> apoapsides1;
+  DistinguishedPoints<ICRS> periapsides1;
+  DistinguishedPoints<ICRS> apoapsides2;
+  DistinguishedPoints<ICRS> periapsides2;
+  ephemeris->ComputeApsides(/*body1=*/ephemeris->bodies()[1],
+                            /*body2=*/ephemeris->bodies()[2],
+                            apoapsides1, periapsides1,
+                            apoapsides2, periapsides2);
+
+  EXPECT_THAT(apoapsides1.size(), Gt(0));
+  EXPECT_THAT(periapsides1.size(), Gt(0));
+
+  auto const& offset = ephemeris->inter_subsystem_offset(/*s1=*/0, /*s2=*/1);
+  auto const separation = [&offset](DegreesOfFreedom<ICRS> const& dof1,
+                                    DegreesOfFreedom<ICRS> const& dof2) {
+    return (offset.value +
+            (offset.error + (dof1.position() - dof2.position()))).Norm();
+  };
+  for (auto const& [t, degrees_of_freedom] : periapsides1) {
+    EXPECT_THAT(AbsoluteError(to_remote_system.Norm() - orbit_radius,
+                              separation(degrees_of_freedom,
+                                         periapsides2.at(t))),
+                Lt(100 * Metre));
+  }
+  for (auto const& [t, degrees_of_freedom] : apoapsides1) {
+    EXPECT_THAT(AbsoluteError(to_remote_system.Norm() + orbit_radius,
+                              separation(degrees_of_freedom,
+                                         apoapsides2.at(t))),
+                Lt(100 * Metre));
+  }
 }
 
 // Same as `RemoteSystemSeparation`, but for the massless integration path.

@@ -338,7 +338,10 @@ class Ephemeris {
   // Computes the apsides of the relative trajectory of `body1` and `body2`.
   // Appends to the given out parameters two points for each apsis, one for
   // `body1` and one for `body2`.  The times of `apoapsides1` and `apoapsides2`
-  // are identical (are similarly for `periapsides1` and `periapsides2`).
+  // are identical (are similarly for `periapsides1` and `periapsides2`).  The
+  // relative trajectory is that of the true positions even when the bodies
+  // belong to different subsystems, but the output degrees of freedom are
+  // represented relative to each body's own subsystem origin.
   virtual void ComputeApsides(not_null<MassiveBody const*> body1,
                               not_null<MassiveBody const*> body2,
                               DistinguishedPoints<Frame>& apoapsides1,
