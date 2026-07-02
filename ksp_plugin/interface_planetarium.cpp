@@ -160,7 +160,8 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
         [vertices, vertex_count](ScaledSpacePoint const& vertex) {
           vertices[(*vertex_count)++] = vertex;
         },
-        vertices_size);
+        vertices_size,
+        vessel.flight_plan().subsystem());
   }
   return m.Return();
 }
@@ -182,7 +183,8 @@ void __cdecl principia__PlanetariumPlotPrediction(
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
 
-  auto const prediction = plugin->GetVessel(vessel_guid)->prediction();
+  auto const vessel = plugin->GetVessel(vessel_guid);
+  auto const prediction = vessel->prediction();
   planetarium->PlotMethod4(
       *prediction,
       prediction->begin(),
@@ -192,7 +194,8 @@ void __cdecl principia__PlanetariumPlotPrediction(
       [vertices, vertex_count](ScaledSpacePoint const& vertex) {
         vertices[(*vertex_count)++] = vertex;
       },
-      vertices_size);
+      vertices_size,
+      vessel->subsystem());
   return m.Return();
 }
 
@@ -248,7 +251,8 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
         [vertices, vertex_count](ScaledSpacePoint const& vertex) {
           vertices[(*vertex_count)++] = vertex;
         },
-        vertices_size);
+        vertices_size,
+        vessel->subsystem());
     return m.Return();
   }
 }
@@ -283,8 +287,8 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
     *minimal_distance_from_camera = std::numeric_limits<double>::infinity();
     return m.Return();
   } else {
-    auto const& celestial_trajectory =
-        plugin->GetCelestial(celestial_index).trajectory();
+    auto const& celestial = plugin->GetCelestial(celestial_index);
+    auto const& celestial_trajectory = celestial.trajectory();
     Instant const desired_first_time =
         plugin->CurrentTime() - max_history_length * Second;
 
@@ -305,7 +309,8 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        &minimal_distance);
+        &minimal_distance,
+        celestial.subsystem());
     *minimal_distance_from_camera = minimal_distance / Metre;
     return m.Return();
   }
@@ -349,8 +354,8 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
             ? std::max(GetFlightPlan(*plugin, vessel_guid).actual_final_time(),
                        prediction_final_time)
             : prediction_final_time;
-    auto const& celestial_trajectory =
-        plugin->GetCelestial(celestial_index).trajectory();
+    auto const& celestial = plugin->GetCelestial(celestial_index);
+    auto const& celestial_trajectory = celestial.trajectory();
     // No need to request reanimation here because the current time of the
     // plugin is necessarily covered.
     Length minimal_distance;
@@ -363,7 +368,8 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        &minimal_distance);
+        &minimal_distance,
+        celestial.subsystem());
     *minimal_distance_from_camera = minimal_distance / Metre;
     return m.Return();
   }

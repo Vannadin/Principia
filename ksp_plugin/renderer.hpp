@@ -63,8 +63,11 @@ class Renderer {
     Speed out_of_plane_velocity;
   };
 
+  // If `ephemeris` is null, all the subsystem parameters of this class are
+  // ignored and the positions are assumed to be represented in a single frame.
   Renderer(not_null<Celestial const*> sun,
-           not_null<std::unique_ptr<PlottingFrame>> plotting_frame);
+           not_null<std::unique_ptr<PlottingFrame>> plotting_frame,
+           Ephemeris<Barycentric> const* ephemeris = nullptr);
 
   virtual ~Renderer() = default;
 
@@ -97,14 +100,17 @@ class Renderer {
   // `begin` and `end`, as seen in the current plotting frame.  In this function
   // and others in this class, `sun_world_position` is the current position of
   // the sun in `World` space as returned by `Planetarium.fetch.Sun.position`;
-  // it is used to define the relation between `WorldSun` and `World`.
+  // it is used to define the relation between `WorldSun` and `World`; and
+  // `subsystem` is the subsystem relative to whose local origin the given
+  // positions are represented.
   virtual DiscreteTrajectory<World>
   RenderBarycentricTrajectoryInWorld(
       Instant const& time,
       DiscreteTrajectory<Barycentric>::iterator const& begin,
       DiscreteTrajectory<Barycentric>::iterator const& end,
       Position<World> const& sun_world_position,
-      Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
+      Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+      int subsystem = 0) const;
 
   // Returns a trajectory in the current plotting frame corresponding to the
   // trajectory defined by `begin` and `end`.  If there is a target vessel, its
@@ -112,7 +118,8 @@ class Renderer {
   virtual DiscreteTrajectory<Navigation>
   RenderBarycentricTrajectoryInPlotting(
       DiscreteTrajectory<Barycentric>::iterator const& begin,
-      DiscreteTrajectory<Barycentric>::iterator const& end) const;
+      DiscreteTrajectory<Barycentric>::iterator const& end,
+      int subsystem = 0) const;
 
   // Returns a trajectory in `World` corresponding to the trajectory defined by
   // `begin` and `end` in the current plotting frame.
@@ -130,7 +137,8 @@ class Renderer {
       DistinguishedPoints<Barycentric>::const_iterator begin,
       DistinguishedPoints<Barycentric>::const_iterator end,
       Position<World> const& sun_world_position,
-      Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
+      Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+      int subsystem = 0) const;
 
   std::vector<Node> RenderNodes(
       Instant const& time,
@@ -144,10 +152,13 @@ class Renderer {
   virtual SimilarMotion<Barycentric, Navigation> BarycentricToPlotting(
       Instant const& time) const;
 
+  // `subsystem` is the subsystem relative to whose local origin the
+  // `Barycentric` side of the transformation is represented.
   virtual RigidTransformation<Barycentric, World> BarycentricToWorld(
       Instant const& time,
       Position<World> const& sun_world_position,
-      Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
+      Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+      int subsystem = 0) const;
 
   virtual OrthogonalMap<Barycentric, World> BarycentricToWorld(
       Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
@@ -187,10 +198,13 @@ class Renderer {
       Instant const& time,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
 
+  // `subsystem` is the subsystem relative to whose local origin the
+  // `Barycentric` side of the transformation is represented.
   virtual RigidTransformation<World, Barycentric> WorldToBarycentric(
       Instant const& time,
       Position<World> const& sun_world_position,
-      Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
+      Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+      int subsystem = 0) const;
 
   virtual OrthogonalMap<World, Barycentric> WorldToBarycentric(
       Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
@@ -234,9 +248,17 @@ class Renderer {
                          Instant const&,
                          DegreesOfFreedom<World> const&)> const& append) const;
 
+  // The displacement to add to a position represented relative to the local
+  // origin of subsystem `s1` so that it becomes represented relative to the
+  // local origin of subsystem `s2`.  Zero if no ephemeris was given at
+  // construction.
+  Displacement<Barycentric> SubsystemConversion(int s1, int s2) const;
+
   not_null<Celestial const*> const sun_;
 
   not_null<std::unique_ptr<PlottingFrame>> plotting_frame_;
+
+  Ephemeris<Barycentric> const* const ephemeris_;
 
   std::optional<Target> target_;
 };

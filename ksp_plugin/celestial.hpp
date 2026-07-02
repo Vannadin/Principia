@@ -36,9 +36,13 @@ class Celestial {
 
   // True if, and only if, `trajectory_` is not null.
   bool is_initialized() const;
+  // `subsystem` is the subsystem relative to whose local origin the positions
+  // of `trajectory` are represented.
   void set_trajectory(
-      not_null<ContinuousTrajectory<Barycentric> const*> trajectory);
+      not_null<ContinuousTrajectory<Barycentric> const*> trajectory,
+      int subsystem = 0);
   ContinuousTrajectory<Barycentric> const& trajectory() const;
+  int subsystem() const;
   virtual DegreesOfFreedom<Barycentric> current_degrees_of_freedom(
       Instant const& current_time) const;
   virtual Position<Barycentric> current_position(
@@ -57,6 +61,7 @@ class Celestial {
   // be null for the sun.
   Celestial const* parent_ = nullptr;
   ContinuousTrajectory<Barycentric> const* trajectory_ = nullptr;
+  int subsystem_ = 0;
 };
 
 }  // namespace internal

@@ -14,6 +14,7 @@
 #include "physics/kepler_orbit.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/massless_body.hpp"
+#include "physics/translated_trajectory.hpp"
 #include "quantities/astronomy.hpp"
 
 namespace principia {
@@ -26,6 +27,7 @@ using namespace principia::ksp_plugin::_integrators;
 using namespace principia::physics::_kepler_orbit;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_massless_body;
+using namespace principia::physics::_translated_trajectory;
 using namespace principia::quantities::_astronomy;
 
 namespace {
@@ -159,7 +161,11 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
     BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const
         primary_centred(ephemeris_, primary);
     auto const status_or_primary_centred_trajectory =
-        ToPrimaryCentred(primary_centred, trajectory);
+        ToPrimaryCentred(primary_centred,
+                         trajectory,
+                         ephemeris_->subsystem_conversion(
+                             parameters.subsystem,
+                             primary_centred.subsystem()));
     RETURN_IF_ERROR(status_or_primary_centred_trajectory);
     auto const& primary_centred_trajectory =
         status_or_primary_centred_trajectory.value();
@@ -226,13 +232,23 @@ absl::Status OrbitAnalyser::FindBodyWithSmallestOsculatingPeriod(
   smallest_osculating_period = Infinity<Time>;
   for (auto const body : ephemeris_->bodies()) {
     RETURN_IF_STOPPED;
+    RelativeDegreesOfFreedom<Barycentric> relative_degrees_of_freedom =
+        parameters.first_degrees_of_freedom -
+        ephemeris_->trajectory(body)->EvaluateDegreesOfFreedom(
+            parameters.first_time);
+    if (int const body_subsystem = ephemeris_->subsystem_of_body(body);
+        body_subsystem != parameters.subsystem) {
+      relative_degrees_of_freedom = {
+          relative_degrees_of_freedom.displacement() +
+              ephemeris_->subsystem_conversion(parameters.subsystem,
+                                               body_subsystem),
+          relative_degrees_of_freedom.velocity()};
+    }
     auto const initial_osculating_elements =
         KeplerOrbit<Barycentric>{
             *body,
             MasslessBody{},
-            parameters.first_degrees_of_freedom -
-                ephemeris_->trajectory(body)->EvaluateDegreesOfFreedom(
-                    parameters.first_time),
+            relative_degrees_of_freedom,
             parameters.first_time}
             .elements_at_epoch();
     if (initial_osculating_elements.period.has_value() &&
@@ -295,14 +311,25 @@ OrbitAnalyser::ComputeMeanSunIfPossible(
   }
 
   if (primary != sun && sun != nullptr) {
+    int const sun_subsystem = ephemeris_->subsystem_of_body(sun);
+    int const primary_subsystem = ephemeris_->subsystem_of_body(primary);
+    RelativeDegreesOfFreedom<Barycentric> sun_relative_degrees_of_freedom =
+        ephemeris_->trajectory(sun)->EvaluateDegreesOfFreedom(
+            parameters.first_time) -
+        ephemeris_->trajectory(primary)->EvaluateDegreesOfFreedom(
+            parameters.first_time);
+    if (sun_subsystem != primary_subsystem) {
+      sun_relative_degrees_of_freedom = {
+          sun_relative_degrees_of_freedom.displacement() +
+              ephemeris_->subsystem_conversion(sun_subsystem,
+                                               primary_subsystem),
+          sun_relative_degrees_of_freedom.velocity()};
+    }
     auto const sun_osculating_elements =
         KeplerOrbit<Barycentric>{
             *primary,
             *sun,
-            ephemeris_->trajectory(sun)->EvaluateDegreesOfFreedom(
-                parameters.first_time) -
-                ephemeris_->trajectory(primary)->EvaluateDegreesOfFreedom(
-                    parameters.first_time),
+            sun_relative_degrees_of_freedom,
             parameters.first_time}
             .elements_at_epoch();
     Time const ephemeris_span = ephemeris_->t_max() - ephemeris_->t_min();
@@ -311,8 +338,11 @@ OrbitAnalyser::ComputeMeanSunIfPossible(
       RETURN_IF_ERROR(
           ephemeris_->Prolong(ephemeris_->t_max() + 0.5 * JulianYear));
     }
+    TranslatedTrajectory<Barycentric> const sun_trajectory(
+        *ephemeris_->trajectory(sun),
+        ephemeris_->subsystem_conversion(sun_subsystem, primary_subsystem));
     auto const sun_elements = OrbitalElements::ForTrajectory(
-        *ephemeris_->trajectory(sun), primary_centred, *primary, *sun);
+        sun_trajectory, primary_centred, *primary, *sun);
     if (sun_elements.ok()) {
       auto const& sun_mean_elements = sun_elements->mean_elements().front();
       mean_sun = OrbitGroundTrack::MeanSun{
@@ -332,13 +362,21 @@ absl::StatusOr<DiscreteTrajectory<OrbitAnalyser::PrimaryCentred>>
 OrbitAnalyser::ToPrimaryCentred(
     BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const&
         primary_centred,
-    DiscreteTrajectory<Barycentric> const& trajectory) {
+    DiscreteTrajectory<Barycentric> const& trajectory,
+    Displacement<Barycentric> const& conversion) {
+  bool const convert = conversion != Displacement<Barycentric>{};
   DiscreteTrajectory<PrimaryCentred> primary_centred_trajectory;
   for (auto const& [time, degrees_of_freedom] : trajectory) {
     RETURN_IF_STOPPED;
+    DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom =
+        convert ? DegreesOfFreedom<Barycentric>(
+                      degrees_of_freedom.position() + conversion,
+                      degrees_of_freedom.velocity())
+                : degrees_of_freedom;
     primary_centred_trajectory
         .Append(time,
-                primary_centred.ToThisFrameAtTime(time)(degrees_of_freedom))
+                primary_centred.ToThisFrameAtTime(time)(
+                    converted_degrees_of_freedom))
         .IgnoreError();
   }
   return primary_centred_trajectory;

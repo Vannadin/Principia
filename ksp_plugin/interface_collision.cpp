@@ -35,12 +35,14 @@ NewExecutor(Plugin const* const plugin,
             int const celestial_index,
             XYZ const sun_world_position,
             int const max_points,
-            TrajectoryLike const& vessel_trajectory) {
+            TrajectoryLike const& vessel_trajectory,
+            int const subsystem) {
   CHECK(plugin != nullptr);
 
   auto task = [celestial_index,
                max_points,
                plugin,
+               subsystem,
                sun_world_position =
                    FromXYZ<Position<World>>(sun_world_position),
                &vessel_trajectory](
@@ -52,7 +54,8 @@ NewExecutor(Plugin const* const plugin,
                                                   vessel_trajectory.end(),
                                                   sun_world_position,
                                                   max_points,
-                                                  radius);
+                                                  radius,
+                                                  subsystem);
   };
 
   return make_not_null_unique<
@@ -125,7 +128,8 @@ PushPullExecutor<
                               celestial_index,
                               sun_world_position,
                               max_points,
-                              flight_plan.GetAllSegments())
+                              flight_plan.GetAllSegments(),
+                              flight_plan.subsystem())
                       .release());
 }
 
@@ -149,7 +153,8 @@ PushPullExecutor<
                               celestial_index,
                               sun_world_position,
                               max_points,
-                              *vessel->prediction())
+                              *vessel->prediction(),
+                              vessel->subsystem())
                       .release());
 }
 

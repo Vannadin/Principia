@@ -14,6 +14,7 @@
 #include "geometry/frame.hpp"
 #include "geometry/instant.hpp"
 #include "geometry/interval.hpp"
+#include "geometry/space.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "physics/body_centred_non_rotating_reference_frame.hpp"
 #include "physics/degrees_of_freedom.hpp"
@@ -34,6 +35,7 @@ using namespace principia::base::_not_null;
 using namespace principia::geometry::_frame;
 using namespace principia::geometry::_instant;
 using namespace principia::geometry::_interval;
+using namespace principia::geometry::_space;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::physics::_body_centred_non_rotating_reference_frame;
 using namespace principia::physics::_degrees_of_freedom;
@@ -173,12 +175,14 @@ class OrbitAnalyser {
           primary_centred,
       std::optional<OrbitGroundTrack::MeanSun>& mean_sun);
 
-  // Converts the `trajectory` to the given `primary_centred` frame.  This
-  // function may be stopped.
+  // Converts the `trajectory` to the given `primary_centred` frame, after
+  // adding `conversion` to its positions to represent them in the subsystem of
+  // that frame.  This function may be stopped.
   static absl::StatusOr<DiscreteTrajectory<PrimaryCentred>> ToPrimaryCentred(
       BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const&
           primary_centred,
-      DiscreteTrajectory<Barycentric> const& trajectory);
+      DiscreteTrajectory<Barycentric> const& trajectory,
+      Displacement<Barycentric> const& conversion);
 
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
   Ephemeris<Barycentric>::FixedStepParameters const

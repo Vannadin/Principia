@@ -146,6 +146,14 @@ Instant FlightPlan::desired_final_time() const {
   return desired_final_time_;
 }
 
+int FlightPlan::subsystem() const {
+  return subsystem_;
+}
+
+Ephemeris<Barycentric> const& FlightPlan::ephemeris() const {
+  return *ephemeris_;
+}
+
 int FlightPlan::number_of_manœuvres() const {
   return manœuvres_.size();
 }

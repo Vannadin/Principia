@@ -23,9 +23,11 @@ using namespace principia::geometry::_permutation;
 using namespace principia::physics::_body_centred_body_direction_reference_frame;  // NOLINT
 
 Renderer::Renderer(not_null<Celestial const*> const sun,
-                   not_null<std::unique_ptr<PlottingFrame>> plotting_frame)
+                   not_null<std::unique_ptr<PlottingFrame>> plotting_frame,
+                   Ephemeris<Barycentric> const* const ephemeris)
     : sun_(sun),
-      plotting_frame_(std::move(plotting_frame)) {}
+      plotting_frame_(std::move(plotting_frame)),
+      ephemeris_(ephemeris) {}
 
 void Renderer::SetPlottingFrame(
     not_null<std::unique_ptr<PlottingFrame>> plotting_frame) {
@@ -78,9 +80,10 @@ Renderer::RenderBarycentricTrajectoryInWorld(
     DiscreteTrajectory<Barycentric>::iterator const& begin,
     DiscreteTrajectory<Barycentric>::iterator const& end,
     Position<World> const& sun_world_position,
-    Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    int const subsystem) const {
   auto const trajectory_in_plotting_frame =
-      RenderBarycentricTrajectoryInPlotting(begin, end);
+      RenderBarycentricTrajectoryInPlotting(begin, end, subsystem);
   auto trajectory_in_world =
       RenderPlottingTrajectoryInWorld(time,
                                       trajectory_in_plotting_frame.begin(),
@@ -93,7 +96,11 @@ Renderer::RenderBarycentricTrajectoryInWorld(
 DiscreteTrajectory<Navigation>
 Renderer::RenderBarycentricTrajectoryInPlotting(
     DiscreteTrajectory<Barycentric>::iterator const& begin,
-    DiscreteTrajectory<Barycentric>::iterator const& end) const {
+    DiscreteTrajectory<Barycentric>::iterator const& end,
+    int const subsystem) const {
+  int const plotting_subsystem = GetPlottingFrame()->subsystem();
+  Displacement<Barycentric> const conversion =
+      SubsystemConversion(subsystem, plotting_subsystem);
   DiscreteTrajectory<Navigation> trajectory;
   for (auto it = begin; it != end; ++it) {
     auto const& [time, degrees_of_freedom] = *it;
@@ -105,8 +112,14 @@ Renderer::RenderBarycentricTrajectoryInPlotting(
         break;
       }
     }
+    DegreesOfFreedom<Barycentric> const plotting_degrees_of_freedom =
+        subsystem == plotting_subsystem
+            ? degrees_of_freedom
+            : DegreesOfFreedom<Barycentric>(
+                  degrees_of_freedom.position() + conversion,
+                  degrees_of_freedom.velocity());
     trajectory.Append(time,
-                      BarycentricToPlotting(time)(degrees_of_freedom))
+                      BarycentricToPlotting(time)(plotting_degrees_of_freedom))
         .IgnoreError();
   }
   return trajectory;
@@ -136,11 +149,21 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
     DistinguishedPoints<Barycentric>::const_iterator const begin,
     DistinguishedPoints<Barycentric>::const_iterator const end,
     Position<World> const& sun_world_position,
-    Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    int const subsystem) const {
+  int const plotting_subsystem = GetPlottingFrame()->subsystem();
+  Displacement<Barycentric> const conversion =
+      SubsystemConversion(subsystem, plotting_subsystem);
   DistinguishedPoints<Navigation> plotting_points;
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
+    DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom =
+        subsystem == plotting_subsystem
+            ? degrees_of_freedom
+            : DegreesOfFreedom<Barycentric>(
+                  degrees_of_freedom.position() + conversion,
+                  degrees_of_freedom.velocity());
     auto const plotting_degrees_of_freedom =
-        BarycentricToPlotting(t)(degrees_of_freedom);
+        BarycentricToPlotting(t)(converted_degrees_of_freedom);
     plotting_points.emplace(t, plotting_degrees_of_freedom);
   }
   return RenderPlottingContainerInWorld<DistinguishedPoints>(
@@ -197,9 +220,15 @@ SimilarMotion<Barycentric, Navigation> Renderer::BarycentricToPlotting(
 RigidTransformation<Barycentric, World> Renderer::BarycentricToWorld(
     Instant const& time,
     Position<World> const& sun_world_position,
-    Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    int const subsystem) const {
+  Position<Barycentric> sun_position = sun_->current_position(time);
+  if (int const sun_subsystem = sun_->subsystem();
+      sun_subsystem != subsystem) {
+    sun_position += SubsystemConversion(sun_subsystem, subsystem);
+  }
   return RigidTransformation<Barycentric, World>(
-      sun_->current_position(time),
+      sun_position,
       sun_world_position,
       BarycentricToWorld(planetarium_rotation));
 }
@@ -232,8 +261,16 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
     Vessel const& vessel,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
   auto const& back = vessel.psychohistory()->back();
-  DegreesOfFreedom<Barycentric> const& barycentric_degrees_of_freedom =
+  DegreesOfFreedom<Barycentric> barycentric_degrees_of_freedom =
       back.degrees_of_freedom;
+  if (int const vessel_subsystem = vessel.subsystem(),
+          plotting_subsystem = GetPlottingFrame()->subsystem();
+      vessel_subsystem != plotting_subsystem) {
+    barycentric_degrees_of_freedom = {
+        barycentric_degrees_of_freedom.position() +
+            SubsystemConversion(vessel_subsystem, plotting_subsystem),
+        barycentric_degrees_of_freedom.velocity()};
+  }
   DegreesOfFreedom<Navigation> const plotting_frame_degrees_of_freedom =
       BarycentricToPlotting(back.time)(barycentric_degrees_of_freedom);
   Rotation<Frenet<Navigation>, Navigation> const
@@ -251,12 +288,21 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
     NavigationFrame const& navigation_frame,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
   auto const& back = vessel.psychohistory()->back();
+  DegreesOfFreedom<Barycentric> degrees_of_freedom = back.degrees_of_freedom;
+  if (int const vessel_subsystem = vessel.subsystem(),
+          frame_subsystem = navigation_frame.subsystem();
+      vessel_subsystem != frame_subsystem) {
+    degrees_of_freedom = {
+        degrees_of_freedom.position() +
+            SubsystemConversion(vessel_subsystem, frame_subsystem),
+        degrees_of_freedom.velocity()};
+  }
   auto const to_navigation = navigation_frame.ToThisFrameAtTime(back.time);
   auto const from_navigation = to_navigation.orthogonal_map().Inverse();
   auto const frenet_frame =
       navigation_frame.FrenetFrame(
           back.time,
-          to_navigation(back.degrees_of_freedom)).Forget<OrthogonalMap>();
+          to_navigation(degrees_of_freedom)).Forget<OrthogonalMap>();
   return BarycentricToWorld(planetarium_rotation) * from_navigation *
          frenet_frame;
 }
@@ -270,7 +316,10 @@ Similarity<Navigation, World> Renderer::PlottingToWorld(
     Instant const& time,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
-  return BarycentricToWorld(time, sun_world_position, planetarium_rotation)
+  return BarycentricToWorld(time,
+                            sun_world_position,
+                            planetarium_rotation,
+                            GetPlottingFrame()->subsystem())
              .Forget<Similarity>() *
          GetPlottingFrame()->FromThisFrameAtTimeSimilarly(time).similarity();
 }
@@ -285,8 +334,10 @@ ConformalMap<double, Navigation, World> Renderer::PlottingToWorld(
 RigidTransformation<World, Barycentric> Renderer::WorldToBarycentric(
     Instant const& time,
     Position<World> const& sun_world_position,
-    Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
-  return BarycentricToWorld(time, sun_world_position, planetarium_rotation)
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    int const subsystem) const {
+  return BarycentricToWorld(
+             time, sun_world_position, planetarium_rotation, subsystem)
       .Inverse();
 }
 
@@ -300,7 +351,10 @@ Similarity<World, Navigation> Renderer::WorldToPlotting(
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
   return BarycentricToPlotting(time).similarity() *
-         WorldToBarycentric(time, sun_world_position, planetarium_rotation)
+         WorldToBarycentric(time,
+                            sun_world_position,
+                            planetarium_rotation,
+                            GetPlottingFrame()->subsystem())
              .Forget<Similarity>();
 }
 
@@ -332,7 +386,8 @@ not_null<std::unique_ptr<Renderer>> Renderer::ReadFromMessage(
     not_null<Ephemeris<Barycentric> const*> const ephemeris) {
   return make_not_null_unique<Renderer>(
       sun,
-      PlottingFrame::ReadFromMessage(message.plotting_frame(), ephemeris));
+      PlottingFrame::ReadFromMessage(message.plotting_frame(), ephemeris),
+      ephemeris);
 }
 
 Renderer::Target::Target(
@@ -346,7 +401,16 @@ Renderer::Target::Target(
               BodyCentredBodyDirectionReferenceFrame<Barycentric, Navigation>>(
               ephemeris,
               [this]() -> auto& { return *this->vessel->prediction(); },
-              celestial->body())) {}
+              celestial->body(),
+              [this]() { return this->vessel->subsystem(); })) {}
+
+Displacement<Barycentric> Renderer::SubsystemConversion(int const s1,
+                                                        int const s2) const {
+  if (ephemeris_ == nullptr || s1 == s2) {
+    return Displacement<Barycentric>{};
+  }
+  return ephemeris_->subsystem_conversion(s1, s2);
+}
 
 template<template<typename Frame> typename Container>
 Container<World> Renderer::RenderPlottingContainerInWorld(

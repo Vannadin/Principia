@@ -367,7 +367,7 @@ TEST_F(InterfaceFlightPlanTest, FlightPlan) {
   EXPECT_OK(segment.Append(t0_ + 2 * Second, immobile_origin));
   EXPECT_CALL(flight_plan_, GetSegment(3))
       .WillOnce(Return(segment.segments().begin()));
-  EXPECT_CALL(renderer_, RenderBarycentricTrajectoryInWorld(_, _, _, _, _))
+  EXPECT_CALL(renderer_, RenderBarycentricTrajectoryInWorld(_, _, _, _, _, _))
       .WillOnce(Return(ByMove(std::move(rendered_trajectory))));
   auto* const iterator =
       principia__FlightPlanRenderedSegment(plugin_.get(),

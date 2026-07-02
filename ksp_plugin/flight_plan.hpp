@@ -69,6 +69,12 @@ class FlightPlan {
   virtual Instant initial_time() const;
   virtual Instant desired_final_time() const;
 
+  // The subsystem in whose representation this flight plan is expressed.
+  virtual int subsystem() const;
+
+  // The ephemeris used to compute this flight plan.
+  virtual Ephemeris<Barycentric> const& ephemeris() const;
+
   // End time of the last coast.  If this is less than `desired_final_time()`,
   // there is at least an anomalous manœuvre.
   virtual Instant actual_final_time() const;

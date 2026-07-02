@@ -527,8 +527,8 @@ void __cdecl principia__FlightPlanRenderedApsides(
        max_points},
       {apoapsides, periapsides});
   CHECK(plugin != nullptr);
-  auto const& flight_plan =
-      GetFlightPlan(*plugin, vessel_guid).GetAllSegments();
+  FlightPlan const& vessel_flight_plan = GetFlightPlan(*plugin, vessel_guid);
+  auto const& flight_plan = vessel_flight_plan.GetAllSegments();
   DistinguishedPoints<World> rendered_apoapsides;
   DistinguishedPoints<World> rendered_periapsides;
   for (auto const& segment : flight_plan.segments()) {
@@ -542,7 +542,8 @@ void __cdecl principia__FlightPlanRenderedApsides(
         FromXYZ<Position<World>>(sun_world_position),
         max_points,
         segment_rendered_apoapsides,
-        segment_rendered_periapsides);
+        segment_rendered_periapsides,
+        vessel_flight_plan.subsystem());
     rendered_apoapsides.merge(std::move(segment_rendered_apoapsides));
     rendered_periapsides.merge(std::move(segment_rendered_periapsides));
   }
@@ -565,8 +566,8 @@ void __cdecl principia__FlightPlanRenderedClosestApproaches(
       {plugin, vessel_guid, sun_world_position, max_points},
       {closest_approaches});
   CHECK(plugin != nullptr);
-  auto const& flight_plan =
-      GetFlightPlan(*plugin, vessel_guid).GetAllSegments();
+  FlightPlan const& vessel_flight_plan = GetFlightPlan(*plugin, vessel_guid);
+  auto const& flight_plan = vessel_flight_plan.GetAllSegments();
   DistinguishedPoints<World> rendered_closest_approaches;
   for (auto const& segment : flight_plan.segments()) {
     DistinguishedPoints<World> segment_rendered_closest_approaches;
@@ -575,7 +576,8 @@ void __cdecl principia__FlightPlanRenderedClosestApproaches(
         segment.begin(), segment.end(),
         FromXYZ<Position<World>>(sun_world_position),
         max_points,
-        segment_rendered_closest_approaches);
+        segment_rendered_closest_approaches,
+        vessel_flight_plan.subsystem());
     rendered_closest_approaches.merge(
         std::move(segment_rendered_closest_approaches));
   }
@@ -596,8 +598,8 @@ void __cdecl principia__FlightPlanRenderedNodes(Plugin const* const plugin,
       {plugin, vessel_guid, t_max, sun_world_position, max_points},
       {ascending, descending});
   CHECK(plugin != nullptr);
-  auto const& flight_plan =
-      GetFlightPlan(*plugin, vessel_guid).GetAllSegments();
+  FlightPlan const& vessel_flight_plan = GetFlightPlan(*plugin, vessel_guid);
+  auto const& flight_plan = vessel_flight_plan.GetAllSegments();
   std::vector<Renderer::Node> rendered_ascending;
   std::vector<Renderer::Node> rendered_descending;
   for (auto const& segment : flight_plan.segments()) {
@@ -609,7 +611,8 @@ void __cdecl principia__FlightPlanRenderedNodes(Plugin const* const plugin,
         FromXYZ<Position<World>>(sun_world_position),
         max_points,
         segment_rendered_ascending,
-        segment_rendered_descending);
+        segment_rendered_descending,
+        vessel_flight_plan.subsystem());
     std::move(segment_rendered_ascending.begin(),
               segment_rendered_ascending.end(),
               std::back_inserter(rendered_ascending));
@@ -640,8 +643,8 @@ Iterator* __cdecl principia__FlightPlanRenderedSegment(
   // This might force a (partial) recomputation of the flight plan to avoid a
   // deadline, and a change of the anomalous status that will be noticed by the
   // flight planner.
-  auto const segment =
-      GetFlightPlan(*plugin, vessel_guid).GetSegmentAvoidingDeadlines(index);
+  FlightPlan& vessel_flight_plan = GetFlightPlan(*plugin, vessel_guid);
+  auto const segment = vessel_flight_plan.GetSegmentAvoidingDeadlines(index);
 
   auto rendered_trajectory =
       plugin->renderer().RenderBarycentricTrajectoryInWorld(
@@ -649,7 +652,8 @@ Iterator* __cdecl principia__FlightPlanRenderedSegment(
           segment->begin(),
           segment->end(),
           FromXYZ<Position<World>>(sun_world_position),
-          plugin->PlanetariumRotation());
+          plugin->PlanetariumRotation(),
+          vessel_flight_plan.subsystem());
   if (index % 2 == 1 && !rendered_trajectory.empty() &&
       rendered_trajectory.front().time != segment->front().time) {
     // TODO(egg): this is ugly; we should centralize rendering.

@@ -56,7 +56,8 @@ void __cdecl principia__RenderedPredictionApsides(
        max_points},
       {apoapsides, periapsides});
   CHECK(plugin != nullptr);
-  auto const prediction = plugin->GetVessel(vessel_guid)->prediction();
+  auto const vessel = plugin->GetVessel(vessel_guid);
+  auto const prediction = vessel->prediction();
   DistinguishedPoints<World> rendered_apoapsides;
   DistinguishedPoints<World> rendered_periapsides;
   plugin->ComputeAndRenderApsides(
@@ -67,7 +68,8 @@ void __cdecl principia__RenderedPredictionApsides(
       FromXYZ<Position<World>>(sun_world_position),
       max_points,
       rendered_apoapsides,
-      rendered_periapsides);
+      rendered_periapsides,
+      vessel->subsystem());
   *apoapsides = new TypedIterator<DistinguishedPoints<World>>(
       std::move(rendered_apoapsides),
       plugin);
@@ -87,7 +89,8 @@ void __cdecl principia__RenderedPredictionClosestApproaches(
       {plugin, vessel_guid, sun_world_position, max_points},
       {closest_approaches});
   CHECK(plugin != nullptr);
-  auto const prediction = plugin->GetVessel(vessel_guid)->prediction();
+  auto const vessel = plugin->GetVessel(vessel_guid);
+  auto const prediction = vessel->prediction();
   DistinguishedPoints<World> rendered_closest_approaches;
   plugin->ComputeAndRenderClosestApproaches(
       *prediction,
@@ -95,7 +98,8 @@ void __cdecl principia__RenderedPredictionClosestApproaches(
       prediction->end(),
       FromXYZ<Position<World>>(sun_world_position),
       max_points,
-      rendered_closest_approaches);
+      rendered_closest_approaches,
+      vessel->subsystem());
   *closest_approaches = new TypedIterator<DistinguishedPoints<World>>(
       std::move(rendered_closest_approaches),
       plugin);
@@ -113,7 +117,8 @@ void __cdecl principia__RenderedPredictionNodes(Plugin const* const plugin,
       {plugin, vessel_guid, t_max, sun_world_position, max_points},
       {ascending, descending});
   CHECK(plugin != nullptr);
-  auto const prediction = plugin->GetVessel(vessel_guid)->prediction();
+  auto const vessel = plugin->GetVessel(vessel_guid);
+  auto const prediction = vessel->prediction();
   std::vector<Renderer::Node> rendered_ascending;
   std::vector<Renderer::Node> rendered_descending;
   plugin->ComputeAndRenderNodes(
@@ -122,7 +127,8 @@ void __cdecl principia__RenderedPredictionNodes(Plugin const* const plugin,
       FromXYZ<Position<World>>(sun_world_position),
       max_points,
       rendered_ascending,
-      rendered_descending);
+      rendered_descending,
+      vessel->subsystem());
   *ascending = new TypedIterator<std::vector<Renderer::Node>>(
       std::move(rendered_ascending), plugin);
   *descending = new TypedIterator<std::vector<Renderer::Node>>(

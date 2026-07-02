@@ -288,6 +288,9 @@ class Plugin {
       RigidMotion<Barycentric, World> const& barycentric_to_world,
       Instant const& time) const;
 
+  // The `Barycentric` side of the returned motion is represented relative to
+  // the local origin of the subsystem of the main body; `GetPartActualMotion`
+  // and `CelestialWorldDegreesOfFreedom` convert their inputs accordingly.
   virtual RigidMotion<Barycentric, World> BarycentricToWorld(
       bool reference_part_is_unmoving,
       PartId reference_part_id,
@@ -361,7 +364,9 @@ class Plugin {
   virtual void ExtendPredictionForFlightPlan(GUID const& vessel_guid) const;
 
   // Computes the apsides of the trajectory defined by `begin` and `end` with
-  // respect to the celestial with index `celestial_index`.
+  // respect to the celestial with index `celestial_index`.  In this function
+  // and the following ones, `subsystem` is the subsystem relative to whose
+  // local origin the positions of `trajectory` are represented.
   virtual void ComputeAndRenderApsides(
       Index celestial_index,
       Trajectory<Barycentric> const& trajectory,
@@ -371,7 +376,8 @@ class Plugin {
       Position<World> const& sun_world_position,
       int max_points,
       DistinguishedPoints<World>& apoapsides,
-      DistinguishedPoints<World>& periapsides) const;
+      DistinguishedPoints<World>& periapsides,
+      int subsystem = 0) const;
 
   // Computes the first collision between the trajectory defined by `begin` and
   // `end` and the celestial with index `celestial_index`.
@@ -384,7 +390,8 @@ class Plugin {
       Position<World> const& sun_world_position,
       int max_points,
       std::function<Length(Angle const& latitude,
-                           Angle const& longitude)> const& radius) const;
+                           Angle const& longitude)> const& radius,
+      int subsystem = 0) const;
 
   // Computes the closest approaches of the trajectory defined by `begin` and
   // `end` with respect to the trajectory of the targetted vessel.
@@ -394,7 +401,8 @@ class Plugin {
       DiscreteTrajectory<Barycentric>::iterator const& end,
       Position<World> const& sun_world_position,
       int max_points,
-      DistinguishedPoints<World>& closest_approaches) const;
+      DistinguishedPoints<World>& closest_approaches,
+      int subsystem = 0) const;
 
   // Computes the nodes of the trajectory defined by `begin` and `end` with
   // respect to plane of the trajectory of the targetted vessel.
@@ -405,7 +413,8 @@ class Plugin {
       Position<World> const& sun_world_position,
       int max_points,
       std::vector<Renderer::Node>& ascending,
-      std::vector<Renderer::Node>& descending) const;
+      std::vector<Renderer::Node>& descending,
+      int subsystem = 0) const;
 
   virtual bool HasCelestial(Index index) const;
   virtual Celestial const& GetCelestial(Index index) const;
@@ -515,9 +524,19 @@ class Plugin {
   // whenever `main_body_` or `planetarium_rotation_` changes.
   void UpdatePlanetariumRotation();
 
+  // `subsystem` is the subsystem relative to whose local origin
+  // `degrees_of_freedom` is represented.
   Velocity<World> VesselVelocity(
       Instant const& time,
-      DegreesOfFreedom<Barycentric> const& degrees_of_freedom) const;
+      DegreesOfFreedom<Barycentric> const& degrees_of_freedom,
+      int subsystem = 0) const;
+
+  // The rigid motion that translates positions represented relative to the
+  // local origin of subsystem `s1` so that they become represented relative
+  // to the local origin of subsystem `s2`.
+  RigidMotion<Barycentric, Barycentric> SubsystemConversionMotion(
+      int s1,
+      int s2) const;
 
   // Fill `celestials` using the `index` and `parent_index` fields found in
   // `celestial_messages`.

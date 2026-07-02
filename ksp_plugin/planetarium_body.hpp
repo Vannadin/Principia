@@ -3,6 +3,7 @@
 #include "ksp_plugin/planetarium.hpp"
 
 #include <algorithm>
+#include <type_traits>
 
 #include "base/algebra.hpp"
 #include "geometry/grassmann.hpp"
@@ -11,6 +12,7 @@
 #include "numerics/hermite3.hpp"
 #include "numerics/quadrature.hpp"
 #include "physics/similar_motion.hpp"
+#include "physics/translated_trajectory.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/si.hpp"
 
@@ -26,6 +28,7 @@ using namespace principia::numerics::_elementary_functions;
 using namespace principia::numerics::_hermite3;
 using namespace principia::numerics::_quadrature;
 using namespace principia::physics::_similar_motion;
+using namespace principia::physics::_translated_trajectory;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_si;
 
@@ -155,7 +158,25 @@ void Planetarium::PlotMethod4(
     bool const reverse,
     std::function<void(ScaledSpacePoint const&)> const& add_point,
     int const max_points,
-    Length* const minimal_distance) const {
+    Length* const minimal_distance,
+    int const subsystem) const {
+  if constexpr (std::is_same_v<Frame, Barycentric>) {
+    if (int const plotting_subsystem = plotting_frame_->subsystem();
+        subsystem != plotting_subsystem) {
+      TranslatedTrajectory<Barycentric> const translated_trajectory(
+          trajectory,
+          ephemeris_->subsystem_conversion(subsystem, plotting_subsystem));
+      PlotMethod4(translated_trajectory,
+                  first_time,
+                  last_time,
+                  reverse,
+                  add_point,
+                  max_points,
+                  minimal_distance,
+                  plotting_subsystem);
+      return;
+    }
+  }
   auto const final_time = reverse ? first_time : last_time;
   auto previous_time = reverse ? last_time : first_time;
 

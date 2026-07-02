@@ -16,14 +16,20 @@ bool Celestial::is_initialized() const {
 }
 
 void Celestial::set_trajectory(
-    not_null<ContinuousTrajectory<Barycentric> const*> const trajectory) {
+    not_null<ContinuousTrajectory<Barycentric> const*> const trajectory,
+    int const subsystem) {
   CHECK(!is_initialized());
   trajectory_ = trajectory;
+  subsystem_ = subsystem;
 }
 
 ContinuousTrajectory<Barycentric> const& Celestial::trajectory() const {
   CHECK(is_initialized());
   return *trajectory_;
+}
+
+int Celestial::subsystem() const {
+  return subsystem_;
 }
 
 DegreesOfFreedom<Barycentric> Celestial::current_degrees_of_freedom(

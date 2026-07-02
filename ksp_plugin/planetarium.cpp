@@ -294,7 +294,8 @@ void Planetarium::PlotMethod4(
     Instant const& t_max,
     bool const reverse,
     std::function<void(ScaledSpacePoint const&)> const& add_point,
-    int max_points) const {
+    int max_points,
+    int const subsystem) const {
   if (begin == end) {
     return;
   }
@@ -302,8 +303,8 @@ void Planetarium::PlotMethod4(
   auto const begin_time = std::max(begin->time, plotting_frame_->t_min());
   auto const last_time =
       std::min({last->time, plotting_frame_->t_max(), t_max});
-  PlotMethod4(
-      trajectory, begin_time, last_time, reverse, add_point, max_points);
+  PlotMethod4(trajectory, begin_time, last_time, reverse, add_point,
+              max_points, /*minimal_distance=*/nullptr, subsystem);
 }
 
 std::vector<Sphere<Navigation>> Planetarium::ComputePlottableSpheres(
@@ -312,12 +313,18 @@ std::vector<Sphere<Navigation>> Planetarium::ComputePlottableSpheres(
       plotting_frame_->ToThisFrameAtTimeSimilarly(now);
   std::vector<Sphere<Navigation>> plottable_spheres;
 
+  int const plotting_subsystem = plotting_frame_->subsystem();
   auto const& bodies = ephemeris_->bodies();
   for (not_null<MassiveBody const*> const body : bodies) {
     auto const trajectory = ephemeris_->trajectory(body);
     Length const mean_radius = body->mean_radius();
-    Position<Barycentric> const centre_in_barycentric =
+    Position<Barycentric> centre_in_barycentric =
         trajectory->EvaluatePosition(now);
+    if (int const body_subsystem = ephemeris_->subsystem_of_body(body);
+        body_subsystem != plotting_subsystem) {
+      centre_in_barycentric +=
+          ephemeris_->subsystem_conversion(body_subsystem, plotting_subsystem);
+    }
     Sphere<Navigation> plottable_sphere(
         similar_motion_at_now.similarity()(centre_in_barycentric),
         parameters_.sphere_radius_multiplier_ * mean_radius);

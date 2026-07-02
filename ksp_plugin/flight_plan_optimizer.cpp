@@ -13,6 +13,8 @@
 #include "geometry/grassmann.hpp"
 #include "numerics/angle_reduction.hpp"
 #include "numerics/elementary_functions.hpp"
+#include "physics/degrees_of_freedom.hpp"
+#include "physics/translated_trajectory.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/si.hpp"
 
@@ -27,6 +29,8 @@ using namespace principia::geometry::_barycentre_calculator;
 using namespace principia::geometry::_grassmann;
 using namespace principia::numerics::_angle_reduction;
 using namespace principia::numerics::_elementary_functions;
+using namespace principia::physics::_degrees_of_freedom;
+using namespace principia::physics::_translated_trajectory;
 using namespace principia::quantities::_si;
 
 // Conversion factors between `Argument` and `HomogeneousArgument`.
@@ -553,7 +557,10 @@ FlightPlanOptimizer::EvaluateClosestPeriapsis(
     Celestial const& celestial,
     Instant const& begin_time,
     bool const extend_if_needed) const {
-  auto const& celestial_trajectory = celestial.trajectory();
+  TranslatedTrajectory<Barycentric> const celestial_trajectory(
+      celestial.trajectory(),
+      flight_plan_->ephemeris().subsystem_conversion(celestial.subsystem(),
+                                                     flight_plan_->subsystem()));
   auto const& vessel_trajectory = flight_plan_->GetAllSegments();
 
   Length distance_at_closest_periapsis;
@@ -653,8 +660,12 @@ Length FlightPlanOptimizer::EvaluateDistanceToCelestialWithReplacement(
     int const index) {
   auto const [time, degrees_of_freedom] = EvaluatePeriapsisWithReplacement(
       celestial, homogeneous_argument, manœuvre, index);
+  TranslatedTrajectory<Barycentric> const celestial_trajectory(
+      celestial.trajectory(),
+      flight_plan_->ephemeris().subsystem_conversion(celestial.subsystem(),
+                                                     flight_plan_->subsystem()));
   return (degrees_of_freedom.position() -
-          celestial.trajectory().EvaluatePosition(time)).Norm();
+          celestial_trajectory.EvaluatePosition(time)).Norm();
 }
 
 FlightPlanOptimizer::LengthGradient
@@ -708,8 +719,18 @@ Angle FlightPlanOptimizer::EvaluateRelativeInclinationWithReplacement(
   auto const [time, barycentric_degrees_of_freedom] =
       EvaluatePeriapsisWithReplacement(
           celestial, homogeneous_argument, manœuvre, index);
+  DegreesOfFreedom<Barycentric> converted_degrees_of_freedom =
+      barycentric_degrees_of_freedom;
+  if (int const frame_subsystem = frame.subsystem();
+      frame_subsystem != flight_plan_->subsystem()) {
+    converted_degrees_of_freedom = {
+        converted_degrees_of_freedom.position() +
+            flight_plan_->ephemeris().subsystem_conversion(
+                flight_plan_->subsystem(), frame_subsystem),
+        converted_degrees_of_freedom.velocity()};
+  }
   auto const navigation_degrees_of_freedom =
-      frame.ToThisFrameAtTime(time)(barycentric_degrees_of_freedom);
+      frame.ToThisFrameAtTime(time)(converted_degrees_of_freedom);
   auto const r = navigation_degrees_of_freedom.position() - Navigation::origin;
   auto const v = navigation_degrees_of_freedom.velocity();
   Angle const i =

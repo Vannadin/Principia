@@ -146,7 +146,9 @@ class Planetarium {
       Length* minimal_distance = nullptr) const;
 
   // A method similar to PlotMethod4, but which uses the RMS of the apparent
-  // distance between the trajectory and line segments.
+  // distance between the trajectory and line segments.  `subsystem` is the
+  // subsystem relative to whose local origin the positions of `trajectory` are
+  // represented.
   void PlotMethod4(
       Trajectory<Barycentric> const& trajectory,
       DiscreteTrajectory<Barycentric>::iterator begin,
@@ -154,10 +156,12 @@ class Planetarium {
       Instant const& t_max,
       bool reverse,
       std::function<void(ScaledSpacePoint const&)> const& add_point,
-      int max_points) const;
+      int max_points,
+      int subsystem = 0) const;
 
   // The same method, operating on the `Trajectory` interface for any frame that
-  // can be converted to `Navigation`.
+  // can be converted to `Navigation`.  `subsystem` is only meaningful when
+  // `Frame` is `Barycentric`.
   template<typename Frame>
   void PlotMethod4(
       Trajectory<Frame> const& trajectory,
@@ -166,7 +170,8 @@ class Planetarium {
       bool reverse,
       std::function<void(ScaledSpacePoint const&)> const& add_point,
       int max_points,
-      Length* minimal_distance = nullptr) const;
+      Length* minimal_distance = nullptr,
+      int subsystem = 0) const;
 
  private:
   // Computes the coordinates of the spheres that represent the `ephemeris_`
