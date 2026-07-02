@@ -14,6 +14,7 @@
 #include "base/recurring_thread.hpp"
 #include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
+#include "geometry/space.hpp"
 #include "ksp_plugin/celestial.hpp"
 #include "ksp_plugin/flight_plan.hpp"
 #include "ksp_plugin/flight_plan_optimization_driver.hpp"
@@ -48,6 +49,7 @@ using namespace principia::base::_not_null;
 using namespace principia::base::_recurring_thread;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
+using namespace principia::geometry::_space;
 using namespace principia::ksp_plugin::_celestial;
 using namespace principia::ksp_plugin::_flight_plan;
 using namespace principia::ksp_plugin::_flight_plan_optimization_driver;
@@ -109,6 +111,13 @@ class Vessel {
   // Returns the subsystem relative to whose local origin the Barycentric
   // positions of the trajectories of this vessel are represented.
   virtual int subsystem() const;
+
+  // If the vessel is in interstellar space and nearer to the local origin of
+  // another subsystem than to that of its own, re-expresses all its
+  // trajectories (and those of its pile-up and flight plans) relative to the
+  // local origin of the nearest subsystem.  Returns true if a rebase
+  // happened.  Must not be called while the pile-ups are being advanced.
+  virtual bool RebaseIfNeeded();
 
   // Adds the given part to this vessel.  Note that this does not add the part
   // to the set of kept parts, and that unless `KeepPart` is called, the part
@@ -420,6 +429,9 @@ class Vessel {
   not_null<Celestial const*> parent_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
   int subsystem_;
+  // The sum of all the translations applied by rebases, used to bring
+  // reanimated trajectories to the current representation.
+  Displacement<Barycentric> rebase_offset_;
   std::optional<DiscreteTrajectorySegment<Barycentric>::DownsamplingParameters>
       downsampling_parameters_;
 

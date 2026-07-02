@@ -14,6 +14,7 @@
 #include "geometry/frame.hpp"
 #include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
+#include "geometry/space.hpp"
 #include "geometry/space_transformations.hpp"
 #include "integrators/integrators.hpp"
 #include "ksp_plugin/frames.hpp"
@@ -45,6 +46,7 @@ using namespace principia::base::_not_null;
 using namespace principia::geometry::_frame;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
+using namespace principia::geometry::_space;
 using namespace principia::geometry::_space_transformations;
 using namespace principia::integrators::_integrators;
 using namespace principia::ksp_plugin::_frames;
@@ -104,6 +106,15 @@ class PileUp {
 
   // Runs the `deletion_callback` passed at construction, if not null.
   virtual ~PileUp();
+
+  // Returns the subsystem relative to whose local origin the Barycentric
+  // degrees of freedom of this pile-up are represented.
+  int subsystem() const;
+
+  // Re-expresses this pile-up relative to the local origin of the given
+  // `subsystem`, by translating its trajectory by `displacement`.  Must not be
+  // called while the pile-up is being advanced.
+  void Rebase(Displacement<Barycentric> const& displacement, int subsystem);
 
   std::list<not_null<Part*>> const& parts() const;
   Ephemeris<Barycentric>::FixedStepParameters const& fixed_step_parameters()

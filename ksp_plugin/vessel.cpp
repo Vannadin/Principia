@@ -42,12 +42,18 @@ using namespace principia::base::_map_util;
 using namespace principia::geometry::_barycentre_calculator;
 using namespace principia::ksp_plugin::_integrators;
 using namespace principia::quantities::_named_quantities;
+using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_make_not_null;
 
 using namespace std::chrono_literals;
 
 // TODO(phl): Move this to some kind of parameters.
 constexpr std::int64_t max_points_to_serialize = 20'000;
+
+// A vessel this far from the local origins of both its subsystem and the
+// nearest one is in interstellar space, where gravity is negligible and a
+// rebase is glitch-free.
+constexpr Length rebase_distance_threshold = 1e15 * Metre;
 
 auto* const where_elephants_go_to_die =
     new Graveyard(std::thread::hardware_concurrency());
@@ -134,6 +140,57 @@ not_null<Celestial const*> Vessel::parent() const {
 
 int Vessel::subsystem() const {
   return subsystem_;
+}
+
+bool Vessel::RebaseIfNeeded() {
+  int const number_of_subsystems = ephemeris_->number_of_subsystems();
+  if (number_of_subsystems < 2 || trajectory_.empty()) {
+    return false;
+  }
+  Displacement<Barycentric> const q =
+      trajectory_.back().degrees_of_freedom.position() - Barycentric::origin;
+  int nearest_subsystem = subsystem_;
+  Length nearest_distance = q.Norm();
+  for (int s = 0; s < number_of_subsystems; ++s) {
+    if (s == subsystem_) {
+      continue;
+    }
+    Length const distance =
+        (q + ephemeris_->inter_subsystem_offset(subsystem_, s).value).Norm();
+    if (distance < nearest_distance) {
+      nearest_distance = distance;
+      nearest_subsystem = s;
+    }
+  }
+  if (nearest_subsystem == subsystem_ ||
+      nearest_distance <= rebase_distance_threshold) {
+    return false;
+  }
+
+  auto const& offset =
+      ephemeris_->inter_subsystem_offset(subsystem_, nearest_subsystem);
+  Displacement<Barycentric> const displacement = offset.value + offset.error;
+  LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
+            << subsystem_ << " to subsystem " << nearest_subsystem;
+  trajectory_.Translate(displacement);
+  rebase_offset_ += displacement;
+  subsystem_ = nearest_subsystem;
+  ForAllParts([this](Part& part) { part.set_subsystem(subsystem_); });
+  PileUp* pile_up = nullptr;
+  ForSomePart([&pile_up](Part& part) {
+    pile_up = part.containing_pile_up();
+  });
+  if (pile_up != nullptr && pile_up->subsystem() != subsystem_) {
+    pile_up->Rebase(displacement, subsystem_);
+  }
+  for (auto& flight_plan : flight_plans_) {
+    if (auto* const optimizable_flight_plan =
+            std::get_if<OptimizableFlightPlan>(&flight_plan)) {
+      optimizable_flight_plan->flight_plan
+          ->Rebase(displacement, subsystem_).IgnoreError();
+    }
+  }
+  return true;
 }
 
 void Vessel::set_parent(not_null<Celestial const*> const parent) {
@@ -463,6 +520,11 @@ void Vessel::AwaitReanimation(Instant const& desired_t_min,
     // thereby ensuring that the trajectory doesn't change, say, while clients
     // iterate over it.
     while (!reanimated_trajectories_.empty()) {
+      if (rebase_offset_ != Displacement<Barycentric>{}) {
+        // The reanimated trajectory was computed in the representation that
+        // predates the rebases; bring it to the current one.
+        reanimated_trajectories_.front().Translate(rebase_offset_);
+      }
       trajectory_.Merge(std::move(reanimated_trajectories_.front()));
       reanimated_trajectories_.pop();
     }

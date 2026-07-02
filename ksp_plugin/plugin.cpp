@@ -798,6 +798,14 @@ void Plugin::AdvanceTime(Instant const& t, Angle const& planetarium_rotation) {
 void Plugin::CatchUpLaggingVessels(VesselSet& collided_vessels) {
   CHECK(!initializing_);
 
+  // Rebase the vessels that have crossed into another subsystem.  This must
+  // happen while no pile-up is being advanced.
+  for (auto const& [_, vessel] : vessels_) {
+    if (!is_loaded(vessel.get())) {
+      vessel->RebaseIfNeeded();
+    }
+  }
+
   // Start all the integrations in parallel.
   std::vector<PileUpFuture> pile_up_futures;
   for (auto* const pile_up : pile_ups_) {
@@ -833,6 +841,9 @@ not_null<std::unique_ptr<PileUpFuture>> Plugin::CatchUpVessel(
 
   // Find the vessel and the pile-up that contains it.
   Vessel& vessel = *FindOrDie(vessels_, vessel_guid);
+  if (!is_loaded(&vessel)) {
+    vessel.RebaseIfNeeded();
+  }
   PileUp* pile_up = nullptr;
   vessel.ForSomePart([&pile_up](Part& part) {
     pile_up = part.containing_pile_up();

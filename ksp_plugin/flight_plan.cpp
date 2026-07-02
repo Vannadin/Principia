@@ -446,6 +446,16 @@ FlightPlan::FlightPlan()
           /*length_integration_tolerance=*/1 * Metre,
           /*speed_integration_tolerance=*/1 * Metre / Second) {}
 
+absl::Status FlightPlan::Rebase(
+    Displacement<Barycentric> const& displacement,
+    int const subsystem) {
+  initial_degrees_of_freedom_ = DegreesOfFreedom<Barycentric>(
+      initial_degrees_of_freedom_.position() + displacement,
+      initial_degrees_of_freedom_.velocity());
+  subsystem_ = subsystem;
+  return RecomputeAllSegments();
+}
+
 absl::Status FlightPlan::RecomputeAllSegments() {
   PopLastSegments(segments_.size() - 1);
   ResetLastSegment();

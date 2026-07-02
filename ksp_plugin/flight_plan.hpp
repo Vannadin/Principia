@@ -7,6 +7,7 @@
 #include "absl/status/status.h"
 #include "base/not_null.hpp"
 #include "geometry/instant.hpp"
+#include "geometry/space.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/orbit_analyser.hpp"
 #include "physics/degrees_of_freedom.hpp"
@@ -23,6 +24,7 @@ namespace internal {
 
 using namespace principia::base::_not_null;
 using namespace principia::geometry::_instant;
+using namespace principia::geometry::_space;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_orbit_analyser;
 using namespace principia::physics::_degrees_of_freedom;
@@ -56,6 +58,12 @@ class FlightPlan {
   explicit FlightPlan(FlightPlan const& other);
 
   virtual ~FlightPlan() = default;
+
+  // Re-expresses this flight plan relative to the local origin of the given
+  // `subsystem`, by translating its initial degrees of freedom by
+  // `displacement` and recomputing all the segments.
+  virtual absl::Status Rebase(Displacement<Barycentric> const& displacement,
+                              int subsystem);
 
   // Construction parameters.
   virtual Instant initial_time() const;
@@ -237,7 +245,7 @@ class FlightPlan {
 
   Mass const initial_mass_;
   Instant const initial_time_;
-  DegreesOfFreedom<Barycentric> const initial_degrees_of_freedom_;
+  DegreesOfFreedom<Barycentric> initial_degrees_of_freedom_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
 
   Instant desired_final_time_;

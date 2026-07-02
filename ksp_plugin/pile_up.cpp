@@ -409,6 +409,19 @@ PileUp::PileUp(
   }
 }
 
+int PileUp::subsystem() const {
+  return subsystem_;
+}
+
+void PileUp::Rebase(Displacement<Barycentric> const& displacement,
+                    int const subsystem) {
+  trajectory_.Translate(displacement);
+  subsystem_ = subsystem;
+  // The fixed instance, if any, holds integrator state in the previous
+  // representation; it will be re-created as needed.
+  fixed_instance_ = nullptr;
+}
+
 void PileUp::MakeEulerSolver(
     InertiaTensor<NonRotatingPileUp> const& inertia_tensor,
     Instant const& t) {
