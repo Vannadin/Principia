@@ -67,6 +67,17 @@ inline absl::Status CollisionDetected() {
   return absl::OutOfRangeError("Collision detected");
 }
 
+// Adds to `Δq`, a difference of positions relative to the local origins of two
+// distinct subsystems, the offset between these origins.  The sum may safely
+// be collapsed to a single displacement because the inter-subsystem term
+// dominates the local one.
+template<typename Frame>
+Displacement<Frame> AddInterSubsystemOffset(
+    DoublePrecision<Displacement<Frame>> const& inter_subsystem_offset,
+    Displacement<Frame> const& Δq) {
+  return inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+}
+
 template<typename Frame>
 std::vector<int> ClusterSubsystems(
     std::vector<Position<Frame>> const& positions,
@@ -249,6 +260,7 @@ Ephemeris<Frame>::Ephemeris(
           subsystems[FindOrDie(unowned_bodies_indices_, bodies_[i].get())];
     }
   }
+  ComputeInterSubsystemOffsets();
 
   absl::ReaderMutexLock l(&lock_);  // For locking checks.
   instance_ = fixed_step_parameters_.integrator().NewInstance(
@@ -273,6 +285,24 @@ template<typename Frame>
 int Ephemeris<Frame>::subsystem_of_body(
     not_null<MassiveBody const*> const body) const {
   return subsystem_of_body_[FindOrDie(bodies_indices_, body)];
+}
+
+template<typename Frame>
+DoublePrecision<Displacement<Frame>> const&
+Ephemeris<Frame>::inter_subsystem_offset(int const s1, int const s2) const {
+  return inter_subsystem_offsets_[s1 * subsystem_origin_offset_.size() + s2];
+}
+
+template<typename Frame>
+void Ephemeris<Frame>::ComputeInterSubsystemOffsets() {
+  int const number_of_subsystems = subsystem_origin_offset_.size();
+  inter_subsystem_offsets_.resize(number_of_subsystems * number_of_subsystems);
+  for (int s1 = 0; s1 < number_of_subsystems; ++s1) {
+    for (int s2 = 0; s2 < number_of_subsystems; ++s2) {
+      inter_subsystem_offsets_[s1 * number_of_subsystems + s2] =
+          subsystem_origin_offset_[s1] - subsystem_origin_offset_[s2];
+    }
+  }
 }
 
 template<typename Frame>
@@ -461,6 +491,10 @@ Ephemeris<Frame>::StoppableNewInstance(
   InitialValueProblem<NewtonianMotionEquation> problem;
 
   CHECK(subsystems.empty() || subsystems.size() == trajectories.size());
+  for (int const subsystem : subsystems) {
+    CHECK_GE(subsystem, 0);
+    CHECK_LT(subsystem, subsystem_origin_offset_.size());
+  }
   std::vector<int> massless_subsystems = subsystems;
   massless_subsystems.resize(trajectories.size());
 
@@ -524,6 +558,8 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     AdaptiveStepParameters const& parameters,
     std::int64_t const max_ephemeris_steps,
     int const subsystem) {
+  CHECK_GE(subsystem, 0);
+  CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<int> const massless_subsystems(1, subsystem);
   auto compute_acceleration = [this,
                                &intrinsic_acceleration,
@@ -560,6 +596,8 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     GeneralizedAdaptiveStepParameters const& parameters,
     std::int64_t max_ephemeris_steps,
     int const subsystem) {
+  CHECK_GE(subsystem, 0);
+  CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<int> const massless_subsystems(1, subsystem);
   auto compute_acceleration =
       [this, &intrinsic_acceleration, &massless_subsystems](
@@ -635,15 +673,13 @@ JacobianOfAcceleration<Frame> Ephemeris<Frame>::ComputeJacobianOnMassiveBody(
       /*bodies2=*/bodies_,
       /*b2_begin=*/0,
       /*b2_end=*/b1,
-      positions, jacobians,
-      subsystem_of_body_, subsystem_origin_offset_);
+      positions, jacobians);
   ComputeJacobianByMassiveBodyOnMassiveBodies(
       /*body1=*/*body, b1,
       /*bodies2=*/bodies_,
       /*b2_begin=*/b1 + 1,
       /*b2_end=*/number_of_oblate_bodies_ + number_of_spherical_bodies_,
-      positions, jacobians,
-      subsystem_of_body_, subsystem_origin_offset_);
+      positions, jacobians);
 
   return jacobians[b1];
 }
@@ -653,6 +689,8 @@ Vector<Jerk, Frame> Ephemeris<Frame>::ComputeGravitationalJerkOnMasslessBody(
     DegreesOfFreedom<Frame> const& degrees_of_freedom,
     Instant const& t,
     int const subsystem) const EXCLUDES(lock_) {
+  CHECK_GE(subsystem, 0);
+  CHECK_LT(subsystem, subsystem_origin_offset_.size());
   auto const& degrees_of_freedom_of_b1 = degrees_of_freedom;
   Vector<Jerk, Frame> jerk_on_b1;
 
@@ -673,11 +711,7 @@ Vector<Jerk, Frame> Ephemeris<Frame>::ComputeGravitationalJerkOnMasslessBody(
     Displacement<Frame> Δq = Δqv.displacement();
     Velocity<Frame> const Δv = Δqv.velocity();
     if (int const s2 = subsystem_of_body_[b2]; subsystem != s2) {
-      // See the comments in
-      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.
-      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
-          subsystem_origin_offset_[subsystem] - subsystem_origin_offset_[s2];
-      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(subsystem, s2), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -746,6 +780,8 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMasslessBody(
     Position<Frame> const& position,
     Instant const& t,
     int const subsystem) const {
+  CHECK_GE(subsystem, 0);
+  CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<Vector<Acceleration, Frame>> accelerations(1);
   ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
       t,
@@ -815,6 +851,8 @@ SpecificEnergy Ephemeris<Frame>::ComputeGravitationalPotential(
     Position<Frame> const& position,
     Instant const& t,
     int const subsystem) const {
+  CHECK_GE(subsystem, 0);
+  CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<SpecificEnergy> potentials(1);
   ComputeGravitationalPotentialsOfAllMassiveBodies(
       t, {position}, potentials, {subsystem});
@@ -930,8 +968,7 @@ void Ephemeris<Frame>::WriteToMessage(
   // the order in which the bodies were given at construction.
   if (subsystem_origin_offset_.size() > 1) {
     for (auto const& unowned_body : unowned_bodies_) {
-      message->add_body_subsystem(
-          subsystem_of_body_[FindOrDie(bodies_indices_, unowned_body)]);
+      message->add_body_subsystem(subsystem_of_body(unowned_body));
     }
     for (auto const& offset : subsystem_origin_offset_) {
       offset.WriteToMessage(message->add_subsystem_origin_offset());
@@ -970,6 +1007,11 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
   FixedStepParameters const fixed_step_parameters =
       FixedStepParameters::ReadFromMessage(message.fixed_step_parameters());
 
+  // The two subsystem fields are written together; a message that has one but
+  // not the other is corrupt, and quietly accepting it would zero the origin
+  // offsets.
+  CHECK_EQ(message.body_subsystem_size() == 0,
+           message.subsystem_origin_offset_size() == 0);
   std::vector<int> const subsystems(message.body_subsystem().begin(),
                                     message.body_subsystem().end());
 
@@ -996,6 +1038,7 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
           DoublePrecision<Displacement<Frame>>::ReadFromMessage(
               message.subsystem_origin_offset(s));
     }
+    ephemeris->ComputeInterSubsystemOffsets();
   }
 
   int index = 0;
@@ -1335,14 +1378,11 @@ void Ephemeris<Frame>::ComputeJacobianByMassiveBodyOnMassiveBodies(
     std::size_t b2_begin,
     std::size_t b2_end,
     std::vector<Position<Frame>> const& positions,
-    std::vector<JacobianOfAcceleration<Frame>>& jacobians,
-    std::vector<int> const& subsystem_of_body,
-    std::vector<DoublePrecision<Displacement<Frame>>> const&
-        subsystem_origin_offset) {
+    std::vector<JacobianOfAcceleration<Frame>>& jacobians) const {
   Position<Frame> const& position_of_b1 = positions[b1];
   JacobianOfAcceleration<Frame>& jacobian_on_b1 = jacobians[b1];
   GravitationalParameter const& μ1 = body1.gravitational_parameter();
-  int const s1 = subsystem_of_body[b1];
+  int const s1 = subsystem_of_body_[b1];
   for (std::size_t b2 = b2_begin; b2 < b2_end; ++b2) {
     JacobianOfAcceleration<Frame>& jacobian_on_b2 = jacobians[b2];
     MassiveBody const& body2 = *bodies2[b2];
@@ -1350,12 +1390,8 @@ void Ephemeris<Frame>::ComputeJacobianByMassiveBodyOnMassiveBodies(
 
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position_of_b1 - positions[b2];
-    if (int const s2 = subsystem_of_body[b2]; s1 != s2) {
-      // See the comments in
-      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.
-      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
-          subsystem_origin_offset[s1] - subsystem_origin_offset[s2];
-      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+    if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1382,15 +1418,12 @@ void Ephemeris<Frame>::ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
     std::size_t b2_begin,
     std::size_t b2_end,
     std::vector<DegreesOfFreedom<Frame>> const& degrees_of_freedom,
-    std::vector<Vector<Jerk, Frame>>& jerks,
-    std::vector<int> const& subsystem_of_body,
-    std::vector<DoublePrecision<Displacement<Frame>>> const&
-        subsystem_origin_offset) {
+    std::vector<Vector<Jerk, Frame>>& jerks) const {
   DegreesOfFreedom<Frame> const& degrees_of_freedom_of_b1 =
       degrees_of_freedom[b1];
   Vector<Jerk, Frame>& jerk_on_b1 = jerks[b1];
   GravitationalParameter const& μ1 = body1.gravitational_parameter();
-  int const s1 = subsystem_of_body[b1];
+  int const s1 = subsystem_of_body_[b1];
   for (std::size_t b2 = b2_begin; b2 < b2_end; ++b2) {
     Vector<Jerk, Frame>& jerk_on_b2 = jerks[b2];
     MassiveBody const& body2 = *bodies2[b2];
@@ -1401,13 +1434,9 @@ void Ephemeris<Frame>::ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
         degrees_of_freedom_of_b1 - degrees_of_freedom[b2];
     Displacement<Frame> Δq = Δqv.displacement();
     Velocity<Frame> const Δv = Δqv.velocity();
-    if (int const s2 = subsystem_of_body[b2]; s1 != s2) {
-      // See the comments in
-      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.  The
-      // velocities are unaffected: the origin offsets are constant.
-      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
-          subsystem_origin_offset[s1] - subsystem_origin_offset[s2];
-      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+    if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
+      // The velocities are unaffected: the origin offsets are constant.
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1442,8 +1471,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*body1=*/*body, b1,
         /*bodies2=*/bodies_,
         /*b2_begin=*/0, /*b2_end=*/b1,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/true>(
@@ -1451,8 +1479,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*body1=*/*body, b1,
         /*bodies2=*/bodies_,
         /*b2_begin=*/b1 + 1, /*b2_end=*/number_of_oblate_bodies_,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/false>(
@@ -1461,8 +1488,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*bodies2=*/bodies_,
         /*b2_begin=*/number_of_oblate_bodies_,
         /*b2_end=*/number_of_oblate_bodies_ + number_of_spherical_bodies_,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
   } else {
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
         /*body1_is_oblate=*/false,
@@ -1471,8 +1497,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*body1=*/*body, b1,
         /*bodies2=*/bodies_,
         /*b2_begin=*/0, /*b2_end=*/number_of_oblate_bodies_,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
@@ -1481,8 +1506,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*bodies2=*/bodies_,
         /*b2_begin=*/number_of_oblate_bodies_,
         /*b2_end=*/b1,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
@@ -1491,8 +1515,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*bodies2=*/bodies_,
         /*b2_begin=*/b1 + 1,
         /*b2_end=*/number_of_oblate_bodies_ + number_of_spherical_bodies_,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
   }
 
   return accelerations[b1];
@@ -1512,15 +1535,13 @@ Ephemeris<Frame>::ComputeGravitationalJerkOnMassiveBody(
       /*bodies2=*/bodies_,
       /*b2_begin=*/0,
       /*b2_end=*/b1,
-      degrees_of_freedom, jerks,
-      subsystem_of_body_, subsystem_origin_offset_);
+      degrees_of_freedom, jerks);
   ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
       /*body1=*/*body, b1,
       /*bodies2=*/bodies_,
       /*b2_begin=*/b1 + 1,
       /*b2_end=*/number_of_oblate_bodies_ + number_of_spherical_bodies_,
-      degrees_of_freedom, jerks,
-      subsystem_of_body_, subsystem_origin_offset_);
+      degrees_of_freedom, jerks);
 
   return jerks[b1];
 }
@@ -1539,14 +1560,11 @@ ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
     std::size_t const b2_end,
     std::vector<Position<Frame>> const& positions,
     std::vector<Vector<Acceleration, Frame>>& accelerations,
-    std::vector<Geopotential<Frame>> const& geopotentials,
-    std::vector<int> const& subsystem_of_body,
-    std::vector<DoublePrecision<Displacement<Frame>>> const&
-        subsystem_origin_offset) {
+    std::vector<Geopotential<Frame>> const& geopotentials) const {
   Position<Frame> const& position_of_b1 = positions[b1];
   Vector<Acceleration, Frame>& acceleration_on_b1 = accelerations[b1];
   GravitationalParameter const& μ1 = body1.gravitational_parameter();
-  int const s1 = subsystem_of_body[b1];
+  int const s1 = subsystem_of_body_[b1];
   for (std::size_t b2 = b2_begin; b2 < b2_end; ++b2) {
     Vector<Acceleration, Frame>& acceleration_on_b2 = accelerations[b2];
     MassiveBody const& body2 = *bodies2[b2];
@@ -1554,14 +1572,8 @@ ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
 
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position_of_b1 - positions[b2];
-    if (int const s2 = subsystem_of_body[b2]; s1 != s2) {
-      // The positions of `b1` and `b2` are relative to the local origins of
-      // distinct subsystems; add the offset between these origins in double
-      // precision.  The sum may safely be collapsed to a single displacement
-      // because the inter-subsystem term dominates the local one.
-      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
-          subsystem_origin_offset[s1] - subsystem_origin_offset[s2];
-      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+    if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1633,11 +1645,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position1 - positions[b2];
     if (int const s2 = subsystems[b2]; s1 != s2) {
-      // See the comments in
-      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.
-      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
-          subsystem_origin_offset_[s1] - subsystem_origin_offset_[s2];
-      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1688,11 +1696,7 @@ void Ephemeris<Frame>::ComputeGravitationalPotentialsOfMassiveBody(
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position1 - positions[b2];
     if (int const s2 = subsystems[b2]; s1 != s2) {
-      // See the comments in
-      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.
-      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
-          subsystem_origin_offset_[s1] - subsystem_origin_offset_[s2];
-      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1738,8 +1742,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
         /*bodies2=*/bodies_,
         /*b2_begin=*/b1 + 1,
         /*b2_end=*/number_of_oblate_bodies_,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/false>(
@@ -1748,8 +1751,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
         /*bodies2=*/bodies_,
         /*b2_begin=*/number_of_oblate_bodies_,
         /*b2_end=*/number_of_oblate_bodies_ + number_of_spherical_bodies_,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
   }
   for (std::size_t b1 = number_of_oblate_bodies_;
        b1 < number_of_oblate_bodies_ +
@@ -1764,8 +1766,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
         /*bodies2=*/bodies_,
         /*b2_begin=*/b1 + 1,
         /*b2_end=*/number_of_oblate_bodies_ + number_of_spherical_bodies_,
-        positions, accelerations, geopotentials_,
-        subsystem_of_body_, subsystem_origin_offset_);
+        positions, accelerations, geopotentials_);
   }
 
   return absl::OkStatus();

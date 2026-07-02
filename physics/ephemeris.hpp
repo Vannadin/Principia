@@ -411,19 +411,16 @@ class Ephemeris {
   // and `jacobians` arrays).  This assumes that the bodies are point masses
   // (that is, it doesn't take the geopotential into account).  The positions
   // are relative to the local origin of the subsystem of each body, as
-  // described by `subsystem_of_body` and `subsystem_origin_offset`.
+  // described by `subsystem_of_body_`.
   template<typename MassiveBodyConstPtr>
-  static void ComputeJacobianByMassiveBodyOnMassiveBodies(
+  void ComputeJacobianByMassiveBodyOnMassiveBodies(
       MassiveBody const& body1,
       std::size_t b1,
       std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
       std::size_t b2_begin,
       std::size_t b2_end,
       std::vector<Position<Frame>> const& positions,
-      std::vector<JacobianOfAcceleration<Frame>>& jacobians,
-      std::vector<int> const& subsystem_of_body,
-      std::vector<DoublePrecision<Displacement<Frame>>> const&
-          subsystem_origin_offset);
+      std::vector<JacobianOfAcceleration<Frame>>& jacobians) const;
 
   // Computes the jerk between one body, `body1` (with index `b1` in the
   // `degrees_of_freedom` and `jerks` arrays) and the bodies `bodies2` (with
@@ -431,19 +428,16 @@ class Ephemeris {
   // `jerks` arrays).  This assumes that the bodies are point masses
   // (that is, it doesn't take the geopotential into account).  The positions
   // are relative to the local origin of the subsystem of each body, as
-  // described by `subsystem_of_body` and `subsystem_origin_offset`.
+  // described by `subsystem_of_body_`.
   template<typename MassiveBodyConstPtr>
-  static void ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
+  void ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
       MassiveBody const& body1,
       std::size_t b1,
       std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
       std::size_t b2_begin,
       std::size_t b2_end,
       std::vector<DegreesOfFreedom<Frame>> const& degrees_of_freedom,
-      std::vector<Vector<Jerk, Frame>>& jerks,
-      std::vector<int> const& subsystem_of_body,
-      std::vector<DoublePrecision<Displacement<Frame>>> const&
-          subsystem_origin_offset);
+      std::vector<Vector<Jerk, Frame>>& jerks) const;
 
   // Returns the gravitational acceleration on the massive `body` at time `t`.
   // The `positions` must be for all the bodies in this object, in the order of
@@ -471,12 +465,11 @@ class Ephemeris {
   // about the bodies, and therefore what forces apply.  Works for both owning
   // and non-owning pointers thanks to the `MassiveBodyConstPtr` template
   // parameter.  The positions are relative to the local origin of the
-  // subsystem of each body, as described by `subsystem_of_body` and
-  // `subsystem_origin_offset`.
+  // subsystem of each body, as described by `subsystem_of_body_`.
   template<bool body1_is_oblate,
            bool body2_is_oblate,
            typename MassiveBodyConstPtr>
-  static void ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
+  void ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
       Instant const& t,
       MassiveBody const& body1,
       std::size_t b1,
@@ -485,10 +478,7 @@ class Ephemeris {
       std::size_t b2_end,
       std::vector<Position<Frame>> const& positions,
       std::vector<Vector<Acceleration, Frame>>& accelerations,
-      std::vector<Geopotential<Frame>> const& geopotentials,
-      std::vector<int> const& subsystem_of_body,
-      std::vector<DoublePrecision<Displacement<Frame>>> const&
-          subsystem_origin_offset);
+      std::vector<Geopotential<Frame>> const& geopotentials) const;
 
   // Computes the accelerations due to one body, `body1` (with index `b1` in the
   // `bodies_` and `trajectories_` arrays) on massless bodies at the given
@@ -562,6 +552,15 @@ class Ephemeris {
       _integration_parameters::AdaptiveStepParameters<ODE> const& parameters,
       std::int64_t max_ephemeris_steps) EXCLUDES(lock_);
 
+  // Returns the displacement from the local origin of subsystem `s2` to that
+  // of subsystem `s1`.
+  DoublePrecision<Displacement<Frame>> const& inter_subsystem_offset(
+      int s1,
+      int s2) const;
+
+  // Fills `inter_subsystem_offsets_` from `subsystem_origin_offset_`.
+  void ComputeInterSubsystemOffsets();
+
   // Computes an estimate of the ratio `tolerance / error`.
   static double ToleranceToErrorRatio(
       Length const& length_integration_tolerance,
@@ -607,6 +606,10 @@ class Ephemeris {
   // For each subsystem, the displacement from the local origin of subsystem 0
   // to its local origin.  Indexed by subsystem; the entry at index 0 is zero.
   std::vector<DoublePrecision<Displacement<Frame>>> subsystem_origin_offset_;
+
+  // The pairwise differences of the entries of `subsystem_origin_offset_`,
+  // precomputed for the gravity kernels; see `inter_subsystem_offset`.
+  std::vector<DoublePrecision<Displacement<Frame>>> inter_subsystem_offsets_;
 
   not_null<
       std::unique_ptr<Checkpointer<serialization::Ephemeris>>> checkpointer_;
