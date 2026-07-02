@@ -395,8 +395,10 @@ not_null<std::unique_ptr<typename Integrator<
 Ephemeris<Frame>::NewInstance(
     std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
     IntrinsicAccelerations const& intrinsic_accelerations,
-    FixedStepParameters const& parameters) {
-  return StoppableNewInstance(trajectories, intrinsic_accelerations, parameters)
+    FixedStepParameters const& parameters,
+    std::vector<int> const& subsystems) {
+  return StoppableNewInstance(
+             trajectories, intrinsic_accelerations, parameters, subsystems)
       .value();
 }
 
@@ -406,11 +408,18 @@ absl::StatusOr<not_null<std::unique_ptr<typename Integrator<
 Ephemeris<Frame>::StoppableNewInstance(
     std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
     IntrinsicAccelerations const& intrinsic_accelerations,
-    FixedStepParameters const& parameters) {
+    FixedStepParameters const& parameters,
+    std::vector<int> const& subsystems) {
   InitialValueProblem<NewtonianMotionEquation> problem;
 
+  CHECK(subsystems.empty() || subsystems.size() == trajectories.size());
+  std::vector<int> massless_subsystems = subsystems;
+  massless_subsystems.resize(trajectories.size());
+
   problem.equation.compute_acceleration =
-      [this, intrinsic_accelerations](
+      [this,
+       intrinsic_accelerations,
+       massless_subsystems = std::move(massless_subsystems)](
           Instant const& t,
           std::vector<Position<Frame>> const& positions,
           std::vector<Vector<Acceleration, Frame>>& accelerations) {
@@ -418,7 +427,8 @@ Ephemeris<Frame>::StoppableNewInstance(
         ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
             t,
             positions,
-            accelerations);
+            accelerations,
+            massless_subsystems);
     // Add the intrinsic accelerations.
     for (int i = 0; i < intrinsic_accelerations.size(); ++i) {
       auto const intrinsic_acceleration = intrinsic_accelerations[i];
@@ -464,8 +474,12 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     IntrinsicAcceleration intrinsic_acceleration,
     Instant const& t,
     AdaptiveStepParameters const& parameters,
-    std::int64_t const max_ephemeris_steps) {
-  auto compute_acceleration = [this, &intrinsic_acceleration](
+    std::int64_t const max_ephemeris_steps,
+    int const subsystem) {
+  std::vector<int> const massless_subsystems(1, subsystem);
+  auto compute_acceleration = [this,
+                               &intrinsic_acceleration,
+                               &massless_subsystems](
       Instant const& t,
       std::vector<Position<Frame>> const& positions,
       std::vector<Vector<Acceleration, Frame>>& accelerations) {
@@ -473,7 +487,8 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
         ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
             t,
             positions,
-            accelerations);
+            accelerations,
+            massless_subsystems);
     if (intrinsic_acceleration != nullptr) {
       accelerations[0] += intrinsic_acceleration(t);
     }
@@ -495,9 +510,11 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     GeneralizedIntrinsicAcceleration intrinsic_acceleration,
     Instant const& t,
     GeneralizedAdaptiveStepParameters const& parameters,
-    std::int64_t max_ephemeris_steps) {
+    std::int64_t max_ephemeris_steps,
+    int const subsystem) {
+  std::vector<int> const massless_subsystems(1, subsystem);
   auto compute_acceleration =
-      [this, &intrinsic_acceleration](
+      [this, &intrinsic_acceleration, &massless_subsystems](
           Instant const& t,
           std::vector<Position<Frame>> const& positions,
           std::vector<Velocity<Frame>> const& velocities,
@@ -506,7 +523,8 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
             ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
                 t,
                 positions,
-                accelerations);
+                accelerations,
+                massless_subsystems);
         if (intrinsic_acceleration != nullptr) {
           accelerations[0] +=
               intrinsic_acceleration(t, {positions[0], velocities[0]});
@@ -585,7 +603,8 @@ JacobianOfAcceleration<Frame> Ephemeris<Frame>::ComputeJacobianOnMassiveBody(
 template<typename Frame>
 Vector<Jerk, Frame> Ephemeris<Frame>::ComputeGravitationalJerkOnMasslessBody(
     DegreesOfFreedom<Frame> const& degrees_of_freedom,
-    Instant const& t) const EXCLUDES(lock_) {
+    Instant const& t,
+    int const subsystem) const EXCLUDES(lock_) {
   auto const& degrees_of_freedom_of_b1 = degrees_of_freedom;
   Vector<Jerk, Frame> jerk_on_b1;
 
@@ -603,8 +622,15 @@ Vector<Jerk, Frame> Ephemeris<Frame>::ComputeGravitationalJerkOnMasslessBody(
     // A vector from the center of `b2` to the center of `b1`.
     RelativeDegreesOfFreedom<Frame> const Δqv =
         degrees_of_freedom_of_b1 - degrees_of_freedom_of_b2;
-    Displacement<Frame> const Δq = Δqv.displacement();
+    Displacement<Frame> Δq = Δqv.displacement();
     Velocity<Frame> const Δv = Δqv.velocity();
+    if (int const s2 = subsystem_of_body_[b2]; subsystem != s2) {
+      // See the comments in
+      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.
+      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
+          subsystem_origin_offset_[subsystem] - subsystem_origin_offset_[s2];
+      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+    }
 
     Square<Length> const Δq² = Δq.Norm²();
     Length const Δq_norm = Sqrt(Δq²);
@@ -670,12 +696,14 @@ template<typename Frame>
 Vector<Acceleration, Frame>
 Ephemeris<Frame>::ComputeGravitationalAccelerationOnMasslessBody(
     Position<Frame> const& position,
-    Instant const& t) const {
+    Instant const& t,
+    int const subsystem) const {
   std::vector<Vector<Acceleration, Frame>> accelerations(1);
   ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
       t,
       {position},
-      accelerations);
+      accelerations,
+      {subsystem});
 
   return accelerations[0];
 }
@@ -684,11 +712,12 @@ template<typename Frame>
 Vector<Acceleration, Frame>
 Ephemeris<Frame>::ComputeGravitationalAccelerationOnMasslessBody(
     not_null<DiscreteTrajectory<Frame>*> const trajectory,
-    Instant const& t) const {
+    Instant const& t,
+    int const subsystem) const {
   auto const it = trajectory->find(t);
   DegreesOfFreedom<Frame> const& degrees_of_freedom = it->degrees_of_freedom;
   return ComputeGravitationalAccelerationOnMasslessBody(
-             degrees_of_freedom.position(), t);
+             degrees_of_freedom.position(), t, subsystem);
 }
 
 template<typename Frame>
@@ -736,9 +765,11 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBodies(
 template<typename Frame>
 SpecificEnergy Ephemeris<Frame>::ComputeGravitationalPotential(
     Position<Frame> const& position,
-    Instant const& t) const {
+    Instant const& t,
+    int const subsystem) const {
   std::vector<SpecificEnergy> potentials(1);
-  ComputeGravitationalPotentialsOfAllMassiveBodies(t, {position}, potentials);
+  ComputeGravitationalPotentialsOfAllMassiveBodies(
+      t, {position}, potentials, {subsystem});
 
   return potentials[0];
 }
@@ -1537,20 +1568,29 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
     MassiveBody const& body1,
     std::size_t const b1,
     std::vector<Position<Frame>> const& positions,
-    std::vector<Vector<Acceleration, Frame>>& accelerations) const {
+    std::vector<Vector<Acceleration, Frame>>& accelerations,
+    std::vector<int> const& subsystems) const {
   lock_.AssertReaderHeld();
   GravitationalParameter const& μ1 = body1.gravitational_parameter();
   auto const& trajectory1 = *trajectories_[b1];
   Position<Frame> const position1 = trajectory1.EvaluatePositionLocked(t);
   Length const body1_collision_radius =
       min_radius_tolerance * body1.min_radius();
+  int const s1 = subsystem_of_body_[b1];
   // TODO(phl): Use std::to_underlying when we have C++23.
   auto error = static_cast<std::underlying_type_t<absl::StatusCode>>(
       absl::StatusCode::kOk);
 
   for (std::size_t b2 = 0; b2 < positions.size(); ++b2) {
     // A vector from the center of `b2` to the center of `b1`.
-    Displacement<Frame> const Δq = position1 - positions[b2];
+    Displacement<Frame> Δq = position1 - positions[b2];
+    if (int const s2 = subsystems[b2]; s1 != s2) {
+      // See the comments in
+      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.
+      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
+          subsystem_origin_offset_[s1] - subsystem_origin_offset_[s2];
+      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+    }
 
     Square<Length> const Δq² = Δq.Norm²();
     Length const Δq_norm = Sqrt(Δq²);
@@ -1588,15 +1628,24 @@ void Ephemeris<Frame>::ComputeGravitationalPotentialsOfMassiveBody(
     MassiveBody const& body1,
     std::size_t b1,
     std::vector<Position<Frame>> const& positions,
-    std::vector<SpecificEnergy>& potentials) const {
+    std::vector<SpecificEnergy>& potentials,
+    std::vector<int> const& subsystems) const {
   lock_.AssertReaderHeld();
   GravitationalParameter const& μ1 = body1.gravitational_parameter();
   auto const& trajectory1 = *trajectories_[b1];
   Position<Frame> const position1 = trajectory1.EvaluatePositionLocked(t);
+  int const s1 = subsystem_of_body_[b1];
 
   for (std::size_t b2 = 0; b2 < positions.size(); ++b2) {
     // A vector from the center of `b2` to the center of `b1`.
-    Displacement<Frame> const Δq = position1 - positions[b2];
+    Displacement<Frame> Δq = position1 - positions[b2];
+    if (int const s2 = subsystems[b2]; s1 != s2) {
+      // See the comments in
+      // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`.
+      DoublePrecision<Displacement<Frame>> const inter_subsystem_offset =
+          subsystem_origin_offset_[s1] - subsystem_origin_offset_[s2];
+      Δq = inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+    }
 
     Square<Length> const Δq² = Δq.Norm²();
     Length const Δq_norm = Sqrt(Δq²);
@@ -1680,8 +1729,10 @@ Ephemeris<Frame>::
 ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
     Instant const& t,
     std::vector<Position<Frame>> const& positions,
-    std::vector<Vector<Acceleration, Frame>>& accelerations) const {
+    std::vector<Vector<Acceleration, Frame>>& accelerations,
+    std::vector<int> const& subsystems) const {
   CHECK_EQ(positions.size(), accelerations.size());
+  CHECK_EQ(positions.size(), subsystems.size());
   accelerations.assign(accelerations.size(), Vector<Acceleration, Frame>());
   // TODO(phl): Use std::to_underlying when we have C++23.
   auto error = static_cast<std::underlying_type_t<absl::StatusCode>>(
@@ -1696,7 +1747,8 @@ ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
                  t,
                  body1, b1,
                  positions,
-                 accelerations);
+                 accelerations,
+                 subsystems);
   }
   for (std::size_t b1 = number_of_oblate_bodies_;
        b1 < number_of_oblate_bodies_ +
@@ -1708,7 +1760,8 @@ ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
                  t,
                  body1, b1,
                  positions,
-                 accelerations);
+                 accelerations,
+                 subsystems);
   }
   return static_cast<absl::StatusCode>(error);
 }
@@ -1717,8 +1770,10 @@ template<typename Frame>
 void Ephemeris<Frame>::ComputeGravitationalPotentialsOfAllMassiveBodies(
     Instant const& t,
     std::vector<Position<Frame>> const& positions,
-    std::vector<SpecificEnergy>& potentials) const {
+    std::vector<SpecificEnergy>& potentials,
+    std::vector<int> const& subsystems) const {
   CHECK_EQ(positions.size(), potentials.size());
+  CHECK_EQ(positions.size(), subsystems.size());
   potentials.assign(potentials.size(), SpecificEnergy());
 
   // Locking ensures that we see a consistent state of all the trajectories.
@@ -1729,7 +1784,8 @@ void Ephemeris<Frame>::ComputeGravitationalPotentialsOfAllMassiveBodies(
         t,
         body1, b1,
         positions,
-        potentials);
+        potentials,
+        subsystems);
   }
   for (std::size_t b1 = number_of_oblate_bodies_;
        b1 < number_of_oblate_bodies_ +
@@ -1740,7 +1796,8 @@ void Ephemeris<Frame>::ComputeGravitationalPotentialsOfAllMassiveBodies(
         t,
         body1, b1,
         positions,
-        potentials);
+        potentials,
+        subsystems);
   }
 }
 

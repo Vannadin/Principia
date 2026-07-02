@@ -187,13 +187,17 @@ class Ephemeris {
 
   // Creates an instance suitable for integrating the given `trajectories` with
   // their `intrinsic_accelerations` using a fixed-step integrator parameterized
-  // by `parameters`.
+  // by `parameters`.  If `subsystems` is nonempty, it must be parallel to
+  // `trajectories` and give the subsystem relative to whose local origin the
+  // positions of each trajectory are represented; empty means subsystem 0 for
+  // all the trajectories.
   virtual not_null<
       std::unique_ptr<typename Integrator<NewtonianMotionEquation>::Instance>>
   NewInstance(
       std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
       IntrinsicAccelerations const& intrinsic_accelerations,
-      FixedStepParameters const& parameters);
+      FixedStepParameters const& parameters,
+      std::vector<int> const& subsystems = {});
 
   // Same as above, but returns an error status if the thread is stopped.
   virtual absl::StatusOr<not_null<
@@ -201,19 +205,22 @@ class Ephemeris {
   StoppableNewInstance(
       std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
       IntrinsicAccelerations const& intrinsic_accelerations,
-      FixedStepParameters const& parameters);
+      FixedStepParameters const& parameters,
+      std::vector<int> const& subsystems = {});
 
   // Integrates, until exactly `t` (except for timeouts or singularities), the
   // `trajectory` followed by a massless body in the gravitational potential
   // described by `*this`.  If `t > t_max()`, calls `Prolong(t)` beforehand.
   // Prolongs the ephemeris by at most `max_ephemeris_steps`.  Returns OK if and
-  // only if `*trajectory` was integrated until `t`.
+  // only if `*trajectory` was integrated until `t`.  The positions of the
+  // `trajectory` are represented relative to the local origin of `subsystem`.
   virtual absl::Status FlowWithAdaptiveStep(
       not_null<DiscreteTrajectory<Frame>*> trajectory,
       IntrinsicAcceleration intrinsic_acceleration,
       Instant const& t,
       AdaptiveStepParameters const& parameters,
-      std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps)
+      std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps,
+      int subsystem = 0)
       EXCLUDES(lock_);
 
   // Same as above, but uses a generalized integrator.
@@ -222,7 +229,8 @@ class Ephemeris {
       GeneralizedIntrinsicAcceleration intrinsic_acceleration,
       Instant const& t,
       GeneralizedAdaptiveStepParameters const& parameters,
-      std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps)
+      std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps,
+      int subsystem = 0)
       EXCLUDES(lock_);
 
   // Integrates, until at most `t`, the trajectories followed by massless
@@ -241,10 +249,12 @@ class Ephemeris {
       Instant const& t) const EXCLUDES(lock_);
 
   // Returns the gravitational jerk on a massless body with the given
-  // `degrees_of_freedom` at time `t`.
+  // `degrees_of_freedom` at time `t`.  The position is represented relative to
+  // the local origin of `subsystem`.
   Vector<Jerk, Frame> ComputeGravitationalJerkOnMasslessBody(
       DegreesOfFreedom<Frame> const& degrees_of_freedom,
-      Instant const& t) const EXCLUDES(lock_);
+      Instant const& t,
+      int subsystem = 0) const EXCLUDES(lock_);
 
   // Returns the gravitational jerk on the massive `body` at time `t`.  `body`
   // must be one of the bodies of this object.
@@ -259,19 +269,23 @@ class Ephemeris {
       BodiesToDegreesOfFreedom const& bodies_to_degrees_of_freedom) const;
 
   // Returns the gravitational acceleration on a massless body located at the
-  // given `position` at time `t`.
+  // given `position` at time `t`.  The position is represented relative to the
+  // local origin of `subsystem`.
   virtual Vector<Acceleration, Frame>
   ComputeGravitationalAccelerationOnMasslessBody(
       Position<Frame> const& position,
-      Instant const& t) const EXCLUDES(lock_);
+      Instant const& t,
+      int subsystem = 0) const EXCLUDES(lock_);
 
   // Returns the gravitational acceleration on the massless body having the
   // given `trajectory` at time `t`.  `t` must be one of the times of the
-  // `trajectory`.
+  // `trajectory`.  The positions of the `trajectory` are represented relative
+  // to the local origin of `subsystem`.
   virtual Vector<Acceleration, Frame>
   ComputeGravitationalAccelerationOnMasslessBody(
       not_null<DiscreteTrajectory<Frame>*> trajectory,
-      Instant const& t) const EXCLUDES(lock_);
+      Instant const& t,
+      int subsystem = 0) const EXCLUDES(lock_);
 
   // Returns the gravitational acceleration on the massive `body` at time `t`.
   // `body` must be one of the bodies of this object.
@@ -289,10 +303,12 @@ class Ephemeris {
       BodiesToPositions const& bodies_to_positions,
       Instant const& t) const;
 
-  // Returns the potential at the given `position` at time `t`.
+  // Returns the potential at the given `position` at time `t`.  The position
+  // is represented relative to the local origin of `subsystem`.
   SpecificEnergy ComputeGravitationalPotential(
       Position<Frame> const& position,
-      Instant const& t) const EXCLUDES(lock_);
+      Instant const& t,
+      int subsystem = 0) const EXCLUDES(lock_);
 
   // Computes the apsides of the relative trajectory of `body1` and `body2`.
   // Appends to the given out parameters two points for each apsis, one for
@@ -463,7 +479,8 @@ class Ephemeris {
   // `bodies_` and `trajectories_` arrays) on massless bodies at the given
   // `positions`.  The template parameter specifies what we know about the
   // massive body, and therefore what forces apply.  Returns an integer for
-  // efficiency.
+  // efficiency.  The massless positions are represented relative to the local
+  // origins of the `subsystems`, which must be parallel to `positions`.
   template<bool body1_is_oblate>
   std::underlying_type_t<absl::StatusCode>
   ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
@@ -471,20 +488,24 @@ class Ephemeris {
       MassiveBody const& body1,
       std::size_t b1,
       std::vector<Position<Frame>> const& positions,
-      std::vector<Vector<Acceleration, Frame>>& accelerations) const
+      std::vector<Vector<Acceleration, Frame>>& accelerations,
+      std::vector<int> const& subsystems) const
       REQUIRES_SHARED(lock_);
 
   // Computes the potential resulting from one body, `body1` (with index `b1` in
   // the `bodies_` and `trajectories_` arrays) at the given `positions`.  The
   // template parameter specifies what we know about the massive body, and
-  // therefore what potential applies.
+  // therefore what potential applies.  The positions are represented relative
+  // to the local origins of the `subsystems`, which must be parallel to
+  // `positions`.
   template<bool body1_is_oblate>
   void ComputeGravitationalPotentialsOfMassiveBody(
       Instant const& t,
       MassiveBody const& body1,
       std::size_t b1,
       std::vector<Position<Frame>> const& positions,
-      std::vector<SpecificEnergy>& potentials) const
+      std::vector<SpecificEnergy>& potentials,
+      std::vector<int> const& subsystems) const
       REQUIRES_SHARED(lock_);
 
   // Computes the accelerations between all the massive bodies in `bodies_`.
@@ -494,22 +515,27 @@ class Ephemeris {
       std::vector<Vector<Acceleration, Frame>>& accelerations) const;
 
   // Computes the acceleration exerted by the massive bodies in `bodies_` on
-  // massless bodies.  The massless bodies are at the given `positions`.
-  // Returns an error iff a collision occurred, i.e., the massless body is
-  // inside one of the `bodies_`.
+  // massless bodies.  The massless bodies are at the given `positions`,
+  // represented relative to the local origins of the `subsystems`, which must
+  // be parallel to `positions`.  Returns an error iff a collision occurred,
+  // i.e., the massless body is inside one of the `bodies_`.
   absl::StatusCode
   ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
       Instant const& t,
       std::vector<Position<Frame>> const& positions,
-      std::vector<Vector<Acceleration, Frame>>& accelerations) const
+      std::vector<Vector<Acceleration, Frame>>& accelerations,
+      std::vector<int> const& subsystems) const
       EXCLUDES(lock_);
 
   // Computes the potential resulting from the massive bodies in `bodies_`.  The
-  // potentials are computed at the given `positions`.
+  // potentials are computed at the given `positions`, represented relative to
+  // the local origins of the `subsystems`, which must be parallel to
+  // `positions`.
   void ComputeGravitationalPotentialsOfAllMassiveBodies(
       Instant const& t,
       std::vector<Position<Frame>> const& positions,
-      std::vector<SpecificEnergy>& potentials) const
+      std::vector<SpecificEnergy>& potentials,
+      std::vector<int> const& subsystems) const
       EXCLUDES(lock_);
 
   // Flows the given ODE with an adaptive step integrator.

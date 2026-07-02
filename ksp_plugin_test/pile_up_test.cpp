@@ -428,7 +428,7 @@ TEST_F(PileUpTest, SerializationCompatibility) {
                                          &ephemeris,
                                          deletion_callback_.AsStdFunction());
 
-  EXPECT_CALL(ephemeris, FlowWithAdaptiveStep(_, _, _, _, _))
+  EXPECT_CALL(ephemeris, FlowWithAdaptiveStep(_, _, _, _, _, _))
       .WillOnce(DoAll(
           AppendToDiscreteTrajectory(DegreesOfFreedom<Barycentric>(
               Barycentric::origin +

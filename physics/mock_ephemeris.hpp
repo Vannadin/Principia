@@ -55,7 +55,8 @@ class MockEphemeris : public Ephemeris<Frame> {
       NewInstance,
       (std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
        IntrinsicAccelerations const& intrinsic_accelerations,
-       FixedStepParameters const& parameters),
+       FixedStepParameters const& parameters,
+       std::vector<int> const& subsystems),
       (override));
   MOCK_METHOD(absl::Status,
               FlowWithAdaptiveStep,
@@ -63,7 +64,8 @@ class MockEphemeris : public Ephemeris<Frame> {
                IntrinsicAcceleration intrinsic_acceleration,
                Instant const& t,
                AdaptiveStepParameters const& parameters,
-               std::int64_t max_ephemeris_steps),
+               std::int64_t max_ephemeris_steps,
+               int subsystem),
               (override));
   MOCK_METHOD(
       absl::Status,
@@ -74,13 +76,16 @@ class MockEphemeris : public Ephemeris<Frame> {
 
   MOCK_METHOD((Vector<Acceleration, Frame>),
               ComputeGravitationalAccelerationOnMasslessBody,
-              (Position<Frame> const& position, Instant const& t),
+              (Position<Frame> const& position,
+               Instant const& t,
+               int subsystem),
               (const, override));
 
   MOCK_METHOD((Vector<Acceleration, Frame>),
               ComputeGravitationalAccelerationOnMasslessBody,
               (not_null<DiscreteTrajectory<Frame>*> trajectory,
-               Instant const& t),
+               Instant const& t,
+               int subsystem),
               (const, override));
 
   MOCK_METHOD((Vector<Acceleration, Frame>),
