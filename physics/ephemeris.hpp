@@ -465,8 +465,11 @@ class Ephemeris {
   // about the bodies, and therefore what forces apply.  Works for both owning
   // and non-owning pointers thanks to the `MassiveBodyConstPtr` template
   // parameter.  The positions are relative to the local origin of the
-  // subsystem of each body, as described by `subsystem_of_body_`.
-  template<bool body1_is_oblate,
+  // subsystem of each body, as described by `subsystem_of_body_`; if
+  // `has_subsystems` is false the (then trivial) subsystem handling is
+  // compiled out of the loop.
+  template<bool has_subsystems,
+           bool body1_is_oblate,
            bool body2_is_oblate,
            typename MassiveBodyConstPtr>
   void ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
@@ -514,6 +517,15 @@ class Ephemeris {
       REQUIRES_SHARED(lock_);
 
   // Computes the accelerations between all the massive bodies in `bodies_`.
+  absl::Status ComputeGravitationalAccelerationBetweenAllMassiveBodies(
+      Instant const& t,
+      std::vector<Position<Frame>> const& positions,
+      std::vector<Vector<Acceleration, Frame>>& accelerations) const;
+
+  // The implementation of the above, on which see
+  // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies` regarding
+  // `has_subsystems`.
+  template<bool has_subsystems>
   absl::Status ComputeGravitationalAccelerationBetweenAllMassiveBodies(
       Instant const& t,
       std::vector<Position<Frame>> const& positions,

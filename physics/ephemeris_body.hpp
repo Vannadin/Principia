@@ -1465,6 +1465,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
 
   if (body_is_oblate) {
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        /*has_subsystems=*/true,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/true>(
         t,
@@ -1473,6 +1474,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_begin=*/0, /*b2_end=*/b1,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        /*has_subsystems=*/true,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/true>(
         t,
@@ -1481,6 +1483,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_begin=*/b1 + 1, /*b2_end=*/number_of_oblate_bodies_,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        /*has_subsystems=*/true,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/false>(
         t,
@@ -1491,6 +1494,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         positions, accelerations, geopotentials_);
   } else {
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        /*has_subsystems=*/true,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/true>(
         t,
@@ -1499,6 +1503,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_begin=*/0, /*b2_end=*/number_of_oblate_bodies_,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        /*has_subsystems=*/true,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
         t,
@@ -1508,6 +1513,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_end=*/b1,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        /*has_subsystems=*/true,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
         t,
@@ -1547,7 +1553,8 @@ Ephemeris<Frame>::ComputeGravitationalJerkOnMassiveBody(
 }
 
 template<typename Frame>
-template<bool body1_is_oblate,
+template<bool has_subsystems,
+         bool body1_is_oblate,
          bool body2_is_oblate,
          typename MassiveBodyConstPtr>
 void Ephemeris<Frame>::
@@ -1572,8 +1579,10 @@ ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
 
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position_of_b1 - positions[b2];
-    if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
-      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+    if constexpr (has_subsystems) {
+      if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
+        Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+      }
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1727,6 +1736,22 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
     Instant const& t,
     std::vector<Position<Frame>> const& positions,
     std::vector<Vector<Acceleration, Frame>>& accelerations) const {
+  if (subsystem_origin_offset_.size() > 1) {
+    return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
+        /*has_subsystems=*/true>(t, positions, accelerations);
+  } else {
+    return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
+        /*has_subsystems=*/false>(t, positions, accelerations);
+  }
+}
+
+template<typename Frame>
+template<bool has_subsystems>
+absl::Status
+Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
+    Instant const& t,
+    std::vector<Position<Frame>> const& positions,
+    std::vector<Vector<Acceleration, Frame>>& accelerations) const {
   // Do not RETURN_IF_STOPPED here, it's too hard to undo the state changes made
   // half way through the loop of the integrator.
 
@@ -1735,6 +1760,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
   for (std::size_t b1 = 0; b1 < number_of_oblate_bodies_; ++b1) {
     MassiveBody const& body1 = *bodies_[b1];
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_subsystems,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/true>(
         t,
@@ -1744,6 +1770,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
         /*b2_end=*/number_of_oblate_bodies_,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_subsystems,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/false>(
         t,
@@ -1759,6 +1786,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
        ++b1) {
     MassiveBody const& body1 = *bodies_[b1];
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_subsystems,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
         t,
