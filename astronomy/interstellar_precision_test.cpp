@@ -272,6 +272,46 @@ TEST_F(InterstellarPrecisionTest, JacobianAndJerk) {
               Lt(1e-9));
 }
 
+TEST_F(InterstellarPrecisionTest, ClusterSubsystems) {
+  Length const threshold = 1e14 * Metre;
+  auto const far = Displacement<ICRS>({4e16 * Metre, 0 * Metre, 0 * Metre});
+  auto const near = Displacement<ICRS>({1e13 * Metre, 0 * Metre, 0 * Metre});
+
+  // A single system, however far from the origin, is not partitioned.
+  EXPECT_THAT(
+      ClusterSubsystems<ICRS>({ICRS::origin, ICRS::origin + near}, threshold),
+      ::testing::IsEmpty());
+  EXPECT_THAT(ClusterSubsystems<ICRS>(
+                  {ICRS::origin + far, ICRS::origin + far + near}, threshold),
+              ::testing::IsEmpty());
+
+  // Two systems, interleaved: the subsystems are numbered by order of first
+  // appearance.
+  EXPECT_THAT(ClusterSubsystems<ICRS>({ICRS::origin,
+                                       ICRS::origin + far,
+                                       ICRS::origin + near,
+                                       ICRS::origin + far + near},
+                                      threshold),
+              ::testing::ElementsAre(0, 1, 0, 1));
+
+  // Single-linkage chaining: a body bridging two otherwise-distant groups
+  // merges them.
+  EXPECT_THAT(ClusterSubsystems<ICRS>({ICRS::origin,
+                                       ICRS::origin + near,
+                                       ICRS::origin + 2 * near,
+                                       ICRS::origin + far},
+                                      threshold),
+              ::testing::ElementsAre(0, 0, 0, 1));
+
+  // The subsystem of each body is exposed by the ephemeris; note that the
+  // subsystems are given per input body but exposed per (reordered) body.
+  auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  EXPECT_EQ(0, ephemeris->subsystem_of_body(ephemeris->bodies()[0]));
+  EXPECT_EQ(0, ephemeris->subsystem_of_body(ephemeris->bodies()[1]));
+  EXPECT_EQ(1, ephemeris->subsystem_of_body(ephemeris->bodies()[2]));
+  EXPECT_EQ(1, ephemeris->subsystem_of_body(ephemeris->bodies()[3]));
+}
+
 // Same as `RemoteSystemSeparation`, but for the massless integration path.
 TEST_F(InterstellarPrecisionTest, MasslessProbe) {
   Length const error_without_subsystems =

@@ -63,6 +63,18 @@ using namespace principia::physics::_tensors;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 
+// Partitions the given `positions` into subsystems by single-linkage
+// clustering: two positions within `threshold` of each other end up in the
+// same subsystem, as does any chain of such positions.  The subsystem indices
+// are dense and numbered by order of first appearance.  Returns an empty
+// vector if all the positions end up in a single subsystem, so that the result
+// may be passed to the constructor of `Ephemeris` without altering the
+// representation in that case.
+template<typename Frame>
+std::vector<int> ClusterSubsystems(
+    std::vector<Position<Frame>> const& positions,
+    Length const& threshold);
+
 // Note on thread-safety: the integration functions (Prolong, FlowWithFixedStep,
 // FlowWithAdaptiveStep) can be called concurrently as long as their parameters
 // designate distinct objects.  No guarantee is offered for the other functions.
@@ -141,6 +153,9 @@ class Ephemeris {
 
   // Returns the bodies in the order in which they were given at construction.
   virtual std::vector<not_null<MassiveBody const*>> const& bodies() const;
+
+  // Returns the subsystem of the given `body`.
+  virtual int subsystem_of_body(not_null<MassiveBody const*> body) const;
 
   // Returns the trajectory for the given `body`.
   virtual not_null<ContinuousTrajectory<Frame> const*> trajectory(
@@ -621,6 +636,7 @@ class Ephemeris {
 
 }  // namespace internal
 
+using internal::ClusterSubsystems;
 using internal::Ephemeris;
 
 }  // namespace _ephemeris

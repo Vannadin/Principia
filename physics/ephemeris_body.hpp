@@ -68,6 +68,48 @@ inline absl::Status CollisionDetected() {
 }
 
 template<typename Frame>
+std::vector<int> ClusterSubsystems(
+    std::vector<Position<Frame>> const& positions,
+    Length const& threshold) {
+  Square<Length> const threshold² = threshold * threshold;
+  int const number_of_positions = positions.size();
+
+  // Single-linkage clustering: when two components are bridged by a pair of
+  // nearby positions, relabel one of them.  Quadratic in the number of
+  // positions, which is small; runs once at construction.
+  std::vector<int> component(number_of_positions);
+  for (int i = 0; i < number_of_positions; ++i) {
+    component[i] = i;
+  }
+  for (int i = 0; i < number_of_positions; ++i) {
+    for (int j = 0; j < i; ++j) {
+      if ((positions[i] - positions[j]).Norm²() <= threshold² &&
+          component[i] != component[j]) {
+        int const from = component[i];
+        int const to = component[j];
+        for (int k = 0; k <= i; ++k) {
+          if (component[k] == from) {
+            component[k] = to;
+          }
+        }
+      }
+    }
+  }
+
+  // Renumber the components densely by order of first appearance.
+  std::vector<int> subsystems(number_of_positions);
+  absl::flat_hash_map<int, int> renumbering;
+  for (int i = 0; i < number_of_positions; ++i) {
+    subsystems[i] =
+        renumbering.emplace(component[i], renumbering.size()).first->second;
+  }
+  if (renumbering.size() <= 1) {
+    return {};
+  }
+  return subsystems;
+}
+
+template<typename Frame>
 Ephemeris<Frame>::AccuracyParameters::AccuracyParameters(
     Length const& fitting_tolerance,
     double const geopotential_tolerance)
@@ -225,6 +267,12 @@ template<typename Frame>
 std::vector<not_null<MassiveBody const*>> const&
 Ephemeris<Frame>::bodies() const {
   return unowned_bodies_;
+}
+
+template<typename Frame>
+int Ephemeris<Frame>::subsystem_of_body(
+    not_null<MassiveBody const*> const body) const {
+  return subsystem_of_body_[FindOrDie(bodies_indices_, body)];
 }
 
 template<typename Frame>

@@ -6,6 +6,7 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <string>
 #include <utility>
@@ -158,13 +159,24 @@ SolarSystem<Frame>::SolarSystem(
 template<typename Frame>
 not_null<std::unique_ptr<Ephemeris<Frame>>> SolarSystem<Frame>::MakeEphemeris(
     typename Ephemeris<Frame>::AccuracyParameters const& accuracy_parameters,
-    typename Ephemeris<Frame>::FixedStepParameters const& fixed_step_parameters)
-    const {
+    typename Ephemeris<Frame>::FixedStepParameters const& fixed_step_parameters,
+    std::optional<Length> const& subsystem_clustering_threshold) const {
+  auto const degrees_of_freedom = MakeAllDegreesOfFreedom();
+  std::vector<int> subsystems;
+  if (subsystem_clustering_threshold.has_value()) {
+    std::vector<Position<Frame>> positions;
+    positions.reserve(degrees_of_freedom.size());
+    for (auto const& dof : degrees_of_freedom) {
+      positions.push_back(dof.position());
+    }
+    subsystems = ClusterSubsystems(positions, *subsystem_clustering_threshold);
+  }
   return make_not_null_unique<Ephemeris<Frame>>(MakeAllMassiveBodies(),
-                                                MakeAllDegreesOfFreedom(),
+                                                degrees_of_freedom,
                                                 epoch_,
                                                 accuracy_parameters,
-                                                fixed_step_parameters);
+                                                fixed_step_parameters,
+                                                subsystems);
 }
 
 template<typename Frame>

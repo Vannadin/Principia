@@ -82,6 +82,14 @@ namespace {
 // Keep this consistent with `prediction_steps_` in `main_window.cs`.
 constexpr std::int64_t max_steps_in_prediction = 1 << 24;
 
+// Celestials further apart than this threshold (about 670 au, chaining
+// through intermediate celestials) belong to distinct subsystems, whose
+// positions are represented relative to per-subsystem local origins.  This
+// preserves the precision of the representation for systems of stars that are
+// light-years apart.  For a system that fits within the threshold (e.g., the
+// stock system or the real solar system) this has no effect whatsoever.
+constexpr Length subsystem_clustering_threshold = 1e14 * Metre;
+
 Length const& MaxCollisionError() {
   static Length const max_collision_error = []() {
     std::string_view const name = "max_collision_error";
@@ -253,7 +261,16 @@ void Plugin::EndInitialization() {
       solar_system.MakeEphemeris(ephemeris_accuracy_parameters_.value_or(
                                      DefaultEphemerisAccuracyParameters()),
                                  ephemeris_fixed_step_parameters_.value_or(
-                                     DefaultEphemerisFixedStepParameters()));
+                                     DefaultEphemerisFixedStepParameters()),
+                                 subsystem_clustering_threshold);
+  for (int i = 0; i < solar_system.names().size(); ++i) {
+    int const subsystem =
+        ephemeris_->subsystem_of_body(ephemeris_->bodies()[i]);
+    if (subsystem != 0) {
+      LOG(INFO) << "Celestial " << solar_system.names()[i]
+                << " is in subsystem " << subsystem;
+    }
+  }
 
   // Construct the celestials using the bodies from the ephemeris.
   for (std::string const& name : solar_system.names()) {
