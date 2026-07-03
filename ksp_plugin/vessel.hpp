@@ -333,9 +333,19 @@ class Vessel {
     Instant first_time;
     DegreesOfFreedom<Barycentric> first_degrees_of_freedom;
     Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters;
+    // The subsystem relative to whose local origin `first_degrees_of_freedom`
+    // is represented.
+    int subsystem = 0;
   };
   friend bool operator!=(PrognosticatorParameters const& left,
                          PrognosticatorParameters const& right);
+
+  // A prognostication, together with the subsystem in whose representation it
+  // is expressed.
+  struct Prognostication {
+    DiscreteTrajectory<Barycentric> trajectory;
+    int subsystem = 0;
+  };
 
   struct ReanimatorParameters {
     Instant desired_t_min;
@@ -390,7 +400,7 @@ class Vessel {
 
   // Runs the integrator to compute the `prognostication_` based on the given
   // parameters.
-  absl::StatusOr<DiscreteTrajectory<Barycentric>>
+  absl::StatusOr<Prognostication>
   FlowPrognostication(PrognosticatorParameters prognosticator_parameters);
 
   // Appends to `trajectory_` the centre of mass of the trajectories of the
@@ -404,6 +414,10 @@ class Vessel {
   // Attaches the given `trajectory` to the end of the `psychohistory_` to
   // become the new `prediction_`.  If `prediction_` is not null, it is deleted.
   void AttachPrediction(DiscreteTrajectory<Barycentric>&& trajectory);
+
+  // Converts the given `prognostication` to the current subsystem if needed
+  // and attaches it as the new `prediction_`.
+  void AttachPrognostication(Prognostication&& prognostication);
 
   // A vessel is collapsible if it is alone in its pile-up and is in inertial
   // motion.
@@ -484,8 +498,7 @@ class Vessel {
   DiscreteTrajectorySegmentIterator<Barycentric> psychohistory_;
   DiscreteTrajectorySegmentIterator<Barycentric> prediction_;
 
-  RecurringThread<PrognosticatorParameters,
-                  DiscreteTrajectory<Barycentric>> prognosticator_;
+  RecurringThread<PrognosticatorParameters, Prognostication> prognosticator_;
 
   std::vector<LazilyDeserializedFlightPlan> flight_plans_;
   int selected_flight_plan_index_ = -1;

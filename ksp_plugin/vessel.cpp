@@ -62,6 +62,7 @@ bool operator!=(Vessel::PrognosticatorParameters const& left,
                 Vessel::PrognosticatorParameters const& right) {
   return left.first_time != right.first_time ||
          left.first_degrees_of_freedom != right.first_degrees_of_freedom ||
+         left.subsystem != right.subsystem ||
          &left.adaptive_step_parameters.integrator() !=
              &right.adaptive_step_parameters.integrator() ||
          left.adaptive_step_parameters.max_steps() !=
@@ -171,8 +172,13 @@ bool Vessel::RebaseIfNeeded() {
       ephemeris_->subsystem_conversion(subsystem_, nearest_subsystem);
   LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
             << subsystem_ << " to subsystem " << nearest_subsystem;
-  trajectory_.Translate(displacement);
-  subsystem_ = nearest_subsystem;
+  {
+    // The reanimator reads the front of `trajectory_` under `lock_`, and the
+    // translation rewrites all of its points.
+    absl::MutexLock l(&lock_);
+    trajectory_.Translate(displacement);
+    subsystem_ = nearest_subsystem;
+  }
   ForAllParts([this](Part& part) { part.set_subsystem(subsystem_); });
   PileUp* pile_up = nullptr;
   ForSomePart([&pile_up](Part& part) {
@@ -447,7 +453,7 @@ void Vessel::AdvanceTime() {
   // pre-existing prediction.
   auto optional_prognostication = prognosticator_.Get();
   if (optional_prognostication.has_value()) {
-    AttachPrediction(std::move(optional_prognostication.value()));
+    AttachPrognostication(std::move(optional_prognostication.value()));
   } else {
     AttachPrediction(std::move(prediction));
   }
@@ -636,7 +642,7 @@ absl::Status Vessel::RebaseFlightPlan(Mass const& initial_mass) {
 void Vessel::RefreshPrediction() {
   // The `prognostication` is a trajectory which is computed asynchronously and
   // may be used as a prediction;
-  std::optional<DiscreteTrajectory<Barycentric>> prognostication;
+  std::optional<Prognostication> prognostication;
 
   // Note that we know that `RefreshPrediction` is called on the main thread,
   // therefore the ephemeris currently covers the last time of the
@@ -644,7 +650,8 @@ void Vessel::RefreshPrediction() {
   PrognosticatorParameters prognosticator_parameters{
       .first_time = psychohistory_->back().time,
       .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
-      .adaptive_step_parameters = prediction_adaptive_step_parameters_};
+      .adaptive_step_parameters = prediction_adaptive_step_parameters_,
+      .subsystem = subsystem_};
   if (synchronous_) {
     auto status_or_prognostication =
         FlowPrognostication(std::move(prognosticator_parameters));
@@ -657,7 +664,7 @@ void Vessel::RefreshPrediction() {
     prognostication = prognosticator_.Get();
   }
   if (prognostication.has_value()) {
-    AttachPrediction(std::move(prognostication).value());
+    AttachPrognostication(std::move(prognostication).value());
   }
 }
 
@@ -1307,7 +1314,7 @@ bool Vessel::DesiredTMinReachedOrFullyReanimated(Instant const& desired_t_min) {
          oldest_reanimated_checkpoint_ == checkpointer_->oldest_checkpoint();
 }
 
-absl::StatusOr<DiscreteTrajectory<Barycentric>> Vessel::FlowPrognostication(
+absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
     PrognosticatorParameters prognosticator_parameters) {
   DiscreteTrajectory<Barycentric> prognostication;
   prognostication.Append(
@@ -1320,7 +1327,7 @@ absl::StatusOr<DiscreteTrajectory<Barycentric>> Vessel::FlowPrognostication(
       ephemeris_->t_max(),
       prognosticator_parameters.adaptive_step_parameters,
       FlightPlan::max_ephemeris_steps_per_frame,
-      subsystem_);
+      prognosticator_parameters.subsystem);
   bool const reached_t_max = status.ok();
   if (reached_t_max) {
     // This will prolong the ephemeris by `max_ephemeris_steps_per_frame`.
@@ -1330,7 +1337,7 @@ absl::StatusOr<DiscreteTrajectory<Barycentric>> Vessel::FlowPrognostication(
         InfiniteFuture,
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
-        subsystem_);
+        prognosticator_parameters.subsystem);
   }
   LOG_IF_EVERY_N(INFO, !status.ok(), 50)
       << "Prognostication from " << prognosticator_parameters.first_time
@@ -1341,7 +1348,8 @@ absl::StatusOr<DiscreteTrajectory<Barycentric>> Vessel::FlowPrognostication(
   } else {
     // Unless we were stopped, ignore the status, which indicates a failure to
     // reach `t_max`, and provide a short prognostication.
-    return std::move(prognostication);
+    return Prognostication{std::move(prognostication),
+                           prognosticator_parameters.subsystem};
   }
 }
 
@@ -1397,6 +1405,15 @@ void Vessel::AppendToVesselTrajectory(
       trajectory_.Append(first_time, vessel_degrees_of_freedom).IgnoreError();
     }
   }
+}
+
+void Vessel::AttachPrognostication(Prognostication&& prognostication) {
+  if (prognostication.subsystem != subsystem_) {
+    // The vessel was rebased while this prognostication was in flight.
+    prognostication.trajectory.Translate(ephemeris_->subsystem_conversion(
+        prognostication.subsystem, subsystem_));
+  }
+  AttachPrediction(std::move(prognostication.trajectory));
 }
 
 void Vessel::AttachPrediction(DiscreteTrajectory<Barycentric>&& trajectory) {
