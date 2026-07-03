@@ -36,7 +36,9 @@
 namespace principia {
 namespace astronomy {
 
+using ::testing::ElementsAre;
 using ::testing::Gt;
+using ::testing::IsEmpty;
 using ::testing::Lt;
 using namespace principia::astronomy::_frames;
 using namespace principia::base::_not_null;
@@ -80,14 +82,19 @@ class InterstellarPrecisionTest : public ::testing::Test {
     return 2 * π * Sqrt(Pow<3>(orbit_radius) / (μ_star + μ_planet));
   }
 
+  // The (exactly representable) displacement from the local system to the
+  // remote one.
+  static Displacement<ICRS> ToRemoteSystem() {
+    return Displacement<ICRS>({4.0e16 * Metre, 0 * Metre, 0 * Metre});
+  }
+
   // Constructs an ephemeris containing the two systems.  If `subsystems` is
   // empty all the positions are represented in a single frame; otherwise each
   // system is represented relative to its own local origin.
   static not_null<std::unique_ptr<Ephemeris<ICRS>>> MakeEphemeris(
       std::vector<int> const& subsystems) {
     Instant const t0;
-    Displacement<ICRS> const to_remote_system(
-        {4.0e16 * Metre, 0 * Metre, 0 * Metre});
+    Displacement<ICRS> const to_remote_system = ToRemoteSystem();
 
     Speed const v = Sqrt((μ_star + μ_planet) / orbit_radius);
 
@@ -142,8 +149,7 @@ class InterstellarPrecisionTest : public ::testing::Test {
 
     Instant const t0;
     Instant const t_final = t0 + 10 * JulianYear;
-    Displacement<ICRS> const to_remote_system(
-        {4.0e16 * Metre, 0 * Metre, 0 * Metre});
+    Displacement<ICRS> const to_remote_system = ToRemoteSystem();
 
     Length const probe_orbit_radius = 2 * orbit_radius;
     Speed const v_probe = Sqrt(μ_star / probe_orbit_radius);
@@ -282,16 +288,16 @@ TEST_F(InterstellarPrecisionTest, JacobianAndJerk) {
 
 TEST_F(InterstellarPrecisionTest, ClusterSubsystems) {
   Length const threshold = 1e14 * Metre;
-  auto const far = Displacement<ICRS>({4e16 * Metre, 0 * Metre, 0 * Metre});
+  auto const far = ToRemoteSystem();
   auto const near = Displacement<ICRS>({1e13 * Metre, 0 * Metre, 0 * Metre});
 
   // A single system, however far from the origin, is not partitioned.
   EXPECT_THAT(
       ClusterSubsystems<ICRS>({ICRS::origin, ICRS::origin + near}, threshold),
-      ::testing::IsEmpty());
+      IsEmpty());
   EXPECT_THAT(ClusterSubsystems<ICRS>(
                   {ICRS::origin + far, ICRS::origin + far + near}, threshold),
-              ::testing::IsEmpty());
+              IsEmpty());
 
   // Two systems, interleaved: the subsystems are numbered by order of first
   // appearance.
@@ -300,7 +306,7 @@ TEST_F(InterstellarPrecisionTest, ClusterSubsystems) {
                                        ICRS::origin + near,
                                        ICRS::origin + far + near},
                                       threshold),
-              ::testing::ElementsAre(0, 1, 0, 1));
+              ElementsAre(0, 1, 0, 1));
 
   // Single-linkage chaining: a body bridging two otherwise-distant groups
   // merges them.
@@ -309,7 +315,7 @@ TEST_F(InterstellarPrecisionTest, ClusterSubsystems) {
                                        ICRS::origin + 2 * near,
                                        ICRS::origin + far},
                                       threshold),
-              ::testing::ElementsAre(0, 0, 0, 1));
+              ElementsAre(0, 0, 0, 1));
 
   // The subsystem of each body is exposed by the ephemeris; note that the
   // subsystems are given per input body but exposed per (reordered) body.
@@ -325,8 +331,7 @@ TEST_F(InterstellarPrecisionTest, ClusterSubsystems) {
 // separation between planet A and star B oscillates exactly between
 // `to_remote_system.Norm() ∓ orbit_radius`.
 TEST_F(InterstellarPrecisionTest, Apsides) {
-  Displacement<ICRS> const to_remote_system(
-      {4.0e16 * Metre, 0 * Metre, 0 * Metre});
+  Displacement<ICRS> const to_remote_system = ToRemoteSystem();
   auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
   EXPECT_OK(ephemeris->Prolong(Instant() + 2 * Period()));
 
