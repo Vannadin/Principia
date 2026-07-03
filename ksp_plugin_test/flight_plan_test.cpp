@@ -540,6 +540,28 @@ TEST_F(FlightPlanTest, Issue2331) {
   EXPECT_OK(flight_plan.Replace(burn2, 0));
 }
 
+TEST_F(FlightPlanTest, Rebase) {
+  EXPECT_OK(flight_plan_->SetDesiredFinalTime(t0_ + 42 * Second));
+  EXPECT_OK(flight_plan_->Insert(MakeFirstBurn(), 0));
+
+  Displacement<Barycentric> const displacement(
+      {1000 * Metre, 2000 * Metre, 3000 * Metre});
+  Instant const previous_front_time =
+      flight_plan_->GetAllSegments().front().time;
+  DegreesOfFreedom<Barycentric> const previous_front_degrees_of_freedom =
+      flight_plan_->GetAllSegments().front().degrees_of_freedom;
+  EXPECT_OK(flight_plan_->Rebase(displacement, /*subsystem=*/0));
+  EXPECT_EQ(0, flight_plan_->subsystem());
+
+  // The recomputed flight plan must start from the translated initial state.
+  auto const& front = flight_plan_->GetAllSegments().front();
+  EXPECT_EQ(previous_front_time, front.time);
+  EXPECT_EQ(previous_front_degrees_of_freedom.position() + displacement,
+            front.degrees_of_freedom.position());
+  EXPECT_EQ(previous_front_degrees_of_freedom.velocity(),
+            front.degrees_of_freedom.velocity());
+}
+
 TEST_F(FlightPlanTest, Serialization) {
   EXPECT_OK(flight_plan_->SetDesiredFinalTime(t0_ + 42 * Second));
   EXPECT_OK(flight_plan_->Insert(MakeFirstBurn(), 0));

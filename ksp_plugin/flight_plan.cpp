@@ -461,6 +461,10 @@ absl::Status FlightPlan::Rebase(
       initial_degrees_of_freedom_.position() + displacement,
       initial_degrees_of_freedom_.velocity());
   subsystem_ = subsystem;
+  // `RecomputeAllSegments` retains the first point of the first coasting
+  // segment and flows from it; translate the trajectory so that the
+  // recomputation starts from the rebased initial state.
+  trajectory_.Translate(displacement);
   return RecomputeAllSegments();
 }
 
