@@ -428,10 +428,7 @@ class Vessel {
   // The parent body for the 2-body approximation.
   not_null<Celestial const*> parent_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
-  int subsystem_;
-  // The sum of all the translations applied by rebases, used to bring
-  // reanimated trajectories to the current representation.
-  Displacement<Barycentric> rebase_offset_;
+  int subsystem_ = 0;
   std::optional<DiscreteTrajectorySegment<Barycentric>::DownsamplingParameters>
       downsampling_parameters_;
 
@@ -465,9 +462,16 @@ class Vessel {
   // Parameter passed to the last call to `RequestReanimation`, if any.
   std::optional<Instant> last_desired_t_min_ ABSL_GUARDED_BY(lock_);
 
+  // A trajectory that has been reanimated, together with the subsystem in
+  // whose representation it is expressed.
+  struct ReanimatedTrajectory {
+    DiscreteTrajectory<Barycentric> trajectory;
+    int subsystem = 0;
+  };
+
   // The trajectories that have been reanimated are put in this queue by
   // ReanimateOneCheckpoint and consumed by RequestReanimation.
-  std::queue<DiscreteTrajectory<Barycentric>> reanimated_trajectories_
+  std::queue<ReanimatedTrajectory> reanimated_trajectories_
       ABSL_GUARDED_BY(lock_);
 
   // The last (most recent) segment of the `history_` prior to the

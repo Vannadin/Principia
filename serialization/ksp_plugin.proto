@@ -24,6 +24,9 @@ message FlightPlan {
   required AdaptiveStepParameters adaptive_step_parameters = 11;
   optional AdaptiveStepParameters
       generalized_adaptive_step_parameters = 13;  // Added in Erdős.
+  // The subsystem in whose representation this flight plan is expressed;
+  // absent for subsystem 0.  Added in NearStars.
+  optional int32 subsystem = 14;
 
   // Pre-Cardano.
   reserved 4, 5, 6, 7;
@@ -166,6 +169,9 @@ message Vessel {
     required Point time = 1;
     required DiscreteTrajectory non_collapsible_segment = 2;
     required FixedStepParameters collapsible_fixed_step_parameters = 3;
+    // The subsystem in whose representation this checkpoint is expressed;
+    // absent for subsystem 0.  Added in NearStars.
+    optional int32 subsystem = 4;
   }
   required string guid = 13;
   required string name = 19;

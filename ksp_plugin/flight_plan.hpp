@@ -161,11 +161,11 @@ class FlightPlan {
   void WriteToMessage(not_null<serialization::FlightPlan*> message) const;
 
   // This may return a null pointer if the flight plan contained in the
-  // `message` is anomalous.
+  // `message` is anomalous.  The flight plan is expressed in the subsystem
+  // recorded in the `message`.
   static std::unique_ptr<FlightPlan> ReadFromMessage(
       serialization::FlightPlan const& message,
-      not_null<Ephemeris<Barycentric>*> ephemeris,
-      int subsystem = 0);
+      not_null<Ephemeris<Barycentric>*> ephemeris);
 
   static constexpr std::int64_t max_ephemeris_steps_per_frame = 1000;
 

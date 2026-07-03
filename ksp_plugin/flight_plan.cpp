@@ -370,12 +370,14 @@ void FlightPlan::WriteToMessage(
   for (auto const& manœuvre : manœuvres_) {
     manœuvre.WriteToMessage(message->add_manoeuvre());
   }
+  if (subsystem_ != 0) {
+    message->set_subsystem(subsystem_);
+  }
 }
 
 std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
     serialization::FlightPlan const& message,
-    not_null<Ephemeris<Barycentric>*> const ephemeris,
-    int const subsystem) {
+    not_null<Ephemeris<Barycentric>*> const ephemeris) {
   Instant const initial_time = Instant::ReadFromMessage(message.initial_time());
   std::unique_ptr<DegreesOfFreedom<Barycentric>> initial_degrees_of_freedom;
   CHECK(message.has_adaptive_step_parameters());
@@ -413,7 +415,7 @@ std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
       ephemeris,
       *adaptive_step_parameters,
       *generalized_adaptive_step_parameters,
-      subsystem);
+      message.subsystem());
 
   for (int i = 0; i < message.manoeuvre_size(); ++i) {
     auto const& manoeuvre = message.manoeuvre(i);

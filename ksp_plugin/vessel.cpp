@@ -167,13 +167,11 @@ bool Vessel::RebaseIfNeeded() {
     return false;
   }
 
-  auto const& offset =
-      ephemeris_->inter_subsystem_offset(subsystem_, nearest_subsystem);
-  Displacement<Barycentric> const displacement = offset.value + offset.error;
+  Displacement<Barycentric> const displacement =
+      ephemeris_->subsystem_conversion(subsystem_, nearest_subsystem);
   LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
             << subsystem_ << " to subsystem " << nearest_subsystem;
   trajectory_.Translate(displacement);
-  rebase_offset_ += displacement;
   subsystem_ = nearest_subsystem;
   ForAllParts([this](Part& part) { part.set_subsystem(subsystem_); });
   PileUp* pile_up = nullptr;
@@ -398,9 +396,16 @@ void Vessel::ReadFlightPlanFromMessage() {
           selected_flight_plan())) {
     auto const& message =
         std::get<serialization::FlightPlan>(selected_flight_plan());
+    auto flight_plan = FlightPlan::ReadFromMessage(message, ephemeris_);
+    // The vessel may have been rebased while this flight plan was lazily held
+    // in its serialized form.
+    if (flight_plan->subsystem() != subsystem_) {
+      flight_plan->Rebase(ephemeris_->subsystem_conversion(
+                              flight_plan->subsystem(), subsystem_),
+                          subsystem_).IgnoreError();
+    }
     selected_flight_plan() = OptimizableFlightPlan{
-        .flight_plan = FlightPlan::ReadFromMessage(
-            message, ephemeris_, subsystem_),
+        .flight_plan = std::move(flight_plan),
         .optimization_driver = nullptr};
   }
 }
@@ -520,12 +525,14 @@ void Vessel::AwaitReanimation(Instant const& desired_t_min,
     // thereby ensuring that the trajectory doesn't change, say, while clients
     // iterate over it.
     while (!reanimated_trajectories_.empty()) {
-      if (rebase_offset_ != Displacement<Barycentric>{}) {
-        // The reanimated trajectory was computed in the representation that
-        // predates the rebases; bring it to the current one.
-        reanimated_trajectories_.front().Translate(rebase_offset_);
+      auto& [trajectory, subsystem] = reanimated_trajectories_.front();
+      if (subsystem != subsystem_) {
+        // The reanimated trajectory was computed in the representation of its
+        // checkpoint; bring it to the current one.
+        trajectory.Translate(
+            ephemeris_->subsystem_conversion(subsystem, subsystem_));
       }
-      trajectory_.Merge(std::move(reanimated_trajectories_.front()));
+      trajectory_.Merge(std::move(trajectory));
       reanimated_trajectories_.pop();
     }
   }
@@ -992,6 +999,12 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
           CHECK_EQ(checkpoint, reanimated_trajectory.back().time);
           reanimated_trajectory.ForgetAfter(vessel->trajectory().t_min());
           if (!reanimated_trajectory.empty()) {
+            if (int const checkpoint_subsystem = message.subsystem();
+                checkpoint_subsystem != vessel->subsystem_) {
+              reanimated_trajectory.Translate(
+                  vessel->ephemeris_->subsystem_conversion(
+                      checkpoint_subsystem, vessel->subsystem_));
+            }
             vessel->trajectory_.Merge(std::move(reanimated_trajectory));
           }
           return absl::OkStatus();
@@ -1138,6 +1151,9 @@ Checkpointer<serialization::Vessel>::Writer Vessel::MakeCheckpointerWriter(
                                /*exact=*/{});
     fixed_step_parameters().WriteToMessage(
         message->mutable_collapsible_fixed_step_parameters());
+    if (subsystem_ != 0) {
+      message->set_subsystem(subsystem_);
+    }
   };
 }
 
@@ -1189,7 +1205,7 @@ absl::Status Vessel::Reanimate(
     if (reanimated_trajectories_.empty()) {
       t_final = trajectory_.begin()->time;
     } else {
-      t_final = reanimated_trajectories_.back().front().time;
+      t_final = reanimated_trajectories_.back().trajectory.front().time;
     }
 
     Instant const oldest_checkpoint_to_reanimate =
@@ -1256,11 +1272,12 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
   // Make sure that the ephemeris covers the times that we are going to
   // reanimate.
   ephemeris_->AwaitReanimation(t_initial);
+  int const checkpoint_subsystem = message.subsystem();
   auto fixed_instance =
       ephemeris_->NewInstance({&reanimated_trajectory},
                               Ephemeris<Barycentric>::NoIntrinsicAccelerations,
                               collapsible_fixed_step_parameters,
-                              {subsystem_});
+                              {checkpoint_subsystem});
 
   auto const status = ephemeris_->FlowWithFixedStep(t_final, *fixed_instance);
   RETURN_IF_ERROR(status);
@@ -1276,7 +1293,8 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
   // RequestReanimation.
   {
     absl::MutexLock l(&lock_);
-    reanimated_trajectories_.push(std::move(reanimated_trajectory));
+    reanimated_trajectories_.push({std::move(reanimated_trajectory),
+                                   checkpoint_subsystem});
     oldest_reanimated_checkpoint_ = t_initial;
   }
 
