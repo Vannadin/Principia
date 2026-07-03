@@ -70,13 +70,16 @@ class SolarSystem final {
   // construction.  If `subsystem_clustering_threshold` is set, the bodies are
   // partitioned into subsystems by `ClusterSubsystems` with that threshold,
   // and the positions of each subsystem are represented relative to its own
-  // local origin (see the constructor of `Ephemeris`).
+  // local origin (see the constructor of `Ephemeris`).  If the clustering
+  // produced multiple subsystems, `far_field_damping_floor` is passed on to
+  // the ephemeris to damp the far field seen by massless bodies.
   not_null<std::unique_ptr<Ephemeris<Frame>>> MakeEphemeris(
       typename Ephemeris<Frame>::AccuracyParameters const& accuracy_parameters,
       typename Ephemeris<Frame>::FixedStepParameters const&
           fixed_step_parameters,
       std::optional<Length> const& subsystem_clustering_threshold =
-          std::nullopt) const;
+          std::nullopt,
+      Acceleration const& far_field_damping_floor = {}) const;
 
   std::vector<not_null<std::unique_ptr<MassiveBody const>>>
   MakeAllMassiveBodies() const;

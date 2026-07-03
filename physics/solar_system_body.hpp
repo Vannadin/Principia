@@ -160,7 +160,8 @@ template<typename Frame>
 not_null<std::unique_ptr<Ephemeris<Frame>>> SolarSystem<Frame>::MakeEphemeris(
     typename Ephemeris<Frame>::AccuracyParameters const& accuracy_parameters,
     typename Ephemeris<Frame>::FixedStepParameters const& fixed_step_parameters,
-    std::optional<Length> const& subsystem_clustering_threshold) const {
+    std::optional<Length> const& subsystem_clustering_threshold,
+    Acceleration const& far_field_damping_floor) const {
   auto const degrees_of_freedom = MakeAllDegreesOfFreedom();
   std::vector<int> subsystems;
   if (subsystem_clustering_threshold.has_value()) {
@@ -171,12 +172,16 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> SolarSystem<Frame>::MakeEphemeris(
     }
     subsystems = ClusterSubsystems(positions, *subsystem_clustering_threshold);
   }
-  return make_not_null_unique<Ephemeris<Frame>>(MakeAllMassiveBodies(),
-                                                degrees_of_freedom,
-                                                epoch_,
-                                                accuracy_parameters,
-                                                fixed_step_parameters,
-                                                subsystems);
+  return make_not_null_unique<Ephemeris<Frame>>(
+      MakeAllMassiveBodies(),
+      degrees_of_freedom,
+      epoch_,
+      accuracy_parameters,
+      fixed_step_parameters,
+      subsystems,
+      // The far field only needs damping when there are subsystems to
+      // decouple.
+      subsystems.empty() ? Acceleration{} : far_field_damping_floor);
 }
 
 template<typename Frame>

@@ -90,9 +90,12 @@ class InterstellarPrecisionTest : public ::testing::Test {
 
   // Constructs an ephemeris containing the two systems.  If `subsystems` is
   // empty all the positions are represented in a single frame; otherwise each
-  // system is represented relative to its own local origin.
+  // system is represented relative to its own local origin.  If
+  // `far_field_damping_floor` is strictly positive, the far field seen by
+  // massless bodies is damped (see `FarFieldDamping`).
   static not_null<std::unique_ptr<Ephemeris<ICRS>>> MakeEphemeris(
-      std::vector<int> const& subsystems) {
+      std::vector<int> const& subsystems,
+      Acceleration const& far_field_damping_floor = {}) {
     Instant const t0;
     Displacement<ICRS> const to_remote_system = ToRemoteSystem();
 
@@ -136,7 +139,8 @@ class InterstellarPrecisionTest : public ::testing::Test {
                 QuinlanTremaine1990Order12,
                 Ephemeris<ICRS>::NewtonianMotionEquation>(),
             /*step=*/Period() / 1000),
-        subsystems);
+        subsystems,
+        far_field_damping_floor);
   }
 
   // Evolves a massless probe in a circular orbit around each star for 10 years
@@ -379,6 +383,68 @@ TEST_F(InterstellarPrecisionTest, MasslessProbe) {
             << error_with_subsystems;
   EXPECT_THAT(error_without_subsystems, Gt(1 * Metre));
   EXPECT_THAT(error_with_subsystems, Lt(1 * Milli(Metre)));
+}
+
+// With the far field damped, the damping is inert near a star (it only
+// removes the negligible pull of the remote system) and a probe in the void
+// between the systems is exactly force-free: it coasts inertially.
+TEST_F(InterstellarPrecisionTest, FarFieldDampedCoast) {
+  Instant const t0;
+  Acceleration const far_field_damping_floor =
+      1e-12 * Metre / Pow<2>(Second);
+  auto const control = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  auto const damped = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1},
+                                    far_field_damping_floor);
+  EXPECT_OK(control->Prolong(t0 + Period() / 10));
+  EXPECT_OK(damped->Prolong(t0 + Period() / 10));
+
+  // Near star A the damping only removes the pull of the remote system,
+  // μ_star / (4 × 10¹⁶ m)² ≈ 2.5 × 10⁻¹⁹ m/s².
+  Position<ICRS> const near_star_a =
+      ICRS::origin +
+      Displacement<ICRS>({0 * Metre, 2 * orbit_radius, 0 * Metre});
+  EXPECT_THAT(
+      (damped->ComputeGravitationalAccelerationOnMasslessBody(
+           near_star_a, t0, /*subsystem=*/0) -
+       control->ComputeGravitationalAccelerationOnMasslessBody(
+           near_star_a, t0, /*subsystem=*/0)).Norm(),
+      Lt(1e-18 * Metre / Pow<2>(Second)));
+
+  // In the void between the systems the damped field vanishes exactly.
+  Position<ICRS> const mid_void = ICRS::origin + 0.5 * ToRemoteSystem();
+  EXPECT_NE(control->ComputeGravitationalAccelerationOnMasslessBody(
+                mid_void, t0, /*subsystem=*/0),
+            (Vector<Acceleration, ICRS>{}));
+  EXPECT_EQ(damped->ComputeGravitationalAccelerationOnMasslessBody(
+                mid_void, t0, /*subsystem=*/0),
+            (Vector<Acceleration, ICRS>{}));
+
+  // A probe coasting through the void for ten years keeps its velocity
+  // bit-for-bit and moves in a straight line.
+  Velocity<ICRS> const v0({3 * Kilo(Metre) / Second,
+                           1 * Kilo(Metre) / Second,
+                           0 * Metre / Second});
+  DiscreteTrajectory<ICRS> probe;
+  EXPECT_OK(probe.Append(t0, DegreesOfFreedom<ICRS>(mid_void, v0)));
+  EXPECT_OK(damped->FlowWithAdaptiveStep(
+      &probe,
+      Ephemeris<ICRS>::NoIntrinsicAcceleration,
+      t0 + 10 * JulianYear,
+      Ephemeris<ICRS>::AdaptiveStepParameters(
+          EmbeddedExplicitRungeKuttaNyströmIntegrator<
+              DormandالمكاوىPrince1986RKN434FM,
+              Ephemeris<ICRS>::NewtonianMotionEquation>(),
+          /*max_steps=*/std::numeric_limits<std::int64_t>::max(),
+          /*length_integration_tolerance=*/1 * Metre,
+          /*speed_integration_tolerance=*/1e-3 * Metre / Second),
+      Ephemeris<ICRS>::unlimited_max_ephemeris_steps,
+      /*subsystem=*/0));
+  auto const& [final_time, final_degrees_of_freedom] = probe.back();
+  EXPECT_EQ(final_time, t0 + 10 * JulianYear);
+  EXPECT_EQ(final_degrees_of_freedom.velocity(), v0);
+  EXPECT_THAT(((final_degrees_of_freedom.position() - mid_void) -
+               v0 * (final_time - t0)).Norm(),
+              Lt(1 * Kilo(Metre)));
 }
 
 // Checks that a reference frame whose primary and secondary belong to

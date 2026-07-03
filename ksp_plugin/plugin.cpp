@@ -94,6 +94,16 @@ constexpr std::int64_t max_steps_in_prediction = 1 << 24;
 // a vessel switches representations.
 constexpr Length subsystem_clustering_threshold = 1e14 * Metre;
 
+// In a multi-star system, the point-mass far field seen by the vessels is
+// damped to exactly zero at the distance where it falls below this floor (see
+// `FarFieldDamping`), so that a vessel in the void between the stars coasts
+// force-free.  For a solar-mass star the outer threshold is ~1.2 ly, well
+// below the separation of the stellar subsystems and well above the size of
+// any of them: a vessel near one star still feels a close binary companion in
+// full.
+constexpr Acceleration far_field_damping_floor =
+    1e-12 * Metre / Pow<2>(Second);
+
 Length const& MaxCollisionError() {
   static Length const max_collision_error = []() {
     std::string_view const name = "max_collision_error";
@@ -266,7 +276,8 @@ void Plugin::EndInitialization() {
                                      DefaultEphemerisAccuracyParameters()),
                                  ephemeris_fixed_step_parameters_.value_or(
                                      DefaultEphemerisFixedStepParameters()),
-                                 subsystem_clustering_threshold);
+                                 subsystem_clustering_threshold,
+                                 far_field_damping_floor);
 
   // Construct the celestials using the bodies from the ephemeris.
   for (std::string const& name : solar_system.names()) {
