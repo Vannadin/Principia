@@ -198,6 +198,8 @@ message Ephemeris {
   // Added in NearStars.
   repeated int32 body_subsystem = 14;
   repeated DoublePrecision subsystem_origin_offset = 15;  // Added in NearStars.
+  // Absent if the far field is not damped.  Added in NearStars.
+  optional Quantity far_field_damping_floor = 16;
 
   // Pre-Fatou.
   reserved 11;

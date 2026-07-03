@@ -26,6 +26,7 @@
 #include "physics/continuous_trajectory.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/discrete_trajectory.hpp"
+#include "physics/far_field_damping.hpp"
 #include "physics/geopotential.hpp"
 #include "physics/integration_parameters.hpp"
 #include "physics/massive_body.hpp"
@@ -56,6 +57,7 @@ using namespace principia::physics::_clientele;
 using namespace principia::physics::_continuous_trajectory;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
+using namespace principia::physics::_far_field_damping;
 using namespace principia::physics::_geopotential;
 using namespace principia::physics::_integration_parameters;
 using namespace principia::physics::_massive_body;
@@ -141,13 +143,18 @@ class Ephemeris {
   // anchored at the initial position of its first body, which preserves
   // precision when the subsystems are very far apart.  If `subsystems` is
   // empty, all the bodies belong to subsystem 0 and the positions are
-  // represented as given.
+  // represented as given.  If `far_field_damping_floor` is strictly positive,
+  // the point-mass potential of each body is damped to exactly zero (see
+  // `FarFieldDamping`) beyond the distance where its gravitational
+  // acceleration falls below that floor; this only affects the computations
+  // on massless bodies, not the motion of the massive bodies.
   Ephemeris(std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies,
             std::vector<DegreesOfFreedom<Frame>> const& initial_state,
             Instant const& initial_time,
             AccuracyParameters const& accuracy_parameters,
             FixedStepParameters fixed_step_parameters,
-            std::vector<int> const& subsystems = {});
+            std::vector<int> const& subsystems = {},
+            Acceleration const& far_field_damping_floor = {});
 
   virtual ~Ephemeris();
 
@@ -504,11 +511,14 @@ class Ephemeris {
 
   // Computes the accelerations due to one body, `body1` (with index `b1` in the
   // `bodies_` and `trajectories_` arrays) on massless bodies at the given
-  // `positions`.  The template parameter specifies what we know about the
-  // massive body, and therefore what forces apply.  Returns an integer for
-  // efficiency.  The massless positions are represented relative to the local
-  // origins of the `subsystems`, which must be parallel to `positions`.
-  template<bool body1_is_oblate>
+  // `positions`.  The template parameters specify what we know about the
+  // massive body, and therefore what forces apply; `has_far_field_damping` is
+  // a template parameter (dispatched once per call by the caller) because a
+  // per-pair runtime check would tax this hot kernel measurably when the
+  // damping is off.  Returns an integer for efficiency.  The massless
+  // positions are represented relative to the local origins of the
+  // `subsystems`, which must be parallel to `positions`.
+  template<bool has_far_field_damping, bool body1_is_oblate>
   std::underlying_type_t<absl::StatusCode>
   ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
       Instant const& t,
@@ -555,6 +565,18 @@ class Ephemeris {
   // represented relative to the local origins of the `subsystems`, which must
   // be parallel to `positions`.  Returns an error iff a collision occurred,
   // i.e., the massless body is inside one of the `bodies_`.
+  absl::StatusCode
+  ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
+      Instant const& t,
+      std::vector<Position<Frame>> const& positions,
+      std::vector<Vector<Acceleration, Frame>>& accelerations,
+      std::vector<int> const& subsystems) const
+      EXCLUDES(lock_);
+
+  // The implementation of the above, on which see
+  // `ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies` regarding
+  // `has_far_field_damping`.
+  template<bool has_far_field_damping>
   absl::StatusCode
   ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
       Instant const& t,
@@ -635,6 +657,14 @@ class Ephemeris {
   // The pairwise differences of the entries of `subsystem_origin_offset_`,
   // precomputed for the gravity kernels; see `inter_subsystem_offset`.
   std::vector<DoublePrecision<Displacement<Frame>>> inter_subsystem_offsets_;
+
+  // The floor given at construction; zero if the far field is not damped.
+  Acceleration far_field_damping_floor_;
+
+  // The far-field damping of each body, parallel to `bodies_`.  Empty if the
+  // far field is not damped.  Only used by the computations on massless
+  // bodies.
+  std::vector<FarFieldDamping> far_field_damping_;
 
   not_null<
       std::unique_ptr<Checkpointer<serialization::Ephemeris>>> checkpointer_;

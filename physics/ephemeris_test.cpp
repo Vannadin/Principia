@@ -39,6 +39,7 @@
 #include "physics/continuous_trajectory.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/discrete_trajectory.hpp"
+#include "physics/far_field_damping.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/massless_body.hpp"
 #include "physics/oblate_body.hpp"
@@ -89,6 +90,7 @@ using namespace principia::physics::_continuous_trajectory;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
+using namespace principia::physics::_far_field_damping;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_massless_body;
 using namespace principia::physics::_oblate_body;
@@ -756,6 +758,189 @@ TEST_P(EphemerisTest, ComputeGravitationalAccelerationMasslessBody) {
                     Eq(0 * Metre / Second / Second)));
   EXPECT_THAT(elephant_accelerations.back().coordinates().z,
               RelativeErrorFrom(-9.832 * si::Unit<Acceleration>, Lt(6.7e-6)));
+}
+
+// The far-field damping is inert inside its inner threshold, makes the field
+// vanish exactly beyond its outer threshold, and on the shell in between the
+// acceleration and the jerk derive from the damped potential.
+TEST_P(EphemerisTest, FarFieldDamping) {
+  solar_system_.LimitOblatenessToDegree("Earth", /*max_degree=*/0);
+  serialization::GravityModel::Body const earth_gravity_model =
+      solar_system_.gravity_model_message("Earth");
+  GravitationalParameter const μ =
+      SolarSystem<ICRS>::MakeMassiveBody(earth_gravity_model)
+          ->gravitational_parameter();
+  Acceleration const floor = μ / Pow<2>(1e9 * Metre);
+  FarFieldDamping const damping(Sqrt(μ / floor));
+
+  std::vector<DegreesOfFreedom<ICRS>> const initial_state = {
+      DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving)};
+  auto const make_ephemeris =
+      [&](Acceleration const& far_field_damping_floor) {
+        std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+        bodies.push_back(
+            SolarSystem<ICRS>::MakeMassiveBody(earth_gravity_model));
+        return std::make_unique<Ephemeris<ICRS>>(
+            std::move(bodies),
+            initial_state,
+            t0_,
+            Ephemeris<ICRS>::AccuracyParameters(
+                /*fitting_tolerance=*/5 * Milli(Metre),
+                /*geopotential_tolerance=*/0x1p-24),
+            Ephemeris<ICRS>::FixedStepParameters(integrator(), 1 * Hour),
+            /*subsystems=*/std::vector<int>{},
+            far_field_damping_floor);
+      };
+  auto const undamped = make_ephemeris(Acceleration{});
+  auto const damped = make_ephemeris(floor);
+  EXPECT_OK(undamped->Prolong(t0_ + 12 * Hour));
+  EXPECT_OK(damped->Prolong(t0_ + 12 * Hour));
+
+  auto const q_at_distance = [](Length const& z) {
+    return ICRS::origin + Displacement<ICRS>({0 * Metre, 0 * Metre, z});
+  };
+  Length const inside = 1e8 * Metre;
+  Length const mid_shell =
+      (damping.inner_threshold() + damping.outer_threshold()) / 2;
+  Length const outside = 2e9 * Metre;
+  Velocity<ICRS> const v({100 * Metre / Second,
+                          0 * Metre / Second,
+                          1 * Kilo(Metre) / Second});
+
+  // Inside the inner threshold the damping is inert.
+  EXPECT_EQ(damped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(inside), t0_),
+            undamped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(inside), t0_));
+  EXPECT_EQ(damped->ComputeGravitationalPotential(q_at_distance(inside), t0_),
+            undamped->ComputeGravitationalPotential(q_at_distance(inside),
+                                                    t0_));
+  EXPECT_THAT(
+      damped->ComputeGravitationalJerkOnMasslessBody(
+          DegreesOfFreedom<ICRS>(q_at_distance(inside), v), t0_),
+      AlmostEquals(undamped->ComputeGravitationalJerkOnMasslessBody(
+                       DegreesOfFreedom<ICRS>(q_at_distance(inside), v), t0_),
+                   0, 4));
+
+  // Beyond the outer threshold the damped field vanishes exactly.
+  EXPECT_NE(undamped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(outside), t0_),
+            (Vector<Acceleration, ICRS>{}));
+  EXPECT_EQ(damped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(outside), t0_),
+            (Vector<Acceleration, ICRS>{}));
+  EXPECT_EQ(damped->ComputeGravitationalPotential(q_at_distance(outside), t0_),
+            SpecificEnergy{});
+  EXPECT_EQ(damped->ComputeGravitationalJerkOnMasslessBody(
+                DegreesOfFreedom<ICRS>(q_at_distance(outside), v), t0_),
+            (Vector<Jerk, ICRS>{}));
+
+  // On the shell the field derives from the damped potential σ V.
+  double σ;
+  double σʹr;
+  damping.ComputeDampedRadialQuantities(mid_shell, σ, σʹr);
+  EXPECT_THAT(damped->ComputeGravitationalAccelerationOnMasslessBody(
+                  q_at_distance(mid_shell), t0_),
+              AlmostEquals(
+                  (σ - σʹr) *
+                      undamped->ComputeGravitationalAccelerationOnMasslessBody(
+                          q_at_distance(mid_shell), t0_),
+                  0, 4));
+  EXPECT_THAT(
+      damped->ComputeGravitationalPotential(q_at_distance(mid_shell), t0_),
+      AlmostEquals(σ * undamped->ComputeGravitationalPotential(
+                           q_at_distance(mid_shell), t0_),
+                   0, 4));
+
+  // The jerk on the shell is the derivative of the damped acceleration along
+  // the probe's motion.
+  Vector<Jerk, ICRS> const jerk =
+      damped->ComputeGravitationalJerkOnMasslessBody(
+          DegreesOfFreedom<ICRS>(q_at_distance(mid_shell), v), t0_);
+  Time const δt = 1 * Second;
+  Vector<Jerk, ICRS> const numerical_jerk =
+      (damped->ComputeGravitationalAccelerationOnMasslessBody(
+           q_at_distance(mid_shell) + v * δt, t0_) -
+       damped->ComputeGravitationalAccelerationOnMasslessBody(
+           q_at_distance(mid_shell) - v * δt, t0_)) /
+      (2 * δt);
+  EXPECT_THAT((jerk - numerical_jerk).Norm(), Lt(1e-9 * jerk.Norm()));
+
+  // The damping floor survives a serialization round trip.
+  serialization::Ephemeris message;
+  damped->WriteToMessage(&message);
+  EXPECT_TRUE(message.has_far_field_damping_floor());
+  auto const damped_read = Ephemeris<ICRS>::ReadFromMessage(
+      /*desired_t_min=*/InfiniteFuture, message);
+  EXPECT_OK(damped_read->Prolong(damped->t_max()));
+  EXPECT_EQ(damped_read->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(mid_shell), t0_),
+            damped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(mid_shell), t0_));
+}
+
+// A probe falling through the damping shell conserves the energy of the
+// damped dynamics: the boundaries of the shell introduce no kink.
+TEST_P(EphemerisTest, FarFieldDampingEnergyConservation) {
+  solar_system_.LimitOblatenessToDegree("Earth", /*max_degree=*/0);
+  serialization::GravityModel::Body const earth_gravity_model =
+      solar_system_.gravity_model_message("Earth");
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.push_back(SolarSystem<ICRS>::MakeMassiveBody(earth_gravity_model));
+  GravitationalParameter const μ = bodies[0]->gravitational_parameter();
+  Acceleration const floor = μ / Pow<2>(1e9 * Metre);
+  FarFieldDamping const damping(Sqrt(μ / floor));
+  std::vector<DegreesOfFreedom<ICRS>> const initial_state = {
+      DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving)};
+
+  Ephemeris<ICRS> ephemeris(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      Ephemeris<ICRS>::AccuracyParameters(
+          /*fitting_tolerance=*/5 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<ICRS>::FixedStepParameters(integrator(), 1 * Hour),
+      /*subsystems=*/std::vector<int>{},
+      floor);
+  EXPECT_OK(ephemeris.Prolong(t0_ + 12 * Hour));
+
+  // The probe starts beyond the outer threshold, where the damped potential
+  // is exactly zero, so its initial energy is purely kinetic.
+  Position<ICRS> const q0 =
+      ICRS::origin +
+      Displacement<ICRS>({0 * Metre, 0 * Metre, 2e9 * Metre});
+  Velocity<ICRS> const v0({0 * Metre / Second,
+                           0 * Metre / Second,
+                           -5 * Kilo(Metre) / Second});
+  EXPECT_EQ(ephemeris.ComputeGravitationalPotential(q0, t0_),
+            SpecificEnergy{});
+  SpecificEnergy const initial_energy = 0.5 * v0.Norm²();
+
+  DiscreteTrajectory<ICRS> trajectory;
+  EXPECT_OK(trajectory.Append(t0_, DegreesOfFreedom<ICRS>(q0, v0)));
+  EXPECT_OK(ephemeris.FlowWithAdaptiveStep(
+      &trajectory,
+      Ephemeris<ICRS>::NoIntrinsicAcceleration,
+      t0_ + 340'000 * Second,
+      Ephemeris<ICRS>::GeneralizedAdaptiveStepParameters(
+          EmbeddedExplicitGeneralizedRungeKuttaNyströmIntegrator<
+              Fine1987RKNG34,
+              Ephemeris<ICRS>::GeneralizedNewtonianMotionEquation>(),
+          max_steps,
+          1e-9 * Metre,
+          2.6e-15 * Metre / Second),
+      Ephemeris<ICRS>::unlimited_max_ephemeris_steps));
+
+  auto const& [final_time, final_degrees_of_freedom] = trajectory.back();
+  Length const final_distance =
+      (final_degrees_of_freedom.position() - ICRS::origin).Norm();
+  EXPECT_THAT(final_distance, Lt(damping.inner_threshold()));
+  SpecificEnergy const final_energy =
+      0.5 * final_degrees_of_freedom.velocity().Norm²() +
+      ephemeris.ComputeGravitationalPotential(
+          final_degrees_of_freedom.position(), final_time);
+  EXPECT_THAT(final_energy, RelativeErrorFrom(initial_energy, Lt(1e-9)));
 }
 
 #if !defined(_DEBUG)
