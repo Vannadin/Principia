@@ -55,6 +55,10 @@ bool operator==(OnRailsBurn const& left, OnRailsBurn const& right) {
          left.max_duration == right.max_duration;
 }
 
+bool operator!=(OnRailsBurn const& left, OnRailsBurn const& right) {
+  return !(left == right);
+}
+
 PileUp::PileUp(
     std::list<not_null<Part*>> parts,
     Instant const& t,
@@ -126,10 +130,16 @@ void PileUp::set_on_rails_burn(OnRailsBurn const& on_rails_burn) {
 void PileUp::clear_on_rails_burn() {
   absl::MutexLock l(lock_.get());
   on_rails_burn_.reset();
+  on_rails_burn_for_prediction_.reset();
 }
 
 std::optional<OnRailsBurn> const& PileUp::on_rails_burn() const {
   return on_rails_burn_;
+}
+
+std::optional<OnRailsBurn> const& PileUp::on_rails_burn_for_prediction()
+    const {
+  return on_rails_burn_for_prediction_;
 }
 
 void PileUp::SetPartApparentRigidMotion(
@@ -621,6 +631,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
   Instant const history_last = history_->back().time;
   bool const has_intrinsic_force =
       intrinsic_force_ != Vector<Force, Barycentric>{};
+  on_rails_burn_for_prediction_ = on_rails_burn_;
   if (!has_intrinsic_force && !on_rails_burn_.has_value()) {
     // Remove the fork.
     trajectory_.DeleteSegments(psychohistory_);

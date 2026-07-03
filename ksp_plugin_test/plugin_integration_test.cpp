@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -26,6 +27,8 @@
 #include "integrators/methods.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/identification.hpp"
+#include "ksp_plugin/part.hpp"
+#include "ksp_plugin/pile_up.hpp"
 #include "numerics/elementary_functions.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/ephemeris.hpp"
@@ -36,6 +39,7 @@
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
+#include "testing_utilities/almost_equals.hpp"
 #include "testing_utilities/approximate_quantity.hpp"
 #include "testing_utilities/is_near.hpp"
 #include "testing_utilities/numerics_matchers.hpp"
@@ -64,6 +68,8 @@ using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_
 using namespace principia::integrators::_methods;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
+using namespace principia::ksp_plugin::_part;
+using namespace principia::ksp_plugin::_pile_up;
 using namespace principia::ksp_plugin::_plugin;
 using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_degrees_of_freedom;
@@ -74,6 +80,7 @@ using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
+using namespace principia::testing_utilities::_almost_equals;
 using namespace principia::testing_utilities::_approximate_quantity;
 using namespace principia::testing_utilities::_is_near;
 using namespace principia::testing_utilities::_numerics_matchers;
@@ -509,6 +516,130 @@ TEST_F(PluginIntegrationTestWithoutPlugin, Prediction) {
       AbsoluteErrorFrom(Displacement<World>({1 * Metre, 0 * Metre, 0 * Metre}) +
                             World::origin,
                         IsNear(29_(1) * Milli(Metre))));
+}
+
+// A vessel burning on rails: the burn accelerates it along the commanded
+// direction with Циолковский's Δv and depletes the mass of its pile up, the
+// prediction anticipates the burn, and a frame without a burn coasts.
+TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurn) {
+  Index const star = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star,
+                                             /*parent_index=*/std::nullopt,
+                                             gravity_model,
+                                             initial_state);
+  }
+  plugin->EndInitialization();
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid,
+                             vessel_name,
+                             star,
+                             /*loaded=*/false,
+                             inserted);
+  // Far enough from the star that gravity is negligible against the burn.
+  plugin->InsertUnloadedPart(
+      part_id,
+      part_name,
+      vessel_guid,
+      {Displacement<AliceSun>({1e12 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  auto& vessel = *plugin->GetVessel(vessel_guid);
+  auto const pile_up_mass = [&vessel]() {
+    Mass mass;
+    vessel.ForSomePart([&mass](Part& part) {
+      mass = part.containing_pile_up()->mass();
+    });
+    return mass;
+  };
+
+  Force const thrust = 1 * Newton;
+  SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
+  Variation<Mass> const mass_flow = thrust / specific_impulse;
+  Time const δt = 100 * Second;
+
+  // Three frames of burning under warp.
+  Mass const m0 = pile_up_mass();
+  Velocity<AliceSun> const v0 =
+      plugin->VesselFromParent(star, vessel_guid).velocity();
+  Instant t;
+  for (int i = 0; i < 3; ++i) {
+    t += δt;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid,
+                               vessel_name,
+                               star,
+                               /*loaded=*/false,
+                               inserted);
+    plugin->SetVesselOnRailsBurn(vessel_guid,
+                                 thrust,
+                                 specific_impulse,
+                                 Vector<double, World>({1, 0, 0}),
+                                 /*max_duration=*/1 * Hour);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  EXPECT_THAT(pile_up_mass(), AlmostEquals(m0 - 3 * δt * mass_flow, 0, 4));
+  Speed const Δv = specific_impulse * std::log(m0 / pile_up_mass());
+  Velocity<AliceSun> const v1 =
+      plugin->VesselFromParent(star, vessel_guid).velocity();
+  EXPECT_THAT((v1 - v0).Norm(), RelativeErrorFrom(Δv, Lt(1e-3)));
+
+  // The prediction anticipates the burn continuing until its propellant runs
+  // out.
+  do {
+    plugin->UpdatePrediction({vessel_guid});
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(100ms);
+  } while (vessel.prediction()->empty() ||
+           vessel.prediction()->back().time < t + 1800 * Second);
+  Speed const predicted_gain =
+      (vessel.prediction()->back().degrees_of_freedom.velocity() -
+       vessel.psychohistory()->back().degrees_of_freedom.velocity())
+          .Norm();
+  EXPECT_THAT(predicted_gain, Gt(1000 * Metre / Second));
+
+  // A frame without a burn coasts.
+  Velocity<AliceSun> const v2 =
+      plugin->VesselFromParent(star, vessel_guid).velocity();
+  t += δt;
+  plugin->AdvanceTime(t, 1 * Radian);
+  plugin->InsertOrKeepVessel(vessel_guid,
+                             vessel_name,
+                             star,
+                             /*loaded=*/false,
+                             inserted);
+  VesselSet collided_vessels;
+  plugin->CatchUpLaggingVessels(collided_vessels);
+  EXPECT_THAT(
+      (plugin->VesselFromParent(star, vessel_guid).velocity() - v2).Norm(),
+      Lt(0.05 * Metre / Second));
 }
 
 // An end-to-end test of the partitioning of a multi-star system into

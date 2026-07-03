@@ -107,6 +107,7 @@ struct OnRailsBurn {
 };
 
 bool operator==(OnRailsBurn const& left, OnRailsBurn const& right);
+bool operator!=(OnRailsBurn const& left, OnRailsBurn const& right);
 
 // A `PileUp` handles a connected component of the graph of `Parts` under
 // physical contact.  It advances the history and psychohistory of its component
@@ -148,6 +149,10 @@ class PileUp {
   void set_on_rails_burn(OnRailsBurn const& on_rails_burn);
   void clear_on_rails_burn();
   std::optional<OnRailsBurn> const& on_rails_burn() const;
+
+  // The burn applied by the last `AdvanceTime`, if any; used to make
+  // predictions anticipate the thrust.
+  std::optional<OnRailsBurn> const& on_rails_burn_for_prediction() const;
 
   // Set the rigid motion for the given `part`.  This rigid motion is *apparent*
   // in the sense that it was reported by the game but we know better since we
@@ -248,6 +253,8 @@ class PileUp {
   // Set by the game on every frame where the engines burn on rails, consumed
   // by `AdvanceTime`.  Not serialized.
   std::optional<OnRailsBurn> on_rails_burn_;
+  // The burn applied by the last `AdvanceTime`, if any.  Not serialized.
+  std::optional<OnRailsBurn> on_rails_burn_for_prediction_;
 
   // The trajectory of the pile-up, composed of (at most) two segments, the
   // history and the psychohistory.
@@ -305,6 +312,7 @@ struct PileUpFuture {
 
 using internal::ApparentPileUp;
 using internal::NonRotatingPileUp;
+using internal::OnRailsBurn;
 using internal::PileUp;
 using internal::PileUpFuture;
 using internal::PileUpPrincipalAxes;

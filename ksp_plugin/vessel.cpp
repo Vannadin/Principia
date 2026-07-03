@@ -63,6 +63,8 @@ bool operator!=(Vessel::PrognosticatorParameters const& left,
   return left.first_time != right.first_time ||
          left.first_degrees_of_freedom != right.first_degrees_of_freedom ||
          left.subsystem != right.subsystem ||
+         left.on_rails_burn != right.on_rails_burn ||
+         left.on_rails_burn_initial_mass != right.on_rails_burn_initial_mass ||
          &left.adaptive_step_parameters.integrator() !=
              &right.adaptive_step_parameters.integrator() ||
          left.adaptive_step_parameters.max_steps() !=
@@ -653,11 +655,22 @@ void Vessel::RefreshPrediction() {
   // Note that we know that `RefreshPrediction` is called on the main thread,
   // therefore the ephemeris currently covers the last time of the
   // psychohistory.  Were this to change, this code might have to change.
+  std::optional<OnRailsBurn> on_rails_burn;
+  Mass on_rails_burn_initial_mass;
+  ForSomePart([&on_rails_burn, &on_rails_burn_initial_mass](Part& part) {
+    if (PileUp const* const pile_up = part.containing_pile_up();
+        pile_up != nullptr) {
+      on_rails_burn = pile_up->on_rails_burn_for_prediction();
+      on_rails_burn_initial_mass = pile_up->mass();
+    }
+  });
   PrognosticatorParameters prognosticator_parameters{
       .first_time = psychohistory_->back().time,
       .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
       .adaptive_step_parameters = prediction_adaptive_step_parameters_,
-      .subsystem = subsystem_};
+      .subsystem = subsystem_,
+      .on_rails_burn = std::move(on_rails_burn),
+      .on_rails_burn_initial_mass = on_rails_burn_initial_mass};
   if (synchronous_) {
     auto status_or_prognostication =
         FlowPrognostication(std::move(prognosticator_parameters));
@@ -1327,13 +1340,49 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
       prognosticator_parameters.first_time,
       prognosticator_parameters.first_degrees_of_freedom).IgnoreError();
   absl::Status status;
-  status = ephemeris_->FlowWithAdaptiveStep(
-      &prognostication,
-      Ephemeris<Barycentric>::NoIntrinsicAcceleration,
-      ephemeris_->t_max(),
-      prognosticator_parameters.adaptive_step_parameters,
-      FlightPlan::max_ephemeris_steps_per_frame,
-      prognosticator_parameters.subsystem);
+  if (prognosticator_parameters.on_rails_burn.has_value()) {
+    // Anticipate the on-rails burn continuing until its propellant runs out,
+    // integrating exactly to the cutoff; the coasting flows below take over
+    // from there.
+    OnRailsBurn const& burn = *prognosticator_parameters.on_rails_burn;
+    Variation<Mass> const mass_flow = burn.thrust / burn.specific_impulse;
+    Instant const initial_time = prognosticator_parameters.first_time;
+    Time const duration =
+        std::min(burn.max_duration,
+                 0.99 * prognosticator_parameters.on_rails_burn_initial_mass /
+                     mass_flow);
+    Instant const final_time = initial_time + duration;
+    auto const intrinsic_acceleration =
+        [burn,
+         initial_mass = prognosticator_parameters.on_rails_burn_initial_mass,
+         mass_flow,
+         initial_time,
+         final_time](Instant const& time) {
+          return ThrustAcceleration(time,
+                                    burn.direction,
+                                    burn.thrust,
+                                    initial_mass,
+                                    mass_flow,
+                                    initial_time,
+                                    final_time);
+        };
+    status = ephemeris_->FlowWithAdaptiveStep(
+        &prognostication,
+        intrinsic_acceleration,
+        final_time,
+        prognosticator_parameters.adaptive_step_parameters,
+        FlightPlan::max_ephemeris_steps_per_frame,
+        prognosticator_parameters.subsystem);
+  }
+  if (status.ok()) {
+    status = ephemeris_->FlowWithAdaptiveStep(
+        &prognostication,
+        Ephemeris<Barycentric>::NoIntrinsicAcceleration,
+        ephemeris_->t_max(),
+        prognosticator_parameters.adaptive_step_parameters,
+        FlightPlan::max_ephemeris_steps_per_frame,
+        prognosticator_parameters.subsystem);
+  }
   bool const reached_t_max = status.ok();
   if (reached_t_max) {
     // This will prolong the ephemeris by `max_ephemeris_steps_per_frame`.
