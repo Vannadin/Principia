@@ -365,10 +365,21 @@ XYZ __cdecl principia__FlightPlanGetManoeuvreInitialPlottedVelocity(
       {plugin, vessel_guid, index});
   CHECK(plugin != nullptr);
 
-  auto const& [t, dof] =
-      GetFlightPlan(*plugin, vessel_guid).GetSegment(2 * index)->back();
+  FlightPlan const& flight_plan = GetFlightPlan(*plugin, vessel_guid);
+  auto const& [t, dof] = flight_plan.GetSegment(2 * index)->back();
+  DegreesOfFreedom<Barycentric> converted_degrees_of_freedom = dof;
+  if (int const plotting_subsystem =
+          plugin->renderer().GetPlottingFrame()->subsystem();
+      flight_plan.subsystem() != plotting_subsystem) {
+    converted_degrees_of_freedom = {
+        dof.position() +
+            flight_plan.ephemeris().subsystem_conversion(
+                flight_plan.subsystem(), plotting_subsystem),
+        dof.velocity()};
+  }
   Velocity<Navigation> const v =
-      plugin->renderer().BarycentricToPlotting(t)(dof).velocity();
+      plugin->renderer().BarycentricToPlotting(t)(
+          converted_degrees_of_freedom).velocity();
   return m.Return(ToXYZ(plugin->renderer().PlottingToWorld(
       plugin->CurrentTime(), plugin->PlanetariumRotation())(v)));
 }
