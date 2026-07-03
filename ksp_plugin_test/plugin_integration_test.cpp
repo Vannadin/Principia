@@ -32,6 +32,7 @@
 #include "physics/massive_body.hpp"
 #include "physics/solar_system.hpp"
 #include "quantities/astronomy.hpp"
+#include "quantities/named_quantities.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
@@ -70,6 +71,7 @@ using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_astronomy;
+using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_approximate_quantity;
@@ -507,6 +509,190 @@ TEST_F(PluginIntegrationTestWithoutPlugin, Prediction) {
       AbsoluteErrorFrom(Displacement<World>({1 * Metre, 0 * Metre, 0 * Metre}) +
                             World::origin,
                         IsNear(29_(1) * Milli(Metre))));
+}
+
+// An end-to-end test of the partitioning of a multi-star system into
+// subsystems: a vessel coasts from one star system to another one
+// 4 × 10¹⁶ m away, and its representation gets rebased on the way.  The
+// parent-relative degrees of freedom and the rendered trajectory must remain
+// consistent throughout, and the state must survive a save/load cycle.
+TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                            /*parent_index=*/std::nullopt,
+                                            gravity_model,
+                                            initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                            /*parent_index=*/star_a,
+                                            gravity_model,
+                                            initial_state);
+  }
+  plugin->EndInitialization();
+
+  // The system was partitioned into two subsystems.
+  EXPECT_NE(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetCelestial(star_b).subsystem());
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid,
+                            vessel_name,
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  Vector<double, AliceSun> const to_star_b =
+      Normalize(plugin->CelestialFromParent(star_b).displacement());
+  Speed const v = 1e12 * Metre / Second;
+  plugin->InsertUnloadedPart(
+      part_id,
+      part_name,
+      vessel_guid,
+      {(1e9 * Metre) * to_star_b, v * to_star_b});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  int const initial_subsystem = vessel.subsystem();
+  EXPECT_EQ(plugin->GetCelestial(star_a).subsystem(), initial_subsystem);
+
+  // Coast past the midpoint of the void; the rebase happens there.
+  Time const δt = 1200 * Second;
+  Instant const t_final = Instant() + 24'000 * Second;
+  int rebases = 0;
+  int previous_subsystem = initial_subsystem;
+  std::optional<Displacement<AliceSun>> previous_displacement;
+  for (Instant t = Instant() + δt; t <= t_final; t += δt) {
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid,
+                              vessel_name,
+                              star_a,
+                              /*loaded=*/false,
+                              inserted);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+
+    auto const from_parent = plugin->VesselFromParent(star_a, vessel_guid);
+    if (previous_displacement.has_value()) {
+      // The motion seen through `VesselFromParent` is continuous across the
+      // rebase.
+      EXPECT_THAT((from_parent.displacement() - *previous_displacement).Norm(),
+                  RelativeErrorFrom(v * δt, Lt(1e-6)));
+    }
+    previous_displacement = from_parent.displacement();
+    if (vessel.subsystem() != previous_subsystem) {
+      previous_subsystem = vessel.subsystem();
+      ++rebases;
+    }
+  }
+  EXPECT_EQ(1, rebases);
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(), vessel.subsystem());
+
+  // The distance from star B to its parent star A is unaffected by their
+  // distinct representations.
+  EXPECT_THAT(plugin->CelestialFromParent(star_b).displacement().Norm(),
+              AbsoluteErrorFrom(4e16 * Metre, Lt(1 * Kilo(Metre))));
+
+  // The rendered trajectory is consistent whether it is plotted in a frame
+  // centred on the origin star or one centred on the destination star, and it
+  // puts the vessel at its true distance from star A (the sun, anchored at
+  // `World::origin`).
+  Length const expected_distance = 1e9 * Metre + v * (t_final - Instant());
+  auto const& trajectory = vessel.trajectory();
+  auto const render_distance = [&](Index const centre) {
+    plugin->renderer().SetPlottingFrame(
+        plugin->NewBodyCentredNonRotatingNavigationFrame(centre));
+    auto const rendered = plugin->renderer().RenderBarycentricTrajectoryInWorld(
+        plugin->CurrentTime(),
+        trajectory.begin(),
+        trajectory.end(),
+        World::origin,
+        plugin->PlanetariumRotation(),
+        vessel.subsystem());
+    return (rendered.back().degrees_of_freedom.position() - World::origin)
+        .Norm();
+  };
+  Length const rendered_around_a = render_distance(star_a);
+  Length const rendered_around_b = render_distance(star_b);
+  EXPECT_THAT(rendered_around_a,
+              AbsoluteErrorFrom(expected_distance, Lt(1e6 * Metre)));
+  EXPECT_THAT(rendered_around_b,
+              AbsoluteErrorFrom(rendered_around_a, Lt(100 * Metre)));
+
+  // Save and reload; the vessel keeps its representation and its state.  Only
+  // one `Plugin` may exist at a time, so destroy it before reading.
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  int const subsystem_before_save = vessel.subsystem();
+  plugin = nullptr;
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+  auto const& vessel2 = *plugin2->GetVessel(vessel_guid);
+  EXPECT_EQ(subsystem_before_save, vessel2.subsystem());
+  EXPECT_THAT(
+      plugin2->VesselFromParent(star_a, vessel_guid).displacement().Norm(),
+      AbsoluteErrorFrom(previous_displacement->Norm(), Lt(100 * Metre)));
+
+  // Keep flying after the reload.
+  for (Instant t = t_final + δt; t <= t_final + 2 * δt; t += δt) {
+    plugin2->AdvanceTime(t, 1 * Radian);
+    plugin2->InsertOrKeepVessel(vessel_guid,
+                                vessel_name,
+                                star_a,
+                                /*loaded=*/false,
+                                inserted);
+    VesselSet collided_vessels;
+    plugin2->CatchUpLaggingVessels(collided_vessels);
+    auto const from_parent = plugin2->VesselFromParent(star_a, vessel_guid);
+    EXPECT_THAT((from_parent.displacement() - *previous_displacement).Norm(),
+                RelativeErrorFrom(v * δt, Lt(1e-6)));
+    previous_displacement = from_parent.displacement();
+  }
 }
 
 }  // namespace ksp_plugin

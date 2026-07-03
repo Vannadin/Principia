@@ -84,6 +84,13 @@ namespace {
 // Keep this consistent with `prediction_steps_` in `main_window.cs`.
 constexpr std::int64_t max_steps_in_prediction = 1 << 24;
 
+// Bodies chained within this distance form a single subsystem; the bodies of a
+// multi-star system get partitioned into subsystems whose positions are
+// represented relative to local origins (see `ClusterSubsystems`).  Keep this
+// below `rebase_distance_threshold` in vessel.cpp, which is the point at which
+// a vessel switches representations.
+constexpr Length subsystem_clustering_threshold = 1e14 * Metre;
+
 Length const& MaxCollisionError() {
   static Length const max_collision_error = []() {
     std::string_view const name = "max_collision_error";
@@ -251,15 +258,12 @@ void Plugin::EndInitialization() {
   }
 
   // Construct the ephemeris.
-  // TODO(nearstars): once the consumers of celestial and vessel positions
-  // (parent-relative interface, vessel integration, reference frames, apsides)
-  // understand per-subsystem representations, pass a subsystem clustering
-  // threshold here to partition multi-star systems.
   ephemeris_ =
       solar_system.MakeEphemeris(ephemeris_accuracy_parameters_.value_or(
                                      DefaultEphemerisAccuracyParameters()),
                                  ephemeris_fixed_step_parameters_.value_or(
-                                     DefaultEphemerisFixedStepParameters()));
+                                     DefaultEphemerisFixedStepParameters()),
+                                 subsystem_clustering_threshold);
 
   // Construct the celestials using the bodies from the ephemeris.
   for (std::string const& name : solar_system.names()) {
