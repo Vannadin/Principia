@@ -63,6 +63,10 @@ PileUp::PileUp(
   subsystem_ = parts_.front()->subsystem();
   MechanicalSystem<Barycentric, NonRotatingPileUp> mechanical_system;
   for (not_null<Part*> const part : parts_) {
+    // Parts in contact are aeons away from a subsystem boundary, so their
+    // vessels must all have rebased consistently.
+    CHECK_EQ(part->subsystem(), subsystem_)
+        << "Pile up with parts in distinct subsystems";
     mechanical_system.AddRigidBody(
         part->rigid_motion(), part->mass(), part->inertia_tensor());
   }
