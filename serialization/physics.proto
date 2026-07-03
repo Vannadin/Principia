@@ -194,10 +194,10 @@ message Ephemeris {
   optional IntegratorInstance instance = 9;  // Pre-Grassmann.
   optional Point checkpoint_time = 12;  // Added in Fatou, removed in Grassmann.
   repeated Checkpoint checkpoint = 13;  // Added in Grassmann.
-  // Added for per-subsystem local origins; absent for a single subsystem.
-  // `body_subsystem` is parallel to `body`.
+  // Absent for a single subsystem; `body_subsystem` is parallel to `body`.
+  // Added in NearStars.
   repeated int32 body_subsystem = 14;
-  repeated DoublePrecision subsystem_origin_offset = 15;
+  repeated DoublePrecision subsystem_origin_offset = 15;  // Added in NearStars.
 
   // Pre-Fatou.
   reserved 11;

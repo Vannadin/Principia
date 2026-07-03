@@ -559,8 +559,8 @@ FlightPlanOptimizer::EvaluateClosestPeriapsis(
     bool const extend_if_needed) const {
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
-      flight_plan_->ephemeris().subsystem_conversion(celestial.subsystem(),
-                                                     flight_plan_->subsystem()));
+      flight_plan_->ephemeris().subsystem_conversion(
+          celestial.subsystem(), flight_plan_->subsystem()));
   auto const& vessel_trajectory = flight_plan_->GetAllSegments();
 
   Length distance_at_closest_periapsis;
@@ -662,8 +662,8 @@ Length FlightPlanOptimizer::EvaluateDistanceToCelestialWithReplacement(
       celestial, homogeneous_argument, manœuvre, index);
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
-      flight_plan_->ephemeris().subsystem_conversion(celestial.subsystem(),
-                                                     flight_plan_->subsystem()));
+      flight_plan_->ephemeris().subsystem_conversion(
+          celestial.subsystem(), flight_plan_->subsystem()));
   return (degrees_of_freedom.position() -
           celestial_trajectory.EvaluatePosition(time)).Norm();
 }
