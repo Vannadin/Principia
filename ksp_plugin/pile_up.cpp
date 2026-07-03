@@ -1,5 +1,6 @@
 #include "ksp_plugin/pile_up.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <future>
 #include <iterator>
@@ -20,6 +21,7 @@
 #include "geometry/signature.hpp"
 #include "geometry/space.hpp"
 #include "ksp_plugin/integrators.hpp"
+#include "ksp_plugin/manœuvre.hpp"
 #include "ksp_plugin/part.hpp"
 #include "numerics/davenport_q_method.hpp"
 #include "quantities/si.hpp"
@@ -37,6 +39,7 @@ using namespace principia::geometry::_rotation;
 using namespace principia::geometry::_signature;
 using namespace principia::geometry::_space;
 using namespace principia::ksp_plugin::_integrators;
+using namespace principia::ksp_plugin::_manœuvre;
 using namespace principia::ksp_plugin::_part;
 using namespace principia::numerics::_davenport_q_method;
 using namespace principia::quantities::_si;
@@ -44,6 +47,13 @@ using namespace principia::quantities::_si;
 const auto part_x = Vector<double, RigidPart>({1, 0, 0});
 const auto part_y = Vector<double, RigidPart>({0, 1, 0});
 const auto part_z = Vector<double, RigidPart>({0, 0, 1});
+
+bool operator==(OnRailsBurn const& left, OnRailsBurn const& right) {
+  return left.thrust == right.thrust &&
+         left.specific_impulse == right.specific_impulse &&
+         left.direction == right.direction &&
+         left.max_duration == right.max_duration;
+}
 
 PileUp::PileUp(
     std::list<not_null<Part*>> parts,
@@ -102,6 +112,24 @@ std::list<not_null<Part*>> const& PileUp::parts() const {
 Ephemeris<Barycentric>::FixedStepParameters const&
 PileUp::fixed_step_parameters() const {
   return fixed_step_parameters_;
+}
+
+Mass const& PileUp::mass() const {
+  return mass_;
+}
+
+void PileUp::set_on_rails_burn(OnRailsBurn const& on_rails_burn) {
+  absl::MutexLock l(lock_.get());
+  on_rails_burn_ = on_rails_burn;
+}
+
+void PileUp::clear_on_rails_burn() {
+  absl::MutexLock l(lock_.get());
+  on_rails_burn_.reset();
+}
+
+std::optional<OnRailsBurn> const& PileUp::on_rails_burn() const {
+  return on_rails_burn_;
 }
 
 void PileUp::SetPartApparentRigidMotion(
@@ -591,7 +619,9 @@ void PileUp::DeformPileUpIfNeeded(Instant const& t) {
 absl::Status PileUp::AdvanceTime(Instant const& t) {
   absl::Status status;
   Instant const history_last = history_->back().time;
-  if (intrinsic_force_ == Vector<Force, Barycentric>{}) {
+  bool const has_intrinsic_force =
+      intrinsic_force_ != Vector<Force, Barycentric>{};
+  if (!has_intrinsic_force && !on_rails_burn_.has_value()) {
     // Remove the fork.
     trajectory_.DeleteSegments(psychohistory_);
     if (fixed_instance_ == nullptr) {
@@ -632,15 +662,61 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
       trajectory_.Append(it->time, it->degrees_of_freedom).IgnoreError();
     }
 
-    auto const intrinsic_acceleration =
-        [a = intrinsic_force_ / mass_](Instant const& /*t*/) { return a; };
-    status = ephemeris_->FlowWithAdaptiveStep(
-        &trajectory_,
-        intrinsic_acceleration,
-        t,
-        adaptive_step_parameters_,
-        Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-        subsystem_);
+    if (has_intrinsic_force) {
+      // If the game hands us both an intrinsic force and an on-rails burn, the
+      // force, which comes from real physics, wins.
+      auto const intrinsic_acceleration =
+          [a = intrinsic_force_ / mass_](Instant const& /*t*/) { return a; };
+      status = ephemeris_->FlowWithAdaptiveStep(
+          &trajectory_,
+          intrinsic_acceleration,
+          t,
+          adaptive_step_parameters_,
+          Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
+          subsystem_);
+    } else {
+      OnRailsBurn const& burn = *on_rails_burn_;
+      Variation<Mass> const mass_flow = burn.thrust / burn.specific_impulse;
+      Instant const initial_time = trajectory_.back().time;
+      // Cut the burn off before it consumes the entire mass of the pile up, in
+      // case the game hands us inconsistent numbers.
+      Time const duration =
+          std::min(burn.max_duration, 0.99 * mass_ / mass_flow);
+      Instant const final_time = initial_time + duration;
+      auto const intrinsic_acceleration =
+          [burn, initial_mass = mass_, mass_flow, initial_time, final_time](
+              Instant const& time) {
+            return ThrustAcceleration(time,
+                                      burn.direction,
+                                      burn.thrust,
+                                      initial_mass,
+                                      mass_flow,
+                                      initial_time,
+                                      final_time);
+          };
+      // Integrate the burn exactly to its end, so that the flow never crosses
+      // the acceleration discontinuity at the cutoff; if the propellant runs
+      // out before `t`, coast the rest of the way.
+      status = ephemeris_->FlowWithAdaptiveStep(
+          &trajectory_,
+          intrinsic_acceleration,
+          std::min(final_time, t),
+          adaptive_step_parameters_,
+          Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
+          subsystem_);
+      mass_ -= std::min(trajectory_.back().time - initial_time, duration) *
+               mass_flow;
+      on_rails_burn_.reset();
+      if (status.ok() && trajectory_.back().time < t) {
+        status.Update(ephemeris_->FlowWithAdaptiveStep(
+            &trajectory_,
+            Ephemeris<Barycentric>::NoIntrinsicAcceleration,
+            t,
+            adaptive_step_parameters_,
+            Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
+            subsystem_));
+      }
+    }
     psychohistory_ = trajectory_.NewSegment();
   }
 

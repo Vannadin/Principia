@@ -91,6 +91,23 @@ using PileUpPrincipalAxes = Frame<serialization::Frame::PluginTag,
                                   Handedness::Right,
                                   serialization::Frame::PILE_UP_PRINCIPAL_AXES>;
 
+// An engine burn applied while the pile up is on rails (packed under
+// timewarp): constant thrust, specific impulse, and inertially fixed
+// direction, lasting at most `max_duration` from the point at which it is
+// applied.  Like the intrinsic force, this is transient state re-established
+// by the game on every frame; it is not serialized.
+struct OnRailsBurn {
+  Force thrust;
+  // Specific impulse by mass; see `Manœuvre::Burn::specific_impulse`.
+  SpecificImpulse specific_impulse;
+  Vector<double, Barycentric> direction;
+  // The time it takes to exhaust the propellant that was available when the
+  // burn was set.
+  Time max_duration;
+};
+
+bool operator==(OnRailsBurn const& left, OnRailsBurn const& right);
+
 // A `PileUp` handles a connected component of the graph of `Parts` under
 // physical contact.  It advances the history and psychohistory of its component
 // `Parts`, modeling them as a massless body at their centre of mass.
@@ -119,6 +136,18 @@ class PileUp {
   std::list<not_null<Part*>> const& parts() const;
   Ephemeris<Barycentric>::FixedStepParameters const& fixed_step_parameters()
       const;
+
+  // The mass of this pile up, as of the last `RecomputeFromParts`, less any
+  // propellant consumed by an on-rails burn since.
+  Mass const& mass() const;
+
+  // Sets or clears the burn applied by `AdvanceTime` in the absence of an
+  // intrinsic force.  The burn is consumed by `AdvanceTime`: it applies to a
+  // single call, and the game must set it again before the next one.  Must not
+  // be called while the pile-up is being advanced.
+  void set_on_rails_burn(OnRailsBurn const& on_rails_burn);
+  void clear_on_rails_burn();
+  std::optional<OnRailsBurn> const& on_rails_burn() const;
 
   // Set the rigid motion for the given `part`.  This rigid motion is *apparent*
   // in the sense that it was reported by the game but we know better since we
@@ -215,6 +244,10 @@ class PileUp {
   // assume that lost mass carries angular momentum in such a way that the
   // angular velocity of a part remains constant.
   Bivector<AngularMomentum, NonRotatingPileUp> angular_momentum_change_;
+
+  // Set by the game on every frame where the engines burn on rails, consumed
+  // by `AdvanceTime`.  Not serialized.
+  std::optional<OnRailsBurn> on_rails_burn_;
 
   // The trajectory of the pile-up, composed of (at most) two segments, the
   // history and the psychohistory.

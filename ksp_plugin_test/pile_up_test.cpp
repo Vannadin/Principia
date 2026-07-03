@@ -41,12 +41,14 @@
 #include "testing_utilities/almost_equals.hpp"
 #include "testing_utilities/componentwise.hpp"
 #include "testing_utilities/matchers.hpp"
+#include "testing_utilities/numerics_matchers.hpp"
 
 namespace principia {
 namespace ksp_plugin {
 
 using ::testing::DoAll;
 using ::testing::IsEmpty;
+using ::testing::Lt;
 using ::testing::MockFunction;
 using ::testing::Return;
 using ::testing::_;
@@ -78,6 +80,7 @@ using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_almost_equals;
 using namespace principia::testing_utilities::_componentwise;
 using namespace principia::testing_utilities::_matchers;
+using namespace principia::testing_utilities::_numerics_matchers;
 
 // A helper class to expose the internal state of a pile-up for testing.
 class TestablePileUp : public PileUp {
@@ -343,6 +346,88 @@ TEST_F(PileUpTest, MidStepIntrinsicForce) {
   EXPECT_THAT(
       p1_.rigid_motion()({RigidPart::origin, RigidPart::unmoving}).velocity(),
       AlmostEquals(old_velocity + 0.5 * fixed_step * a, 1));
+}
+
+TEST_F(PileUpTest, OnRailsBurn) {
+  // The same quasi-empty ephemeris as in `MidStepIntrinsicForce`.
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.emplace_back(make_not_null_unique<MassiveBody>(1 * Kilogram));
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      DegreesOfFreedom<Barycentric>{
+          Barycentric::origin +
+              Displacement<Barycentric>(
+                  {std::pow(2, 100) * Metre, 0 * Metre, 0 * Metre}),
+          Barycentric::unmoving}};
+  Ephemeris<Barycentric> ephemeris{
+      std::move(bodies),
+      initial_state,
+      /*initial_time=*/J2000,
+      /*accuracy_parameters=*/{/*fitting_tolerance=*/1 * Metre,
+                               /*geopotential_tolerance=*/0x1p-24},
+      Ephemeris<Barycentric>::FixedStepParameters{
+          SymplecticRungeKuttaNyströmIntegrator<
+              BlanesMoan2002SRKN6B,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          1 * Second}};
+
+  Time const fixed_step = 10 * Second;
+
+  EXPECT_CALL(deletion_callback_, Call()).Times(1);
+  TestablePileUp pile_up({&p1_}, J2000,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         deletion_callback_.AsStdFunction());
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 1.5 * fixed_step));
+  pile_up.NudgeParts();
+
+  auto const velocity = [this]() {
+    return p1_.rigid_motion()({RigidPart::origin, RigidPart::unmoving})
+        .velocity();
+  };
+  Vector<double, Barycentric> const direction({1, 0, 0});
+  Force const thrust = 2 * Newton;
+  SpecificImpulse const specific_impulse = 100 * Metre / Second;
+  Variation<Mass> const mass_flow = thrust / specific_impulse;
+
+  // A burn whose propellant outlasts the step: it thrusts over the entire
+  // [1.5 fixed_step, 2 fixed_step] interval, gaining Циолковский's Δv.
+  Velocity<Barycentric> const v0 = velocity();
+  Mass const m0 = pile_up.mass();
+  EXPECT_THAT(m0, AlmostEquals(mass1_, 0));
+  pile_up.set_on_rails_burn(
+      {thrust, specific_impulse, direction, /*max_duration=*/1 * Hour});
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 2 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT(pile_up.mass(),
+              AlmostEquals(m0 - 0.5 * fixed_step * mass_flow, 0, 1));
+  EXPECT_FALSE(pile_up.on_rails_burn().has_value());
+  Speed const Δv1 = specific_impulse * std::log(m0 / pile_up.mass());
+  EXPECT_THAT((velocity() - v0).Norm(),
+              AbsoluteErrorFrom(Δv1, Lt(1e-6 * Metre / Second)));
+  EXPECT_THAT((velocity() - v0).coordinates().x,
+              AbsoluteErrorFrom(Δv1, Lt(1e-6 * Metre / Second)));
+
+  // A burn that exhausts its propellant midway through the step, coasting
+  // beyond, and consuming only the propellant it actually burned.
+  Velocity<Barycentric> const v1 = velocity();
+  Mass const m1 = pile_up.mass();
+  Time const burn_duration = 2 * Second;
+  pile_up.set_on_rails_burn(
+      {thrust, specific_impulse, direction, burn_duration});
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 3 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT(pile_up.mass(),
+              AlmostEquals(m1 - burn_duration * mass_flow, 0, 1));
+  Speed const Δv2 = specific_impulse * std::log(m1 / pile_up.mass());
+  EXPECT_THAT((velocity() - v1).Norm(),
+              AbsoluteErrorFrom(Δv2, Lt(1e-6 * Metre / Second)));
+
+  // With no burn set, the next step is a pure coast.
+  Velocity<Barycentric> const v2 = velocity();
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 4 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT(velocity(), AlmostEquals(v2, 0, 8));
 }
 
 TEST_F(PileUpTest, Serialization) {
