@@ -17,6 +17,22 @@ using std::placeholders::_1;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_rigid_motion;
 
+template<typename Frame>
+Vector<Acceleration, Frame> ThrustAcceleration(
+    Instant const& t,
+    Vector<double, Frame> const& direction,
+    Force const& thrust,
+    Mass const& initial_mass,
+    Variation<Mass> const& mass_flow,
+    Instant const& initial_time,
+    Instant const& final_time) {
+  if (t >= initial_time && t <= final_time) {
+    return direction * thrust / (initial_mass - (t - initial_time) * mass_flow);
+  } else {
+    return Vector<Acceleration, Frame>();
+  }
+}
+
 template<typename InertialFrame, typename Frame>
 Manœuvre<InertialFrame, Frame>::Manœuvre(Mass const& initial_mass,
                                          Burn const& burn)
@@ -269,12 +285,13 @@ Vector<Acceleration, InertialFrame>
 Manœuvre<InertialFrame, Frame>::ComputeIntrinsicAcceleration(
     Instant const& t,
     Vector<double, InertialFrame> const& direction) const {
-  if (t >= initial_time() && t <= final_time()) {
-    return direction * thrust() /
-           (initial_mass_ - (t - initial_time()) * mass_flow());
-  } else {
-    return Vector<Acceleration, InertialFrame>();
-  }
+  return ThrustAcceleration(t,
+                            direction,
+                            thrust(),
+                            initial_mass_,
+                            mass_flow(),
+                            initial_time(),
+                            final_time());
 }
 
 template<typename InertialFrame, typename Frame>

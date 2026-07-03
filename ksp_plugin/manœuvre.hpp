@@ -35,6 +35,20 @@ using namespace principia::physics::_rigid_reference_frame;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 
+// The acceleration, at time `t`, of a vessel of mass `initial_mass` at
+// `initial_time`, subject to a constant `thrust` along `direction` over
+// [`initial_time`, `final_time`] and losing mass at `mass_flow`; zero outside
+// the burn window.
+template<typename Frame>
+Vector<Acceleration, Frame> ThrustAcceleration(
+    Instant const& t,
+    Vector<double, Frame> const& direction,
+    Force const& thrust,
+    Mass const& initial_mass,
+    Variation<Mass> const& mass_flow,
+    Instant const& initial_time,
+    Instant const& final_time);
+
 // This class represents a constant-thrust burn.  `InertialFrame` is an
 // underlying inertial reference frame, `Frame` is the reference frame used to
 // compute the Frenet frame.
@@ -180,6 +194,7 @@ class Manœuvre {
 }  // namespace internal
 
 using internal::Manœuvre;
+using internal::ThrustAcceleration;
 
 }  // namespace _manœuvre
 }  // namespace ksp_plugin
