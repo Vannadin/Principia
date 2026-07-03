@@ -27,8 +27,6 @@
 #include "integrators/methods.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/identification.hpp"
-#include "ksp_plugin/part.hpp"
-#include "ksp_plugin/pile_up.hpp"
 #include "numerics/elementary_functions.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/ephemeris.hpp"
@@ -68,8 +66,6 @@ using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_
 using namespace principia::integrators::_methods;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
-using namespace principia::ksp_plugin::_part;
-using namespace principia::ksp_plugin::_pile_up;
 using namespace principia::ksp_plugin::_plugin;
 using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_degrees_of_freedom;
@@ -571,21 +567,16 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurn) {
   plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
 
   auto& vessel = *plugin->GetVessel(vessel_guid);
-  auto const pile_up_mass = [&vessel]() {
-    Mass mass;
-    vessel.ForSomePart([&mass](Part& part) {
-      mass = part.containing_pile_up()->mass();
-    });
-    return mass;
-  };
 
   Force const thrust = 1 * Newton;
   SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
   Variation<Mass> const mass_flow = thrust / specific_impulse;
   Time const δt = 100 * Second;
 
-  // Three frames of burning under warp.
-  Mass const m0 = pile_up_mass();
+  // Three frames of burning under warp; the game owns the mass bookkeeping,
+  // handing the current mass to each catch-up.
+  Mass const m0 = 1 * Kilogram;
+  Mass m = m0;
   Velocity<AliceSun> const v0 =
       plugin->VesselFromParent(star, vessel_guid).velocity();
   Instant t;
@@ -600,16 +591,21 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurn) {
     plugin->SetVesselOnRailsBurn(vessel_guid,
                                  thrust,
                                  specific_impulse,
-                                 Vector<double, World>({1, 0, 0}),
+                                 /*initial_mass=*/m,
+                                 Vector<double, World>({0, 1, 0}),
                                  /*max_duration=*/1 * Hour);
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
+    m -= δt * mass_flow;
   }
-  EXPECT_THAT(pile_up_mass(), AlmostEquals(m0 - 3 * δt * mass_flow, 0, 4));
-  Speed const Δv = specific_impulse * std::log(m0 / pile_up_mass());
-  Velocity<AliceSun> const v1 =
-      plugin->VesselFromParent(star, vessel_guid).velocity();
-  EXPECT_THAT((v1 - v0).Norm(), RelativeErrorFrom(Δv, Lt(1e-3)));
+  Speed const Δv = specific_impulse * std::log(m0 / m);
+  Velocity<AliceSun> const Δv_vector =
+      plugin->VesselFromParent(star, vessel_guid).velocity() - v0;
+  EXPECT_THAT(Δv_vector.Norm(), RelativeErrorFrom(Δv, Lt(1e-3)));
+  // `World` and `AliceSun` differ by the XZY permutation (and the planetarium
+  // rotation, which cancels between the burn conversion and `FromParent`):
+  // the y direction commanded in `World` must come out along z.
+  EXPECT_THAT(Δv_vector.coordinates().z, RelativeErrorFrom(Δv, Lt(1e-3)));
 
   // The prediction anticipates the burn continuing until its propellant runs
   // out.

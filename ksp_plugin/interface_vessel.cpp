@@ -108,6 +108,7 @@ void __cdecl principia__VesselSetOnRailsBurn(
     char const* const vessel_guid,
     double const thrust_in_kilonewtons,
     double const specific_impulse_in_seconds_g0,
+    double const initial_mass_in_tonnes,
     XYZ const direction,
     double const max_duration) {
   journal::Method<journal::VesselSetOnRailsBurn> m(
@@ -115,6 +116,7 @@ void __cdecl principia__VesselSetOnRailsBurn(
        vessel_guid,
        thrust_in_kilonewtons,
        specific_impulse_in_seconds_g0,
+       initial_mass_in_tonnes,
        direction,
        max_duration});
   CHECK(plugin != nullptr);
@@ -122,6 +124,7 @@ void __cdecl principia__VesselSetOnRailsBurn(
       vessel_guid,
       thrust_in_kilonewtons * Kilo(Newton),
       specific_impulse_in_seconds_g0 * Second * StandardGravity,
+      initial_mass_in_tonnes * Tonne,
       Vector<double, World>(FromXYZ(direction)),
       max_duration * Second);
   return m.Return();

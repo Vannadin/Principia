@@ -16,6 +16,7 @@
 #include "base/pull_serializer.hpp"
 #include "base/push_deserializer.hpp"
 #include "base/serialization.hpp"
+#include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
 #include "geometry/space.hpp"
 #include "gmock/gmock.h"
@@ -32,6 +33,7 @@
 #include "physics/massive_body.hpp"
 #include "physics/mock_rigid_reference_frame.hpp"
 #include "physics/rigid_reference_frame.hpp"
+#include "quantities/constants.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
@@ -60,6 +62,7 @@ using namespace principia::base::_not_null;
 using namespace principia::base::_pull_serializer;
 using namespace principia::base::_push_deserializer;
 using namespace principia::base::_serialization;
+using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
 using namespace principia::geometry::_space;
 using namespace principia::journal::_recorder;
@@ -73,6 +76,7 @@ using namespace principia::physics::_frame_field;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_mock_rigid_reference_frame;
 using namespace principia::physics::_rigid_reference_frame;
+using namespace principia::quantities::_constants;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
@@ -178,6 +182,18 @@ TEST_F(InterfaceDeathTestWithoutPlugin, Errors) {
   }, "plugin.*!= nullptr");
   EXPECT_DEATH({
     principia__VesselFromParent(plugin, celestial_index, vessel_guid);
+  }, "plugin.*!= nullptr");
+  EXPECT_DEATH({
+    principia__VesselSetOnRailsBurn(plugin,
+                                    vessel_guid,
+                                    /*thrust_in_kilonewtons=*/2,
+                                    /*specific_impulse_in_seconds_g0=*/3,
+                                    /*initial_mass_in_tonnes=*/4,
+                                    /*direction=*/{1, 0, 0},
+                                    /*max_duration=*/5);
+  }, "plugin.*!= nullptr");
+  EXPECT_DEATH({
+    principia__VesselClearOnRailsBurn(plugin, vessel_guid);
   }, "plugin.*!= nullptr");
   EXPECT_DEATH({
     principia__CelestialFromParent(plugin, celestial_index);
@@ -479,6 +495,25 @@ TEST_F(InterfaceTest, AdvanceTime) {
               AdvanceTime(t0_ + time * si::Unit<Time>,
                           planetarium_rotation * Degree));
   principia__AdvanceTime(plugin_.get(), time, planetarium_rotation);
+}
+
+TEST_F(InterfaceTest, VesselOnRailsBurn) {
+  EXPECT_CALL(*plugin_,
+              SetVesselOnRailsBurn(vessel_guid,
+                                   2 * Kilo(Newton),
+                                   3 * Second * StandardGravity,
+                                   4 * Tonne,
+                                   Vector<double, World>({1, 0, 0}),
+                                   5 * Second));
+  principia__VesselSetOnRailsBurn(plugin_.get(),
+                                  vessel_guid,
+                                  /*thrust_in_kilonewtons=*/2,
+                                  /*specific_impulse_in_seconds_g0=*/3,
+                                  /*initial_mass_in_tonnes=*/4,
+                                  /*direction=*/{1, 0, 0},
+                                  /*max_duration=*/5);
+  EXPECT_CALL(*plugin_, ClearVesselOnRailsBurn(vessel_guid));
+  principia__VesselClearOnRailsBurn(plugin_.get(), vessel_guid);
 }
 
 TEST_F(InterfaceTest, VesselFromParent) {

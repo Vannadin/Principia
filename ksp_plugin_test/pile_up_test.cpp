@@ -391,35 +391,39 @@ TEST_F(PileUpTest, OnRailsBurn) {
   Variation<Mass> const mass_flow = thrust / specific_impulse;
 
   // A burn whose propellant outlasts the step: it thrusts over the entire
-  // [1.5 fixed_step, 2 fixed_step] interval, gaining Циолковский's Δv.
+  // [1.5 fixed_step, 2 fixed_step] interval, gaining Циолковский's Δv.  The
+  // game owns the mass bookkeeping, so `mass_` is untouched.
   Velocity<Barycentric> const v0 = velocity();
-  Mass const m0 = pile_up.mass();
-  EXPECT_THAT(m0, AlmostEquals(mass1_, 0));
-  pile_up.set_on_rails_burn(
-      {thrust, specific_impulse, direction, /*max_duration=*/1 * Hour});
+  Mass const m0 = mass1_;
+  pile_up.set_on_rails_burn({thrust,
+                             specific_impulse,
+                             /*initial_mass=*/m0,
+                             direction,
+                             /*max_duration=*/1 * Hour});
   EXPECT_OK(pile_up.AdvanceTime(J2000 + 2 * fixed_step));
   pile_up.NudgeParts();
-  EXPECT_THAT(pile_up.mass(),
-              AlmostEquals(m0 - 0.5 * fixed_step * mass_flow, 0, 1));
+  EXPECT_THAT(pile_up.mass(), AlmostEquals(mass1_, 0));
   EXPECT_FALSE(pile_up.on_rails_burn().has_value());
-  Speed const Δv1 = specific_impulse * std::log(m0 / pile_up.mass());
+  Mass const m1 = m0 - 0.5 * fixed_step * mass_flow;
+  Speed const Δv1 = specific_impulse * std::log(m0 / m1);
   EXPECT_THAT((velocity() - v0).Norm(),
               AbsoluteErrorFrom(Δv1, Lt(1e-6 * Metre / Second)));
   EXPECT_THAT((velocity() - v0).coordinates().x,
               AbsoluteErrorFrom(Δv1, Lt(1e-6 * Metre / Second)));
 
   // A burn that exhausts its propellant midway through the step, coasting
-  // beyond, and consuming only the propellant it actually burned.
+  // beyond; the game hands us the mass left by the previous burn.
   Velocity<Barycentric> const v1 = velocity();
-  Mass const m1 = pile_up.mass();
   Time const burn_duration = 2 * Second;
-  pile_up.set_on_rails_burn(
-      {thrust, specific_impulse, direction, burn_duration});
+  pile_up.set_on_rails_burn({thrust,
+                             specific_impulse,
+                             /*initial_mass=*/m1,
+                             direction,
+                             burn_duration});
   EXPECT_OK(pile_up.AdvanceTime(J2000 + 3 * fixed_step));
   pile_up.NudgeParts();
-  EXPECT_THAT(pile_up.mass(),
-              AlmostEquals(m1 - burn_duration * mass_flow, 0, 1));
-  Speed const Δv2 = specific_impulse * std::log(m1 / pile_up.mass());
+  Mass const m2 = m1 - burn_duration * mass_flow;
+  Speed const Δv2 = specific_impulse * std::log(m1 / m2);
   EXPECT_THAT((velocity() - v1).Norm(),
               AbsoluteErrorFrom(Δv2, Lt(1e-6 * Metre / Second)));
 
@@ -428,6 +432,87 @@ TEST_F(PileUpTest, OnRailsBurn) {
   EXPECT_OK(pile_up.AdvanceTime(J2000 + 4 * fixed_step));
   pile_up.NudgeParts();
   EXPECT_THAT(velocity(), AlmostEquals(v2, 0, 8));
+}
+
+TEST_F(PileUpTest, OnRailsBurnPrecedenceAndClear) {
+  // The same quasi-empty ephemeris as in `MidStepIntrinsicForce`.
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.emplace_back(make_not_null_unique<MassiveBody>(1 * Kilogram));
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      DegreesOfFreedom<Barycentric>{
+          Barycentric::origin +
+              Displacement<Barycentric>(
+                  {std::pow(2, 100) * Metre, 0 * Metre, 0 * Metre}),
+          Barycentric::unmoving}};
+  Ephemeris<Barycentric> ephemeris{
+      std::move(bodies),
+      initial_state,
+      /*initial_time=*/J2000,
+      /*accuracy_parameters=*/{/*fitting_tolerance=*/1 * Metre,
+                               /*geopotential_tolerance=*/0x1p-24},
+      Ephemeris<Barycentric>::FixedStepParameters{
+          SymplecticRungeKuttaNyströmIntegrator<
+              BlanesMoan2002SRKN6B,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          1 * Second}};
+
+  Time const fixed_step = 10 * Second;
+
+  EXPECT_CALL(deletion_callback_, Call()).Times(1);
+  TestablePileUp pile_up({&p1_}, J2000,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         deletion_callback_.AsStdFunction());
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 1.5 * fixed_step));
+  pile_up.NudgeParts();
+
+  auto const velocity = [this]() {
+    return p1_.rigid_motion()({RigidPart::origin, RigidPart::unmoving})
+        .velocity();
+  };
+  OnRailsBurn const burn{/*thrust=*/2 * Newton,
+                         /*specific_impulse=*/100 * Metre / Second,
+                         /*initial_mass=*/mass1_,
+                         /*direction=*/Vector<double, Barycentric>({1, 0, 0}),
+                         /*max_duration=*/1 * Hour};
+
+  // An intrinsic force wins over a simultaneous burn, and consumes it.
+  Vector<Acceleration, Barycentric> const a{{3 * Metre / Pow<2>(Second),
+                                             -4 * Metre / Pow<2>(Second),
+                                             12 * Metre / Pow<2>(Second)}};
+  p1_.apply_intrinsic_force(p1_.mass() * a);
+  pile_up.RecomputeFromParts();
+  pile_up.set_on_rails_burn(burn);
+  Velocity<Barycentric> const v0 = velocity();
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 2 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT((velocity() - (v0 + 0.5 * fixed_step * a)).Norm(),
+              Lt(1e-10 * Metre / Second));
+  EXPECT_FALSE(pile_up.on_rails_burn().has_value());
+  EXPECT_FALSE(pile_up.on_rails_burn_for_prediction().has_value());
+
+  // With the force gone and no new burn, the consumed burn must not refire.
+  p1_.clear_intrinsic_force();
+  pile_up.RecomputeFromParts();
+  Velocity<Barycentric> const v1 = velocity();
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 3 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT(velocity(), AlmostEquals(v1, 0, 8));
+
+  // A cleared burn does not fire.
+  pile_up.set_on_rails_burn(burn);
+  pile_up.clear_on_rails_burn();
+  Velocity<Barycentric> const v2 = velocity();
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 4 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT(velocity(), AlmostEquals(v2, 0, 8));
+  EXPECT_FALSE(pile_up.on_rails_burn_for_prediction().has_value());
+
+  // A catch-up with nothing to do still consumes the burn.
+  pile_up.set_on_rails_burn(burn);
+  EXPECT_OK(pile_up.DeformAndAdvanceTime(J2000 + 4 * fixed_step));
+  EXPECT_FALSE(pile_up.on_rails_burn().has_value());
 }
 
 TEST_F(PileUpTest, Serialization) {

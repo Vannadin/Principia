@@ -51,6 +51,7 @@ const auto part_z = Vector<double, RigidPart>({0, 0, 1});
 bool operator==(OnRailsBurn const& left, OnRailsBurn const& right) {
   return left.thrust == right.thrust &&
          left.specific_impulse == right.specific_impulse &&
+         left.initial_mass == right.initial_mass &&
          left.direction == right.direction &&
          left.max_duration == right.max_duration;
 }
@@ -118,10 +119,6 @@ PileUp::fixed_step_parameters() const {
   return fixed_step_parameters_;
 }
 
-Mass const& PileUp::mass() const {
-  return mass_;
-}
-
 void PileUp::set_on_rails_burn(OnRailsBurn const& on_rails_burn) {
   absl::MutexLock l(lock_.get());
   on_rails_burn_ = on_rails_burn;
@@ -133,12 +130,13 @@ void PileUp::clear_on_rails_burn() {
   on_rails_burn_for_prediction_.reset();
 }
 
-std::optional<OnRailsBurn> const& PileUp::on_rails_burn() const {
+std::optional<OnRailsBurn> PileUp::on_rails_burn() const {
+  absl::MutexLock l(lock_.get());
   return on_rails_burn_;
 }
 
-std::optional<OnRailsBurn> const& PileUp::on_rails_burn_for_prediction()
-    const {
+std::optional<OnRailsBurn> PileUp::on_rails_burn_for_prediction() const {
+  absl::MutexLock l(lock_.get());
   return on_rails_burn_for_prediction_;
 }
 
@@ -158,6 +156,9 @@ absl::Status PileUp::DeformAndAdvanceTime(Instant const& t) {
     DeformPileUpIfNeeded(t);
     status = AdvanceTime(t);
     NudgeParts();
+  } else {
+    // The burn arms a single catch-up, even one that has nothing to do.
+    on_rails_burn_.reset();
   }
   return status;
 }
@@ -631,7 +632,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
   Instant const history_last = history_->back().time;
   bool const has_intrinsic_force =
       intrinsic_force_ != Vector<Force, Barycentric>{};
-  on_rails_burn_for_prediction_ = on_rails_burn_;
+  on_rails_burn_for_prediction_.reset();
   if (!has_intrinsic_force && !on_rails_burn_.has_value()) {
     // Remove the fork.
     trajectory_.DeleteSegments(psychohistory_);
@@ -675,7 +676,9 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
 
     if (has_intrinsic_force) {
       // If the game hands us both an intrinsic force and an on-rails burn, the
-      // force, which comes from real physics, wins.
+      // force, which comes from real physics, wins; the burn is consumed
+      // nonetheless.
+      on_rails_burn_.reset();
       auto const intrinsic_acceleration =
           [a = intrinsic_force_ / mass_](Instant const& /*t*/) { return a; };
       status = ephemeris_->FlowWithAdaptiveStep(
@@ -689,22 +692,26 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
       OnRailsBurn const& burn = *on_rails_burn_;
       Variation<Mass> const mass_flow = burn.thrust / burn.specific_impulse;
       Instant const initial_time = trajectory_.back().time;
-      // Cut the burn off before it consumes the entire mass of the pile up, in
-      // case the game hands us inconsistent numbers.
+      // Cut the burn off before it consumes the entire mass of the pile up,
+      // and never let it flow backwards, in case the game hands us
+      // inconsistent numbers.
       Time const duration =
-          std::min(burn.max_duration, 0.99 * mass_ / mass_flow);
+          std::max(Time{},
+                   std::min(burn.max_duration,
+                            0.99 * burn.initial_mass / mass_flow));
       Instant const final_time = initial_time + duration;
       auto const intrinsic_acceleration =
-          [burn, initial_mass = mass_, mass_flow, initial_time, final_time](
-              Instant const& time) {
+          [burn, mass_flow, initial_time, final_time](Instant const& time) {
             return ThrustAcceleration(time,
                                       burn.direction,
                                       burn.thrust,
-                                      initial_mass,
+                                      burn.initial_mass,
                                       mass_flow,
                                       initial_time,
                                       final_time);
           };
+      on_rails_burn_for_prediction_ = burn;
+      on_rails_burn_.reset();
       // Integrate the burn exactly to its end, so that the flow never crosses
       // the acceleration discontinuity at the cutoff; if the propellant runs
       // out before `t`, coast the rest of the way.
@@ -715,9 +722,6 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
           subsystem_);
-      mass_ -= std::min(trajectory_.back().time - initial_time, duration) *
-               mass_flow;
-      on_rails_burn_.reset();
       if (status.ok() && trajectory_.back().time < t) {
         status.Update(ephemeris_->FlowWithAdaptiveStep(
             &trajectory_,

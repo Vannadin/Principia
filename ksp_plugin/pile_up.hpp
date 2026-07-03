@@ -92,14 +92,18 @@ using PileUpPrincipalAxes = Frame<serialization::Frame::PluginTag,
                                   serialization::Frame::PILE_UP_PRINCIPAL_AXES>;
 
 // An engine burn applied while the pile up is on rails (packed under
-// timewarp): constant thrust, specific impulse, and inertially fixed
-// direction, lasting at most `max_duration` from the point at which it is
-// applied.  Like the intrinsic force, this is transient state re-established
+// timewarp).  Like the intrinsic force, this is transient state re-established
 // by the game on every frame; it is not serialized.
 struct OnRailsBurn {
+  // The (constant) total thrust of the engines.
   Force thrust;
   // Specific impulse by mass; see `Manœuvre::Burn::specific_impulse`.
   SpecificImpulse specific_impulse;
+  // The mass of the pile up at the start of the burn.  The game owns the mass
+  // bookkeeping: the masses of the parts are stale while the vessel is
+  // packed, so the pile up cannot compute this itself.
+  Mass initial_mass;
+  // The (inertially fixed) direction of the thrust.
   Vector<double, Barycentric> direction;
   // The time it takes to exhaust the propellant that was available when the
   // burn was set.
@@ -138,21 +142,18 @@ class PileUp {
   Ephemeris<Barycentric>::FixedStepParameters const& fixed_step_parameters()
       const;
 
-  // The mass of this pile up, as of the last `RecomputeFromParts`, less any
-  // propellant consumed by an on-rails burn since.
-  Mass const& mass() const;
-
   // Sets or clears the burn applied by `AdvanceTime` in the absence of an
-  // intrinsic force.  The burn is consumed by `AdvanceTime`: it applies to a
-  // single call, and the game must set it again before the next one.  Must not
-  // be called while the pile-up is being advanced.
+  // intrinsic force (the force, which comes from real physics, takes
+  // precedence).  The burn is consumed by the catch-up whether or not it was
+  // applied: it arms a single call, and the game must set it again before the
+  // next one.
   void set_on_rails_burn(OnRailsBurn const& on_rails_burn);
   void clear_on_rails_burn();
-  std::optional<OnRailsBurn> const& on_rails_burn() const;
+  std::optional<OnRailsBurn> on_rails_burn() const;
 
   // The burn applied by the last `AdvanceTime`, if any; used to make
   // predictions anticipate the thrust.
-  std::optional<OnRailsBurn> const& on_rails_burn_for_prediction() const;
+  std::optional<OnRailsBurn> on_rails_burn_for_prediction() const;
 
   // Set the rigid motion for the given `part`.  This rigid motion is *apparent*
   // in the sense that it was reported by the game but we know better since we

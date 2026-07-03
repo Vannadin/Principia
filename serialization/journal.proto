@@ -2872,8 +2872,9 @@ message VesselSetOnRailsBurn {
     required string vessel_guid = 2;
     required double thrust_in_kilonewtons = 3;
     required double specific_impulse_in_seconds_g0 = 4;
-    required XYZ direction = 5;
-    required double max_duration = 6;
+    required double initial_mass_in_tonnes = 5;
+    required XYZ direction = 6;
+    required double max_duration = 7;
   }
   optional In in = 1;
 }

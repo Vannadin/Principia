@@ -337,10 +337,9 @@ class Vessel {
     // is represented.
     int subsystem = 0;
     // The burn applied by the last catch-up of the containing pile up, if
-    // any, and the mass it applies to; the prognostication anticipates the
-    // burn continuing until its propellant runs out.
+    // any; the prognostication anticipates the burn continuing until its
+    // propellant runs out.
     std::optional<OnRailsBurn> on_rails_burn;
-    Mass on_rails_burn_initial_mass;
   };
   friend bool operator!=(PrognosticatorParameters const& left,
                          PrognosticatorParameters const& right);

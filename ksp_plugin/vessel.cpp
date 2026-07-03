@@ -64,7 +64,6 @@ bool operator!=(Vessel::PrognosticatorParameters const& left,
          left.first_degrees_of_freedom != right.first_degrees_of_freedom ||
          left.subsystem != right.subsystem ||
          left.on_rails_burn != right.on_rails_burn ||
-         left.on_rails_burn_initial_mass != right.on_rails_burn_initial_mass ||
          &left.adaptive_step_parameters.integrator() !=
              &right.adaptive_step_parameters.integrator() ||
          left.adaptive_step_parameters.max_steps() !=
@@ -656,12 +655,10 @@ void Vessel::RefreshPrediction() {
   // therefore the ephemeris currently covers the last time of the
   // psychohistory.  Were this to change, this code might have to change.
   std::optional<OnRailsBurn> on_rails_burn;
-  Mass on_rails_burn_initial_mass;
-  ForSomePart([&on_rails_burn, &on_rails_burn_initial_mass](Part& part) {
+  ForSomePart([&on_rails_burn](Part& part) {
     if (PileUp const* const pile_up = part.containing_pile_up();
         pile_up != nullptr) {
       on_rails_burn = pile_up->on_rails_burn_for_prediction();
-      on_rails_burn_initial_mass = pile_up->mass();
     }
   });
   PrognosticatorParameters prognosticator_parameters{
@@ -669,8 +666,7 @@ void Vessel::RefreshPrediction() {
       .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
       .adaptive_step_parameters = prediction_adaptive_step_parameters_,
       .subsystem = subsystem_,
-      .on_rails_burn = std::move(on_rails_burn),
-      .on_rails_burn_initial_mass = on_rails_burn_initial_mass};
+      .on_rails_burn = std::move(on_rails_burn)};
   if (synchronous_) {
     auto status_or_prognostication =
         FlowPrognostication(std::move(prognosticator_parameters));
@@ -1348,20 +1344,16 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
     Variation<Mass> const mass_flow = burn.thrust / burn.specific_impulse;
     Instant const initial_time = prognosticator_parameters.first_time;
     Time const duration =
-        std::min(burn.max_duration,
-                 0.99 * prognosticator_parameters.on_rails_burn_initial_mass /
-                     mass_flow);
+        std::max(Time{},
+                 std::min(burn.max_duration,
+                          0.99 * burn.initial_mass / mass_flow));
     Instant const final_time = initial_time + duration;
     auto const intrinsic_acceleration =
-        [burn,
-         initial_mass = prognosticator_parameters.on_rails_burn_initial_mass,
-         mass_flow,
-         initial_time,
-         final_time](Instant const& time) {
+        [burn, mass_flow, initial_time, final_time](Instant const& time) {
           return ThrustAcceleration(time,
                                     burn.direction,
                                     burn.thrust,
-                                    initial_mass,
+                                    burn.initial_mass,
                                     mass_flow,
                                     initial_time,
                                     final_time);

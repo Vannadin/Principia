@@ -48,6 +48,7 @@
 #include "physics/translated_trajectory.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/parser.hpp"
+#include "quantities/quantities.hpp"
 
 namespace principia {
 namespace ksp_plugin {
@@ -79,6 +80,7 @@ using namespace principia::physics::_rotating_pulsating_reference_frame;
 using namespace principia::physics::_solar_system;
 using namespace principia::physics::_translated_trajectory;
 using namespace principia::quantities::_parser;
+using namespace principia::quantities::_quantities;
 
 namespace {
 
@@ -924,6 +926,7 @@ not_null<std::unique_ptr<PileUpFuture>> Plugin::CatchUpVessel(
 void Plugin::SetVesselOnRailsBurn(GUID const& vessel_guid,
                                   Force const& thrust,
                                   SpecificImpulse const& specific_impulse,
+                                  Mass const& initial_mass,
                                   Vector<double, World> const& direction,
                                   Time const& max_duration) const {
   CHECK(!initializing_);
@@ -937,12 +940,27 @@ void Plugin::SetVesselOnRailsBurn(GUID const& vessel_guid,
                  << vessel.ShortDebugString();
     return;
   }
-  pile_up->set_on_rails_burn(
-      {.thrust = thrust,
-       .specific_impulse = specific_impulse,
-       .direction = NormalizeOrZero(
-           renderer_->WorldToBarycentric(PlanetariumRotation())(direction)),
-       .max_duration = max_duration});
+  Vector<double, Barycentric> const barycentric_direction = NormalizeOrZero(
+      renderer_->WorldToBarycentric(PlanetariumRotation())(direction));
+  // These are game-fed values; degenerate ones must not crash or corrupt the
+  // integration, so treat them as an absence of burn.
+  if (!(thrust > Force{}) || !IsFinite(thrust) ||
+      !(specific_impulse > SpecificImpulse{}) || !IsFinite(specific_impulse) ||
+      !(initial_mass > Mass{}) || !IsFinite(initial_mass) ||
+      !(max_duration > Time{}) || !IsFinite(max_duration) ||
+      barycentric_direction == Vector<double, Barycentric>{}) {
+    LOG(WARNING) << "Degenerate on-rails burn for vessel "
+                 << vessel.ShortDebugString() << ": " << thrust << ", "
+                 << specific_impulse << ", " << initial_mass << ", "
+                 << direction << ", " << max_duration;
+    pile_up->clear_on_rails_burn();
+    return;
+  }
+  pile_up->set_on_rails_burn({.thrust = thrust,
+                              .specific_impulse = specific_impulse,
+                              .initial_mass = initial_mass,
+                              .direction = barycentric_direction,
+                              .max_duration = max_duration});
 }
 
 void Plugin::ClearVesselOnRailsBurn(GUID const& vessel_guid) const {

@@ -71,6 +71,21 @@ class MockPlugin : public Plugin {
               (Index parent_index, GUID const& vessel_guid),
               (const, override));
 
+  MOCK_METHOD(void,
+              SetVesselOnRailsBurn,
+              (GUID const& vessel_guid,
+               Force const& thrust,
+               SpecificImpulse const& specific_impulse,
+               Mass const& initial_mass,
+               (Vector<double, World> const&) direction,
+               Time const& max_duration),
+              (const, override));
+
+  MOCK_METHOD(void,
+              ClearVesselOnRailsBurn,
+              (GUID const& vessel_guid),
+              (const, override));
+
   MOCK_METHOD(RelativeDegreesOfFreedom<AliceSun>,
               CelestialFromParent,
               (Index celestial_index),
