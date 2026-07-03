@@ -190,6 +190,11 @@ bool Vessel::RebaseIfNeeded() {
   for (auto& flight_plan : flight_plans_) {
     if (auto* const optimizable_flight_plan =
             std::get_if<OptimizableFlightPlan>(&flight_plan)) {
+      // Any optimization in progress operates on a copy of the flight plan in
+      // the old representation; discard it.
+      if (optimizable_flight_plan->optimization_driver != nullptr) {
+        optimizable_flight_plan->optimization_driver->Interrupt();
+      }
       optimizable_flight_plan->flight_plan
           ->Rebase(displacement, subsystem_).IgnoreError();
     }
@@ -389,7 +394,8 @@ bool Vessel::UpdateFlightPlanFromOptimization() {
   }
   std::shared_ptr const last_flight_plan =
       optimization_driver->last_flight_plan();
-  if (flight_plan != last_flight_plan) {
+  if (flight_plan != last_flight_plan &&
+      last_flight_plan->subsystem() == subsystem_) {
     flight_plan = last_flight_plan;
     return true;
   }
