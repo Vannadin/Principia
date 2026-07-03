@@ -2,14 +2,20 @@
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "geometry/grassmann.hpp"
 #include "journal/method.hpp"
 #include "journal/profiles.hpp"  // 🧙 For generated profiles.
+#include "ksp_plugin/frames.hpp"
+#include "quantities/constants.hpp"
 #include "quantities/si.hpp"
 
 namespace principia {
 namespace interface {
 
+using namespace principia::geometry::_grassmann;
 using namespace principia::journal::_method;
+using namespace principia::ksp_plugin::_frames;
+using namespace principia::quantities::_constants;
 using namespace principia::quantities::_si;
 
 XYZ __cdecl principia__VesselBinormal(Plugin const* const plugin,
@@ -17,6 +23,16 @@ XYZ __cdecl principia__VesselBinormal(Plugin const* const plugin,
   journal::Method<journal::VesselBinormal> m({plugin, vessel_guid});
   CHECK(plugin != nullptr);
   return m.Return(ToXYZ(plugin->VesselBinormal(vessel_guid)));
+}
+
+// Clears the on-rails burn on the pile up containing the given vessel.
+// `plugin` must not be null.  No transfer of ownership.
+void __cdecl principia__VesselClearOnRailsBurn(Plugin const* const plugin,
+                                               char const* const vessel_guid) {
+  journal::Method<journal::VesselClearOnRailsBurn> m({plugin, vessel_guid});
+  CHECK(plugin != nullptr);
+  plugin->ClearVesselOnRailsBurn(vessel_guid);
+  return m.Return();
 }
 
 // Calls `plugin->VesselFromParent` with the arguments given.
@@ -81,6 +97,33 @@ void __cdecl principia__VesselRequestAnalysis(Plugin* const plugin,
   Vessel& vessel = *plugin->GetVessel(vessel_guid);
   plugin->ClearOrbitAnalysersOfVesselsOtherThan(vessel);
   vessel.RequestOrbitAnalysis(mission_duration * Second);
+  return m.Return();
+}
+
+// Sets the on-rails burn on the pile up containing the given vessel, to be
+// applied by the next catch-up; see `Plugin::SetVesselOnRailsBurn`.
+// `plugin` must not be null.  No transfer of ownership.
+void __cdecl principia__VesselSetOnRailsBurn(
+    Plugin const* const plugin,
+    char const* const vessel_guid,
+    double const thrust_in_kilonewtons,
+    double const specific_impulse_in_seconds_g0,
+    XYZ const direction,
+    double const max_duration) {
+  journal::Method<journal::VesselSetOnRailsBurn> m(
+      {plugin,
+       vessel_guid,
+       thrust_in_kilonewtons,
+       specific_impulse_in_seconds_g0,
+       direction,
+       max_duration});
+  CHECK(plugin != nullptr);
+  plugin->SetVesselOnRailsBurn(
+      vessel_guid,
+      thrust_in_kilonewtons * Kilo(Newton),
+      specific_impulse_in_seconds_g0 * Second * StandardGravity,
+      Vector<double, World>(FromXYZ(direction)),
+      max_duration * Second);
   return m.Return();
 }
 

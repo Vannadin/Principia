@@ -62,6 +62,7 @@ using namespace principia::base::_hexadecimal;
 using namespace principia::base::_map_util;
 using namespace principia::base::_serialization;
 using namespace principia::geometry::_frame;
+using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_identity;
 using namespace principia::geometry::_permutation;
 using namespace principia::geometry::_space_transformations;
@@ -918,6 +919,42 @@ not_null<std::unique_ptr<PileUpFuture>> Plugin::CatchUpVessel(
         vessel.AdvanceTime();
         return status;
       }));
+}
+
+void Plugin::SetVesselOnRailsBurn(GUID const& vessel_guid,
+                                  Force const& thrust,
+                                  SpecificImpulse const& specific_impulse,
+                                  Vector<double, World> const& direction,
+                                  Time const& max_duration) const {
+  CHECK(!initializing_);
+  Vessel& vessel = *FindOrDie(vessels_, vessel_guid);
+  PileUp* pile_up = nullptr;
+  vessel.ForSomePart([&pile_up](Part& part) {
+    pile_up = part.containing_pile_up();
+  });
+  if (pile_up == nullptr) {
+    LOG(WARNING) << "No pile up to set an on-rails burn on for vessel "
+                 << vessel.ShortDebugString();
+    return;
+  }
+  pile_up->set_on_rails_burn(
+      {.thrust = thrust,
+       .specific_impulse = specific_impulse,
+       .direction = NormalizeOrZero(
+           renderer_->WorldToBarycentric(PlanetariumRotation())(direction)),
+       .max_duration = max_duration});
+}
+
+void Plugin::ClearVesselOnRailsBurn(GUID const& vessel_guid) const {
+  CHECK(!initializing_);
+  Vessel& vessel = *FindOrDie(vessels_, vessel_guid);
+  PileUp* pile_up = nullptr;
+  vessel.ForSomePart([&pile_up](Part& part) {
+    pile_up = part.containing_pile_up();
+  });
+  if (pile_up != nullptr) {
+    pile_up->clear_on_rails_burn();
+  }
 }
 
 void Plugin::WaitForVesselToCatchUp(PileUpFuture& pile_up_future,

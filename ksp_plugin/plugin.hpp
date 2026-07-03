@@ -328,6 +328,19 @@ class Plugin {
   virtual void WaitForVesselToCatchUp(PileUpFuture& pile_up_future,
                                       VesselSet& collided_vessels);
 
+  // Sets (or clears) the on-rails burn on the pile up containing the given
+  // vessel.  The burn is applied by the next catch-up in the absence of
+  // real-time intrinsic forces, and is consumed by it: the game must set it
+  // again before every catch-up during which the engines burn on rails.  The
+  // direction is inertially fixed and given in `World`; it needs not be
+  // normalized.
+  virtual void SetVesselOnRailsBurn(GUID const& vessel_guid,
+                                    Force const& thrust,
+                                    SpecificImpulse const& specific_impulse,
+                                    Vector<double, World> const& direction,
+                                    Time const& max_duration) const;
+  virtual void ClearVesselOnRailsBurn(GUID const& vessel_guid) const;
+
   // Returns the displacement and velocity of the vessel with GUID `vessel_guid`
   // relative to its parent at current time. For a KSP `Vessel` `v`, the
   // argument corresponds to  `v.id.ToString()`, the return value to
