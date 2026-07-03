@@ -447,6 +447,69 @@ TEST_F(InterstellarPrecisionTest, FarFieldDampedCoast) {
               Lt(1 * Kilo(Metre)));
 }
 
+// With the far field damped, cross-system pairs of massive bodies are damped
+// too: the backbone of each system evolves as if it were isolated.  This
+// removes a physically meaningless secular drift of each system as a whole
+// toward the remote one (immeasurable in-system: it cancels in any relative
+// quantity) and leaves the in-system dynamics unaffected.
+TEST_F(InterstellarPrecisionTest, FarFieldDampedBackbone) {
+  Instant const t0;
+  Acceleration const far_field_damping_floor =
+      1e-12 * Metre / Pow<2>(Second);
+  auto const control = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  auto const damped = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1},
+                                    far_field_damping_floor);
+  Instant const t_final = t0 + 100 * JulianYear;
+  EXPECT_OK(control->Prolong(t_final));
+  EXPECT_OK(damped->Prolong(t_final));
+
+  auto const star_a = damped->bodies()[0];
+  auto const planet_a = damped->bodies()[1];
+  auto const control_star_a = control->bodies()[0];
+  auto const control_planet_a = control->bodies()[1];
+
+  // At the initial time the damping removes exactly the pull of the remote
+  // system on star A, (μ_star + μ_planet) / (4 × 10¹⁶ m)² ≈ 2.5 × 10⁻¹⁹ m/s².
+  Vector<Acceleration, ICRS> const removed_pull =
+      control->ComputeGravitationalAccelerationOnMassiveBody(control_star_a,
+                                                             t0) -
+      damped->ComputeGravitationalAccelerationOnMassiveBody(star_a, t0);
+  EXPECT_THAT(removed_pull.Norm(), Gt(2e-19 * Metre / Pow<2>(Second)));
+  EXPECT_THAT(removed_pull.Norm(), Lt(3e-19 * Metre / Pow<2>(Second)));
+
+  // Over a century the undamped system A as a whole falls toward the remote
+  // system by ½ a t² ≈ 1.2 m; the damped one does not.
+  Length const secular_drift =
+      ((control->trajectory(control_star_a)->EvaluatePosition(t_final) -
+        control->trajectory(control_star_a)->EvaluatePosition(t0)) -
+       (damped->trajectory(star_a)->EvaluatePosition(t_final) -
+        damped->trajectory(star_a)->EvaluatePosition(t0))).Norm();
+  LOG(INFO) << "Secular drift of the undamped system over a century: "
+            << secular_drift;
+  EXPECT_THAT(secular_drift, Gt(1.0 * Metre));
+  EXPECT_THAT(secular_drift, Lt(1.5 * Metre));
+
+  // The in-system relative dynamics is unaffected: over the century the
+  // star A–planet A separation of the damped ephemeris tracks the control
+  // well below the fitting tolerance.
+  Length max_separation_difference;
+  for (int i = 0; i <= 1000; ++i) {
+    Instant const t = t0 + i * (t_final - t0) / 1000;
+    Length const control_separation =
+        (control->trajectory(control_planet_a)->EvaluatePosition(t) -
+         control->trajectory(control_star_a)->EvaluatePosition(t)).Norm();
+    Length const damped_separation =
+        (damped->trajectory(planet_a)->EvaluatePosition(t) -
+         damped->trajectory(star_a)->EvaluatePosition(t)).Norm();
+    max_separation_difference =
+        std::max(max_separation_difference,
+                 Abs(damped_separation - control_separation));
+  }
+  LOG(INFO) << "Max in-system separation difference over a century: "
+            << max_separation_difference;
+  EXPECT_THAT(max_separation_difference, Lt(1 * Milli(Metre)));
+}
+
 // Checks that a reference frame whose primary and secondary belong to
 // different subsystems reconstitutes their true relative geometry: the X axis
 // of a frame defined by star A and star B points from star A to star B.

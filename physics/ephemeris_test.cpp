@@ -943,6 +943,238 @@ TEST_P(EphemerisTest, FarFieldDampingEnergyConservation) {
   EXPECT_THAT(final_energy, RelativeErrorFrom(initial_energy, Lt(1e-9)));
 }
 
+// The far-field damping of the interactions between massive bodies: each pair
+// is damped by the damping of its body with the farther outer threshold, a
+// single σ applies to the actions of both bodies, and a pair of small bodies
+// stops interacting without ceasing to feel a nearby large body.
+TEST_P(EphemerisTest, FarFieldDampingMassiveBodies) {
+  GravitationalParameter const μ_big = TerrestrialGravitationalParameter;
+  GravitationalParameter const μ_small = 1e-6 * μ_big;
+  Acceleration const floor = μ_big / Pow<2>(1e9 * Metre);
+  FarFieldDamping const damping_of_big(Sqrt(μ_big / floor));
+  FarFieldDamping const damping_of_small(Sqrt(μ_small / floor));
+
+  auto const make_ephemeris =
+      [&](std::vector<GravitationalParameter> const& μs,
+          std::vector<DegreesOfFreedom<ICRS>> const& initial_state,
+          Time const& step) {
+        std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+        for (int i = 0; i < μs.size(); ++i) {
+          bodies.push_back(make_not_null_unique<MassiveBody>(
+              MassiveBody::Parameters("body" + std::to_string(i), μs[i])));
+        }
+        return std::make_unique<Ephemeris<ICRS>>(
+            std::move(bodies),
+            initial_state,
+            t0_,
+            Ephemeris<ICRS>::AccuracyParameters(
+                /*fitting_tolerance=*/5 * Milli(Metre),
+                /*geopotential_tolerance=*/0x1p-24),
+            Ephemeris<ICRS>::FixedStepParameters(integrator(), step),
+            /*subsystems=*/std::vector<int>{},
+            floor);
+      };
+
+  // A pair on the shell of the big body's damping: the damping of the big
+  // body applies to both bodies, whose actions remain exactly equal and
+  // opposite.
+  {
+    Length const mid_shell = (damping_of_big.inner_threshold() +
+                              damping_of_big.outer_threshold()) / 2;
+    EXPECT_THAT(mid_shell, Gt(damping_of_small.outer_threshold()));
+    auto const ephemeris = make_ephemeris(
+        {μ_big, μ_small},
+        {DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving),
+         DegreesOfFreedom<ICRS>(
+             ICRS::origin +
+                 Displacement<ICRS>({0 * Metre, 0 * Metre, mid_shell}),
+             Velocity<ICRS>({100 * Metre / Second,
+                             0 * Metre / Second,
+                             0 * Metre / Second}))},
+        /*step=*/1 * Hour);
+    EXPECT_OK(ephemeris->Prolong(t0_ + 12 * Hour));
+    not_null<MassiveBody const*> const big = ephemeris->bodies()[0];
+    not_null<MassiveBody const*> const small = ephemeris->bodies()[1];
+    auto const& trajectory_of_big = *ephemeris->trajectory(big);
+    auto const& trajectory_of_small = *ephemeris->trajectory(small);
+
+    // The expected accelerations, computed as the kernel does from the
+    // (fitted) positions.
+    Displacement<ICRS> const Δq = trajectory_of_small.EvaluatePosition(t0_) -
+                                  trajectory_of_big.EvaluatePosition(t0_);
+    Square<Length> const Δq² = Δq.Norm²();
+    Length const Δq_norm = Sqrt(Δq²);
+    Exponentiation<Length, -3> const one_over_Δq³ = Δq_norm / (Δq² * Δq²);
+    double σ;
+    double σʹr;
+    damping_of_big.ComputeDampedRadialQuantities(Δq_norm, σ, σʹr);
+    double const damping_factor = σ - σʹr;
+    // On the shell σ ∈ ]0, 1[; note that the force factor σ − σ′ r exceeds 1
+    // over part of the shell (σ′ < 0): the damped potential climbs to 0 from
+    // σ V, so the force is temporarily steeper than the undamped one.
+    EXPECT_THAT(σ, AllOf(Gt(0), Lt(1)));
+
+    Vector<Acceleration, ICRS> const acceleration_on_small =
+        ephemeris->ComputeGravitationalAccelerationOnMassiveBody(small, t0_);
+    Vector<Acceleration, ICRS> const acceleration_on_big =
+        ephemeris->ComputeGravitationalAccelerationOnMassiveBody(big, t0_);
+    EXPECT_THAT(acceleration_on_small,
+                AlmostEquals(-Δq * (damping_factor * (μ_big * one_over_Δq³)),
+                             0, 1));
+    EXPECT_THAT(acceleration_on_big,
+                AlmostEquals(Δq * (damping_factor * (μ_small * one_over_Δq³)),
+                             0, 1));
+
+    // [New87], Lex. III.
+    EXPECT_THAT(μ_big * acceleration_on_big,
+                AlmostEquals(-(μ_small * acceleration_on_small), 0, 2));
+
+    // The jerk and the Jacobian both derive from the damped potential and
+    // are mutually consistent.
+    Vector<Jerk, ICRS> const jerk_on_big =
+        ephemeris->ComputeGravitationalJerkOnMassiveBody(big, t0_);
+    auto const jacobian_on_big =
+        ephemeris->ComputeJacobianOnMassiveBody(big, t0_);
+    Velocity<ICRS> const Δv = trajectory_of_big.EvaluateVelocity(t0_) -
+                              trajectory_of_small.EvaluateVelocity(t0_);
+    EXPECT_THAT(jerk_on_big, AlmostEquals(jacobian_on_big * Δv, 0, 8));
+  }
+
+  // Beyond the outer threshold the pair does not interact at all: the bodies
+  // stay exactly put.
+  {
+    Displacement<ICRS> const beyond(
+        {0 * Metre, 0 * Metre, 2e9 * Metre});
+    auto const ephemeris = make_ephemeris(
+        {μ_big, μ_small},
+        {DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving),
+         DegreesOfFreedom<ICRS>(ICRS::origin + beyond, ICRS::unmoving)},
+        /*step=*/1 * Hour);
+    EXPECT_OK(ephemeris->Prolong(t0_ + 30 * Day));
+    not_null<MassiveBody const*> const big = ephemeris->bodies()[0];
+    not_null<MassiveBody const*> const small = ephemeris->bodies()[1];
+    EXPECT_EQ(
+        ephemeris->ComputeGravitationalAccelerationOnMassiveBody(big, t0_),
+        (Vector<Acceleration, ICRS>{}));
+    EXPECT_EQ(
+        ephemeris->ComputeGravitationalAccelerationOnMassiveBody(small, t0_),
+        (Vector<Acceleration, ICRS>{}));
+    EXPECT_EQ(ephemeris->ComputeGravitationalJerkOnMassiveBody(big, t0_),
+              (Vector<Jerk, ICRS>{}));
+    EXPECT_EQ(ephemeris->ComputeJacobianOnMassiveBody(big, t0_) * beyond,
+              (Vector<Acceleration, ICRS>{}));
+    EXPECT_THAT((ephemeris->trajectory(small)->EvaluatePosition(t0_ + 30 * Day) -
+                 (ICRS::origin + beyond)).Norm(),
+                Lt(5 * Milli(Metre)));
+  }
+
+  // Two small bodies near the big one: their mutual interaction is damped to
+  // exactly zero, but the interaction with the big body remains, undamped, as
+  // that pair is damped by the (farther) threshold of its big member.
+  {
+    Displacement<ICRS> const z({0 * Metre, 0 * Metre, 1e7 * Metre});
+    EXPECT_THAT(2 * z.Norm(), Gt(damping_of_small.outer_threshold()));
+    EXPECT_THAT(z.Norm(), Lt(damping_of_big.inner_threshold()));
+    // The small bodies circle the big one in opposite directions, so that
+    // they do not fall into it during the integration.
+    Velocity<ICRS> const v_circular({Sqrt(μ_big / z.Norm()),
+                                     0 * Metre / Second,
+                                     0 * Metre / Second});
+    auto const ephemeris = make_ephemeris(
+        {μ_big, μ_small, μ_small},
+        {DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving),
+         DegreesOfFreedom<ICRS>(ICRS::origin + z, v_circular),
+         DegreesOfFreedom<ICRS>(ICRS::origin - z, -v_circular)},
+        /*step=*/2 * Minute);
+    EXPECT_OK(ephemeris->Prolong(t0_ + 1 * Hour));
+    not_null<MassiveBody const*> const big = ephemeris->bodies()[0];
+    not_null<MassiveBody const*> const small1 = ephemeris->bodies()[1];
+
+    // The expected acceleration is the (undamped) pull of the big body alone,
+    // computed as the kernel does from the (fitted) positions.
+    Displacement<ICRS> const Δq =
+        ephemeris->trajectory(small1)->EvaluatePosition(t0_) -
+        ephemeris->trajectory(big)->EvaluatePosition(t0_);
+    Square<Length> const Δq² = Δq.Norm²();
+    Length const Δq_norm = Sqrt(Δq²);
+    Exponentiation<Length, -3> const one_over_Δq³ = Δq_norm / (Δq² * Δq²);
+    EXPECT_THAT(
+        ephemeris->ComputeGravitationalAccelerationOnMassiveBody(small1, t0_),
+        AlmostEquals(-Δq * (μ_big * one_over_Δq³), 0, 1));
+  }
+}
+
+// Two equal massive bodies falling through their damping shell conserve the
+// energy and the momentum of the damped dynamics: the boundaries of the shell
+// introduce no kink.
+TEST_P(EphemerisTest, FarFieldDampingMassivePairConservation) {
+  GravitationalParameter const μ = TerrestrialGravitationalParameter;
+  Acceleration const floor = μ / Pow<2>(1e9 * Metre);
+  FarFieldDamping const damping(Sqrt(μ / floor));
+
+  // A hyperbolic encounter: the transverse velocity keeps the periapsis of
+  // the pair at ~10⁵ km, well away from the singularity.
+  Displacement<ICRS> const q0({0 * Metre, 0 * Metre, 5.5e8 * Metre});
+  Velocity<ICRS> const v0({500 * Metre / Second,
+                           0 * Metre / Second,
+                           -5 * Kilo(Metre) / Second});
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("body0", μ)));
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("body1", μ)));
+  std::vector<DegreesOfFreedom<ICRS>> const initial_state{
+      DegreesOfFreedom<ICRS>(ICRS::origin + q0, v0),
+      DegreesOfFreedom<ICRS>(ICRS::origin - q0, -v0)};
+
+  Ephemeris<ICRS> ephemeris(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      Ephemeris<ICRS>::AccuracyParameters(
+          /*fitting_tolerance=*/1 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<ICRS>::FixedStepParameters(integrator(), 5 * Minute),
+      /*subsystems=*/std::vector<int>{},
+      floor);
+  Instant const t_final = t0_ + 24 * Hour;
+  EXPECT_OK(ephemeris.Prolong(t_final));
+
+  auto const body1 = ephemeris.bodies()[0];
+  auto const body2 = ephemeris.bodies()[1];
+
+  // The pair starts beyond its outer threshold: no interaction, and the
+  // initial energy has no potential term.
+  EXPECT_THAT(2 * q0.Norm(), Gt(damping.outer_threshold()));
+  EXPECT_EQ(
+      ephemeris.ComputeGravitationalAccelerationOnMassiveBody(body1, t0_),
+      (Vector<Acceleration, ICRS>{}));
+  SpecificEnergy const initial_energy = v0.Norm²();  // ½ v² + ½ v².
+
+  for (Instant t = t0_; t <= t_final; t += 1 * Hour) {
+    auto const dof1 = ephemeris.trajectory(body1)->EvaluateDegreesOfFreedom(t);
+    auto const dof2 = ephemeris.trajectory(body2)->EvaluateDegreesOfFreedom(t);
+    Length const r = (dof1.position() - dof2.position()).Norm();
+    double σ;
+    double σʹr;
+    damping.ComputeDampedRadialQuantities(r, σ, σʹr);
+    SpecificEnergy const energy = 0.5 * dof1.velocity().Norm²() +
+                                  0.5 * dof2.velocity().Norm²() -
+                                  σ * μ / r;
+    // The tolerance accommodates the constant energy offset that the
+    // symmetric linear multistep integrator acquires at startup.
+    EXPECT_THAT(energy, RelativeErrorFrom(initial_energy, Lt(5e-8)));
+    // The momentum of this equal-mass, mirror-symmetric pair is conserved
+    // exactly: a single damping factor applies to both bodies.
+    EXPECT_EQ(dof1.velocity() + dof2.velocity(), (Velocity<ICRS>{}));
+  }
+
+  // The pair fully crossed the shell.
+  EXPECT_THAT((ephemeris.trajectory(body1)->EvaluatePosition(t_final) -
+               ephemeris.trajectory(body2)->EvaluatePosition(t_final)).Norm(),
+              Lt(damping.inner_threshold()));
+}
+
 #if !defined(_DEBUG)
 // An apple located a bit above the pole collides with the ground.
 TEST_P(EphemerisTest, CollisionDetection) {

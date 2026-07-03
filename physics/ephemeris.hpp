@@ -431,13 +431,24 @@ class Ephemeris {
   virtual Instant t_min_locked() const REQUIRES_SHARED(lock_);
   virtual Instant t_max_locked() const REQUIRES_SHARED(lock_);
 
+  // Returns the far-field damping applicable to the pair of massive bodies at
+  // indices `b1` and `b2` in `bodies_`: the one, of the dampings of the two
+  // bodies, whose outer threshold is farther.  Damping the pair as a whole (a
+  // single σ applied to the actions of both bodies) preserves Newton's third
+  // law; using the farther threshold ensures that a small body keeps feeling
+  // a large one beyond its own threshold.  Requires `far_field_damping_` to
+  // be non-empty.
+  FarFieldDamping const& PairFarFieldDamping(std::size_t b1,
+                                             std::size_t b2) const;
+
   // Computes the Jacobian of the acceleration field between one body, `body1`
   // (with index `b1` in the `positions` and `jacobians` arrays) and the bodies
   // `bodies2` (with indices [b2_begin, b2_end[ in the `bodies2`, `positions`
   // and `jacobians` arrays).  This assumes that the bodies are point masses
-  // (that is, it doesn't take the geopotential into account).  The positions
-  // are relative to the local origin of the subsystem of each body, as
-  // described by `subsystem_of_body_`.
+  // (that is, it doesn't take the geopotential into account).  The far-field
+  // damping, if any, is applied to each pair (see `PairFarFieldDamping`).  The
+  // positions are relative to the local origin of the subsystem of each body,
+  // as described by `subsystem_of_body_`.
   template<typename MassiveBodyConstPtr>
   void ComputeJacobianByMassiveBodyOnMassiveBodies(
       MassiveBody const& body1,
@@ -452,9 +463,10 @@ class Ephemeris {
   // `degrees_of_freedom` and `jerks` arrays) and the bodies `bodies2` (with
   // indices [b2_begin, b2_end[ in the `bodies2`, `degrees_of_freedom` and
   // `jerks` arrays).  This assumes that the bodies are point masses
-  // (that is, it doesn't take the geopotential into account).  The positions
-  // are relative to the local origin of the subsystem of each body, as
-  // described by `subsystem_of_body_`.
+  // (that is, it doesn't take the geopotential into account).  The far-field
+  // damping, if any, is applied to each pair (see `PairFarFieldDamping`).  The
+  // positions are relative to the local origin of the subsystem of each body,
+  // as described by `subsystem_of_body_`.
   template<typename MassiveBodyConstPtr>
   void ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
       MassiveBody const& body1,
@@ -468,6 +480,16 @@ class Ephemeris {
   // Returns the gravitational acceleration on the massive `body` at time `t`.
   // The `positions` must be for all the bodies in this object, in the order of
   // `bodies_` and must have been evaluated at time `t`.
+  Vector<Acceleration, Frame>
+  ComputeGravitationalAccelerationOnMassiveBody(
+      not_null<MassiveBody const*> body,
+      std::vector<Position<Frame>> const& positions,
+      Instant const& t) const;
+
+  // The implementation of the above, on which see
+  // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies` regarding
+  // `has_far_field_damping`.
+  template<bool has_far_field_damping>
   Vector<Acceleration, Frame>
   ComputeGravitationalAccelerationOnMassiveBody(
       not_null<MassiveBody const*> body,
@@ -493,8 +515,11 @@ class Ephemeris {
   // parameter.  The positions are relative to the local origin of the
   // subsystem of each body, as described by `subsystem_of_body_`; if
   // `has_subsystems` is false the (then trivial) subsystem handling is
-  // compiled out of the loop.
-  template<bool has_subsystems,
+  // compiled out of the loop.  Similarly, if `has_far_field_damping` is false
+  // the (then trivial) damping of each pair (see `PairFarFieldDamping`) is
+  // compiled out, as a per-pair runtime check would tax this hot kernel.
+  template<bool has_far_field_damping,
+           bool has_subsystems,
            bool body1_is_oblate,
            bool body2_is_oblate,
            typename MassiveBodyConstPtr>
@@ -553,8 +578,8 @@ class Ephemeris {
 
   // The implementation of the above, on which see
   // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies` regarding
-  // `has_subsystems`.
-  template<bool has_subsystems>
+  // `has_far_field_damping` and `has_subsystems`.
+  template<bool has_far_field_damping, bool has_subsystems>
   absl::Status ComputeGravitationalAccelerationBetweenAllMassiveBodies(
       Instant const& t,
       std::vector<Position<Frame>> const& positions,
@@ -662,8 +687,7 @@ class Ephemeris {
   Acceleration far_field_damping_floor_;
 
   // The far-field damping of each body, parallel to `bodies_`.  Empty if the
-  // far field is not damped.  Only used by the computations on massless
-  // bodies.
+  // far field is not damped.
   std::vector<FarFieldDamping> far_field_damping_;
 
   not_null<

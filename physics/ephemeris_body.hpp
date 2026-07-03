@@ -1429,6 +1429,17 @@ Instant Ephemeris<Frame>::t_max_locked() const {
 }
 
 template<typename Frame>
+FarFieldDamping const& Ephemeris<Frame>::PairFarFieldDamping(
+    std::size_t const b1,
+    std::size_t const b2) const {
+  FarFieldDamping const& damping1 = far_field_damping_[b1];
+  FarFieldDamping const& damping2 = far_field_damping_[b2];
+  return damping1.outer_threshold²() >= damping2.outer_threshold²()
+             ? damping1
+             : damping2;
+}
+
+template<typename Frame>
 template<typename MassiveBodyConstPtr>
 void Ephemeris<Frame>::ComputeJacobianByMassiveBodyOnMassiveBodies(
     MassiveBody const& body1,
@@ -1454,12 +1465,29 @@ void Ephemeris<Frame>::ComputeJacobianByMassiveBodyOnMassiveBodies(
     }
 
     Square<Length> const Δq² = Δq.Norm²();
+    FarFieldDamping const* const far_field_damping =
+        far_field_damping_.empty() ? nullptr : &PairFarFieldDamping(b1, b2);
+    if (far_field_damping != nullptr &&
+        Δq² >= far_field_damping->outer_threshold²()) {
+      // The interaction of this pair is damped to exactly zero here.
+      continue;
+    }
     Length const Δq_norm = Sqrt(Δq²);
     Cube<Length> const Δq_norm³ = Δq² * Δq_norm;
     auto const Δq_norm⁵ = Δq_norm³ * Δq²;
 
-    auto const form = -InnerProductForm<Frame, Vector>() / Δq_norm³ +
-                      3 * SymmetricSquare(Δq) / Δq_norm⁵;
+    auto form = -InnerProductForm<Frame, Vector>() / Δq_norm³ +
+                3 * SymmetricSquare(Δq) / Δq_norm⁵;
+    if (far_field_damping != nullptr) {
+      // The Jacobian of the acceleration deriving from the damped point-mass
+      // potential −σ μ / r; with σ = 1 this reduces to the form above.
+      double σ;
+      double σʹr;
+      double σʺr²;
+      far_field_damping->ComputeDampedRadialQuantities(Δq_norm, σ, σʹr, σʺr²);
+      form = (σ - σʹr) * (-InnerProductForm<Frame, Vector>() / Δq_norm³) +
+             (3 * σ - 3 * σʹr + σʺr²) * (SymmetricSquare(Δq) / Δq_norm⁵);
+    }
 
     // Note that the Jacobian is independent from the sign of Δq, hence the +
     // signs.
@@ -1499,12 +1527,29 @@ void Ephemeris<Frame>::ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
     }
 
     Square<Length> const Δq² = Δq.Norm²();
+    FarFieldDamping const* const far_field_damping =
+        far_field_damping_.empty() ? nullptr : &PairFarFieldDamping(b1, b2);
+    if (far_field_damping != nullptr &&
+        Δq² >= far_field_damping->outer_threshold²()) {
+      // The interaction of this pair is damped to exactly zero here.
+      continue;
+    }
     Length const Δq_norm = Sqrt(Δq²);
     Cube<Length> const Δq_norm³ = Δq² * Δq_norm;
     auto const Δq_norm⁵ = Δq_norm³ * Δq²;
 
-    auto const form = -InnerProductForm<Frame, Vector>() / Δq_norm³ +
-                      3 * SymmetricSquare(Δq) / Δq_norm⁵;
+    auto form = -InnerProductForm<Frame, Vector>() / Δq_norm³ +
+                3 * SymmetricSquare(Δq) / Δq_norm⁵;
+    if (far_field_damping != nullptr) {
+      // The jerk deriving from the damped point-mass potential −σ μ / r; with
+      // σ = 1 this reduces to the form above.
+      double σ;
+      double σʹr;
+      double σʺr²;
+      far_field_damping->ComputeDampedRadialQuantities(Δq_norm, σ, σʹr, σʺr²);
+      form = (σ - σʹr) * (-InnerProductForm<Frame, Vector>() / Δq_norm³) +
+             (3 * σ - 3 * σʹr + σʺr²) * (SymmetricSquare(Δq) / Δq_norm⁵);
+    }
     auto const vector = form * Δv;
 
     jerk_on_b2 -= μ1 * vector;
@@ -1518,12 +1563,29 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
     not_null<MassiveBody const*> const body,
     std::vector<Position<Frame>> const& positions,
     Instant const& t) const {
+  if (far_field_damping_.empty()) {
+    return ComputeGravitationalAccelerationOnMassiveBody<
+        /*has_far_field_damping=*/false>(body, positions, t);
+  } else {
+    return ComputeGravitationalAccelerationOnMassiveBody<
+        /*has_far_field_damping=*/true>(body, positions, t);
+  }
+}
+
+template<typename Frame>
+template<bool has_far_field_damping>
+Vector<Acceleration, Frame>
+Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
+    not_null<MassiveBody const*> const body,
+    std::vector<Position<Frame>> const& positions,
+    Instant const& t) const {
   int const b1 = bodies_indices_.at(body);
   bool const body_is_oblate = body->is_oblate();
   std::vector<Vector<Acceleration, Frame>> accelerations(positions.size());
 
   if (body_is_oblate) {
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         /*has_subsystems=*/true,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/true>(
@@ -1533,6 +1595,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_begin=*/0, /*b2_end=*/b1,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         /*has_subsystems=*/true,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/true>(
@@ -1542,6 +1605,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_begin=*/b1 + 1, /*b2_end=*/number_of_oblate_bodies_,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         /*has_subsystems=*/true,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/false>(
@@ -1553,6 +1617,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         positions, accelerations, geopotentials_);
   } else {
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         /*has_subsystems=*/true,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/true>(
@@ -1562,6 +1627,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_begin=*/0, /*b2_end=*/number_of_oblate_bodies_,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         /*has_subsystems=*/true,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
@@ -1572,6 +1638,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMassiveBody(
         /*b2_end=*/b1,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         /*has_subsystems=*/true,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
@@ -1612,7 +1679,8 @@ Ephemeris<Frame>::ComputeGravitationalJerkOnMassiveBody(
 }
 
 template<typename Frame>
-template<bool has_subsystems,
+template<bool has_far_field_damping,
+         bool has_subsystems,
          bool body1_is_oblate,
          bool body2_is_oblate,
          typename MassiveBodyConstPtr>
@@ -1645,16 +1713,36 @@ ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
     }
 
     Square<Length> const Δq² = Δq.Norm²();
+    if constexpr (has_far_field_damping) {
+      if (Δq² >= PairFarFieldDamping(b1, b2).outer_threshold²()) {
+        // The interaction of this pair is damped to exactly zero here; the
+        // harmonics, which are damped independently (see `HarmonicDamping`),
+        // are zero far below this distance.
+        continue;
+      }
+    }
     Length const Δq_norm = Sqrt(Δq²);
     Exponentiation<Length, -3> const one_over_Δq³ = Δq_norm / (Δq² * Δq²);
 
-    auto const μ1_over_Δq³ = μ1 * one_over_Δq³;
+    auto μ1_over_Δq³ = μ1 * one_over_Δq³;
+    auto μ2_over_Δq³ = μ2 * one_over_Δq³;
+    if constexpr (has_far_field_damping) {
+      // The acceleration deriving from the damped point-mass potential
+      // −σ μ / r.  A single factor damps the actions of both bodies, which
+      // keeps them exactly equal and opposite.
+      double σ;
+      double σʹr;
+      PairFarFieldDamping(b1, b2).ComputeDampedRadialQuantities(Δq_norm,
+                                                                σ, σʹr);
+      double const damping_factor = σ - σʹr;
+      μ1_over_Δq³ *= damping_factor;
+      μ2_over_Δq³ *= damping_factor;
+    }
     acceleration_on_b2 += Δq * μ1_over_Δq³;
 
     // [New87], Lex. III. Actioni contrariam semper & æqualem esse reactionem:
     // sive corporum duorum actiones in se mutuo semper esse æquales &
     // in partes contrarias dirigi.
-    auto const μ2_over_Δq³ = μ2 * one_over_Δq³;
     acceleration_on_b1 -= Δq * μ2_over_Δq³;
 
     if (body1_is_oblate || body2_is_oblate) {
@@ -1823,17 +1911,31 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
     Instant const& t,
     std::vector<Position<Frame>> const& positions,
     std::vector<Vector<Acceleration, Frame>>& accelerations) const {
-  if (subsystem_origin_offset_.size() > 1) {
-    return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
-        /*has_subsystems=*/true>(t, positions, accelerations);
+  if (far_field_damping_.empty()) {
+    if (subsystem_origin_offset_.size() > 1) {
+      return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
+          /*has_far_field_damping=*/false,
+          /*has_subsystems=*/true>(t, positions, accelerations);
+    } else {
+      return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
+          /*has_far_field_damping=*/false,
+          /*has_subsystems=*/false>(t, positions, accelerations);
+    }
   } else {
-    return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
-        /*has_subsystems=*/false>(t, positions, accelerations);
+    if (subsystem_origin_offset_.size() > 1) {
+      return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
+          /*has_far_field_damping=*/true,
+          /*has_subsystems=*/true>(t, positions, accelerations);
+    } else {
+      return ComputeGravitationalAccelerationBetweenAllMassiveBodies<
+          /*has_far_field_damping=*/true,
+          /*has_subsystems=*/false>(t, positions, accelerations);
+    }
   }
 }
 
 template<typename Frame>
-template<bool has_subsystems>
+template<bool has_far_field_damping, bool has_subsystems>
 absl::Status
 Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
     Instant const& t,
@@ -1847,6 +1949,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
   for (std::size_t b1 = 0; b1 < number_of_oblate_bodies_; ++b1) {
     MassiveBody const& body1 = *bodies_[b1];
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         has_subsystems,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/true>(
@@ -1857,6 +1960,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
         /*b2_end=*/number_of_oblate_bodies_,
         positions, accelerations, geopotentials_);
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         has_subsystems,
         /*body1_is_oblate=*/true,
         /*body2_is_oblate=*/false>(
@@ -1873,6 +1977,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationBetweenAllMassiveBodies(
        ++b1) {
     MassiveBody const& body1 = *bodies_[b1];
     ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies<
+        has_far_field_damping,
         has_subsystems,
         /*body1_is_oblate=*/false,
         /*body2_is_oblate=*/false>(
