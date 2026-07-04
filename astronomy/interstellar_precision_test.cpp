@@ -510,6 +510,80 @@ TEST_F(InterstellarPrecisionTest, FarFieldDampedBackbone) {
   EXPECT_THAT(max_separation_difference, Lt(1 * Milli(Metre)));
 }
 
+// The partition generalizes beyond two subsystems: with three stars in three
+// subsystems, each star's local field is felt only within its own system and
+// the far field of the other two is damped to exactly zero, while the
+// inter-subsystem geometry (the pairwise distances) is reproduced exactly.
+TEST_F(InterstellarPrecisionTest, ThreeSubsystems) {
+  Instant const t0;
+  Acceleration const far_field_damping_floor =
+      1e-12 * Metre / Pow<2>(Second);
+  // Three stars on the x axis, 4 × 10¹⁶ m apart, each its own subsystem.
+  Length const spacing = 4.0e16 * Metre;
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  std::vector<DegreesOfFreedom<ICRS>> initial_state;
+  for (int i = 0; i < 3; ++i) {
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("star " + std::to_string(i), μ_star)));
+    initial_state.emplace_back(
+        ICRS::origin +
+            Displacement<ICRS>({i * spacing, 0 * Metre, 0 * Metre}),
+        ICRS::unmoving);
+  }
+  auto const ephemeris = make_not_null_unique<Ephemeris<ICRS>>(
+      std::move(bodies),
+      initial_state,
+      t0,
+      Ephemeris<ICRS>::AccuracyParameters(
+          /*fitting_tolerance=*/0.1 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<ICRS>::FixedStepParameters(
+          SymmetricLinearMultistepIntegrator<
+              QuinlanTremaine1990Order12,
+              Ephemeris<ICRS>::NewtonianMotionEquation>(),
+          /*step=*/1 * JulianYear),
+      /*subsystems=*/std::vector<int>{0, 1, 2},
+      far_field_damping_floor);
+  EXPECT_OK(ephemeris->Prolong(t0 + 1 * JulianYear));
+
+  // Each star sits in a distinct subsystem.
+  EXPECT_EQ(0, ephemeris->subsystem_of_body(ephemeris->bodies()[0]));
+  EXPECT_EQ(1, ephemeris->subsystem_of_body(ephemeris->bodies()[1]));
+  EXPECT_EQ(2, ephemeris->subsystem_of_body(ephemeris->bodies()[2]));
+
+  // A probe just inside each star's inner threshold (expressed relative to that
+  // star's own subsystem origin) feels that star's unattenuated pull and
+  // nothing from the other two.
+  Length const near = 3.0e12 * Metre;  // < inner threshold (~6.6 × 10¹² m).
+  for (int s = 0; s < 3; ++s) {
+    Position<ICRS> const probe =
+        ICRS::origin + Displacement<ICRS>({0 * Metre, near, 0 * Metre});
+    Vector<Acceleration, ICRS> const a =
+        ephemeris->ComputeGravitationalAccelerationOnMasslessBody(
+            probe, t0, /*subsystem=*/s);
+    // The pull points toward the local star (−y here) and matches the bare
+    // two-body value; the other two stars contribute exactly nothing.
+    Vector<Acceleration, ICRS> const expected(
+        {0 * Metre / Pow<2>(Second),
+         -μ_star / Pow<2>(near),
+         0 * Metre / Pow<2>(Second)});
+    EXPECT_THAT(RelativeError(expected, a), Lt(1e-6));
+  }
+
+  // The inter-subsystem geometry is exact: star 2 is 2·spacing from star 0.
+  Displacement<ICRS> const star0 =
+      ephemeris->trajectory(ephemeris->bodies()[0])->EvaluatePosition(t0) -
+      ICRS::origin;
+  Displacement<ICRS> const conversion_2_to_0 =
+      ephemeris->subsystem_conversion(/*s1=*/2, /*s2=*/0);
+  Displacement<ICRS> const star2_in_0 =
+      (ephemeris->trajectory(ephemeris->bodies()[2])->EvaluatePosition(t0) -
+       ICRS::origin) +
+      conversion_2_to_0;
+  EXPECT_THAT(AbsoluteError(2 * spacing, (star2_in_0 - star0).Norm()),
+              Lt(1 * Metre));
+}
+
 // Checks that a reference frame whose primary and secondary belong to
 // different subsystems reconstitutes their true relative geometry: the X axis
 // of a frame defined by star A and star B points from star A to star B.

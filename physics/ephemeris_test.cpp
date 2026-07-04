@@ -1175,6 +1175,182 @@ TEST_P(EphemerisTest, FarFieldDampingMassivePairConservation) {
               Lt(damping.inner_threshold()));
 }
 
+// Far-field damping with an OBLATE central body: below the inner threshold the
+// damping is inert (the geopotential is untouched), and beyond the outer
+// threshold the whole contribution — point mass AND harmonics — vanishes
+// exactly (the kernel elides the body entirely).
+TEST_P(EphemerisTest, FarFieldDampingOblateBody) {
+  // Keep Earth's oblateness (degree 2).
+  solar_system_.LimitOblatenessToDegree("Earth", /*max_degree=*/2);
+  serialization::GravityModel::Body const earth_gravity_model =
+      solar_system_.gravity_model_message("Earth");
+  GravitationalParameter const μ =
+      SolarSystem<ICRS>::MakeMassiveBody(earth_gravity_model)
+          ->gravitational_parameter();
+  Acceleration const floor = μ / Pow<2>(1e9 * Metre);
+  FarFieldDamping const damping(Sqrt(μ / floor));
+
+  std::vector<DegreesOfFreedom<ICRS>> const initial_state = {
+      DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving)};
+  auto const make_ephemeris =
+      [&](Acceleration const& far_field_damping_floor) {
+        std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+        bodies.push_back(
+            SolarSystem<ICRS>::MakeMassiveBody(earth_gravity_model));
+        return std::make_unique<Ephemeris<ICRS>>(
+            std::move(bodies),
+            initial_state,
+            t0_,
+            Ephemeris<ICRS>::AccuracyParameters(
+                /*fitting_tolerance=*/5 * Milli(Metre),
+                /*geopotential_tolerance=*/0x1p-24),
+            Ephemeris<ICRS>::FixedStepParameters(integrator(), 1 * Hour),
+            /*subsystems=*/std::vector<int>{},
+            far_field_damping_floor);
+      };
+  auto const undamped = make_ephemeris(Acceleration{});
+  auto const damped = make_ephemeris(floor);
+  EXPECT_OK(undamped->Prolong(t0_ + 12 * Hour));
+  EXPECT_OK(damped->Prolong(t0_ + 12 * Hour));
+
+  // A point off the polar axis, so the oblateness contributes.
+  auto const q_at = [](Length const& r) {
+    return ICRS::origin +
+           Displacement<ICRS>({r * 0.6, 0 * Metre, r * 0.8});
+  };
+  // Well inside the inner threshold the damping is inert: the full oblate
+  // acceleration is untouched.
+  EXPECT_EQ(damped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at(1e7 * Metre), t0_),
+            undamped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at(1e7 * Metre), t0_));
+  // Beyond the outer threshold the whole field — point mass and harmonics —
+  // is exactly zero.
+  EXPECT_NE(undamped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at(2e9 * Metre), t0_),
+            (Vector<Acceleration, ICRS>{}));
+  EXPECT_EQ(damped->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at(2e9 * Metre), t0_),
+            (Vector<Acceleration, ICRS>{}));
+}
+
+// The far field of two bodies is damped independently: where their shells
+// overlap, the acceleration is the sum of the two separately-damped
+// contributions.
+TEST_P(EphemerisTest, FarFieldDampingOverlappingShells) {
+  solar_system_.LimitOblatenessToDegree("Earth", /*max_degree=*/0);
+  serialization::GravityModel::Body const earth_gravity_model =
+      solar_system_.gravity_model_message("Earth");
+  GravitationalParameter const μ =
+      SolarSystem<ICRS>::MakeMassiveBody(earth_gravity_model)
+          ->gravitational_parameter();
+  Acceleration const floor = μ / Pow<2>(1e9 * Metre);
+  FarFieldDamping const damping(Sqrt(μ / floor));
+  // Place the two bodies so that their [inner, outer] shells overlap: the
+  // separation is between the outer threshold and twice the inner threshold.
+  Length const separation =
+      (damping.outer_threshold() + damping.inner_threshold());
+  Displacement<ICRS> const offset({separation, 0 * Metre, 0 * Metre});
+
+  auto const make_ephemeris =
+      [&](std::vector<Position<ICRS>> const& positions) {
+        std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+        std::vector<DegreesOfFreedom<ICRS>> state;
+        for (auto const& q : positions) {
+          bodies.push_back(
+              SolarSystem<ICRS>::MakeMassiveBody(earth_gravity_model));
+          state.emplace_back(q, ICRS::unmoving);
+        }
+        return std::make_unique<Ephemeris<ICRS>>(
+            std::move(bodies),
+            state,
+            t0_,
+            Ephemeris<ICRS>::AccuracyParameters(
+                /*fitting_tolerance=*/5 * Milli(Metre),
+                /*geopotential_tolerance=*/0x1p-24),
+            Ephemeris<ICRS>::FixedStepParameters(integrator(), 1 * Hour),
+            /*subsystems=*/std::vector<int>{},
+            floor);
+      };
+  Position<ICRS> const q_a = ICRS::origin;
+  Position<ICRS> const q_b = ICRS::origin + offset;
+  auto const both = make_ephemeris({q_a, q_b});
+  auto const only_a = make_ephemeris({q_a});
+  auto const only_b = make_ephemeris({q_b});
+  EXPECT_OK(both->Prolong(t0_ + 12 * Hour));
+  EXPECT_OK(only_a->Prolong(t0_ + 12 * Hour));
+  EXPECT_OK(only_b->Prolong(t0_ + 12 * Hour));
+
+  // A probe on the midpoint's perpendicular, inside both shells and off the
+  // axis so neither contribution cancels trivially.
+  Length const mid_shell =
+      (damping.inner_threshold() + damping.outer_threshold()) / 2;
+  Position<ICRS> const probe =
+      ICRS::origin +
+      Displacement<ICRS>({separation / 2, 0.5 * mid_shell, 0 * Metre});
+  Vector<Acceleration, ICRS> const a_both =
+      both->ComputeGravitationalAccelerationOnMasslessBody(probe, t0_);
+  Vector<Acceleration, ICRS> const a_sum =
+      only_a->ComputeGravitationalAccelerationOnMasslessBody(probe, t0_) +
+      only_b->ComputeGravitationalAccelerationOnMasslessBody(probe, t0_);
+  // Both contributions are damped (on their shells) but non-zero.
+  EXPECT_NE(a_both, (Vector<Acceleration, ICRS>{}));
+  EXPECT_THAT(a_both, AlmostEquals(a_sum, 0, 4));
+}
+
+// WS2b with three distinct masses: the asteroid keeps feeling the planet
+// (whose larger cutoff radius governs the pair) at a separation where the
+// asteroid's own cutoff would have severed the interaction.
+TEST_P(EphemerisTest, FarFieldDampingMassiveIntermediateMass) {
+  GravitationalParameter const μ_planet = TerrestrialGravitationalParameter;
+  GravitationalParameter const μ_asteroid = 1e-9 * μ_planet;
+  Acceleration const floor = μ_planet / Pow<2>(1e9 * Metre);
+  FarFieldDamping const damping_of_planet(Sqrt(μ_planet / floor));
+  FarFieldDamping const damping_of_asteroid(Sqrt(μ_asteroid / floor));
+
+  // A separation beyond the asteroid's cutoff but well within the planet's.
+  Length const d = 10 * damping_of_asteroid.outer_threshold();
+  EXPECT_THAT(d, Gt(damping_of_asteroid.outer_threshold()));
+  EXPECT_THAT(d, Lt(damping_of_planet.inner_threshold()));
+
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("planet", μ_planet)));
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("asteroid", μ_asteroid)));
+  std::vector<DegreesOfFreedom<ICRS>> const initial_state{
+      DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving),
+      DegreesOfFreedom<ICRS>(
+          ICRS::origin + Displacement<ICRS>({0 * Metre, 0 * Metre, d}),
+          ICRS::unmoving)};
+  auto const ephemeris = std::make_unique<Ephemeris<ICRS>>(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      Ephemeris<ICRS>::AccuracyParameters(
+          /*fitting_tolerance=*/5 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<ICRS>::FixedStepParameters(integrator(), 1 * Hour),
+      /*subsystems=*/std::vector<int>{},
+      floor);
+  EXPECT_OK(ephemeris->Prolong(t0_ + 12 * Hour));
+  not_null<MassiveBody const*> const planet = ephemeris->bodies()[0];
+  not_null<MassiveBody const*> const asteroid = ephemeris->bodies()[1];
+
+  // The pair is governed by the planet's cutoff, so at `d` (inside the
+  // planet's inner threshold) it is fully undamped: the asteroid feels the
+  // planet's unattenuated pull.
+  Displacement<ICRS> const Δq =
+      ephemeris->trajectory(asteroid)->EvaluatePosition(t0_) -
+      ephemeris->trajectory(planet)->EvaluatePosition(t0_);
+  Square<Length> const Δq² = Δq.Norm²();
+  Length const Δq_norm = Sqrt(Δq²);
+  Exponentiation<Length, -3> const one_over_Δq³ = Δq_norm / (Δq² * Δq²);
+  EXPECT_THAT(
+      ephemeris->ComputeGravitationalAccelerationOnMassiveBody(asteroid, t0_),
+      AlmostEquals(-Δq * (μ_planet * one_over_Δq³), 0, 1));
+}
+
 #if !defined(_DEBUG)
 // An apple located a bit above the pole collides with the ground.
 TEST_P(EphemerisTest, CollisionDetection) {

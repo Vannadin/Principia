@@ -964,5 +964,135 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseDuringOnRailsBurn) 
   EXPECT_THAT(Δv_vector.coordinates().z, RelativeErrorFrom(Δv, Lt(1e-3)));
 }
 
+// WS3 × serialization: the trajectory produced by an on-rails burn survives a
+// save/load cycle (the velocity gained is in the serialized history), while the
+// burn itself does not (it is a transient re-armed each frame by the game).  A
+// reloaded vessel therefore coasts until the burn is re-armed, and can then
+// continue burning.
+TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurnSurvivesSaveLoad) {
+  Index const star = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star,
+                                             /*parent_index=*/std::nullopt,
+                                             gravity_model,
+                                             initial_state);
+  }
+  plugin->EndInitialization();
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid,
+                             vessel_name,
+                             star,
+                             /*loaded=*/false,
+                             inserted);
+  // Far enough from the star that gravity is negligible against the burn.
+  plugin->InsertUnloadedPart(
+      part_id,
+      part_name,
+      vessel_guid,
+      {Displacement<AliceSun>({1e12 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  Force const thrust = 1 * Newton;
+  SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
+  Variation<Mass> const mass_flow = thrust / specific_impulse;
+  Time const δt = 100 * Second;
+  Mass const m0 = 1 * Kilogram;
+  Mass m = m0;
+  Instant t;
+
+  // Two frames of burning.
+  for (int i = 0; i < 2; ++i) {
+    t += δt;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star,
+                               /*loaded=*/false, inserted);
+    plugin->SetVesselOnRailsBurn(vessel_guid, thrust, specific_impulse,
+                                 /*initial_mass=*/m,
+                                 Vector<double, World>({0, 1, 0}),
+                                 /*max_duration=*/1 * Hour);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+    m -= δt * mass_flow;
+  }
+  Velocity<AliceSun> const v_burned =
+      plugin->VesselFromParent(star, vessel_guid).velocity();
+
+  // Save and reload.  Only one `Plugin` may exist at a time, so destroy first.
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  plugin = nullptr;
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+
+  // The velocity gained by the burn is preserved: it lives in the serialized
+  // trajectory, not in the (transient) burn.
+  EXPECT_THAT(
+      (plugin2->VesselFromParent(star, vessel_guid).velocity() - v_burned)
+          .Norm(),
+      Lt(1e-6 * Metre / Second));
+
+  // The burn did NOT survive: a frame without re-arming it is a pure coast.
+  Velocity<AliceSun> const v_reloaded =
+      plugin2->VesselFromParent(star, vessel_guid).velocity();
+  t += δt;
+  plugin2->AdvanceTime(t, 1 * Radian);
+  plugin2->InsertOrKeepVessel(vessel_guid, vessel_name, star,
+                              /*loaded=*/false, inserted);
+  {
+    VesselSet collided_vessels;
+    plugin2->CatchUpLaggingVessels(collided_vessels);
+  }
+  EXPECT_THAT(
+      (plugin2->VesselFromParent(star, vessel_guid).velocity() - v_reloaded)
+          .Norm(),
+      Lt(0.05 * Metre / Second));
+
+  // Re-arming the burn after the reload resumes thrust.
+  Velocity<AliceSun> const v_before_resume =
+      plugin2->VesselFromParent(star, vessel_guid).velocity();
+  t += δt;
+  plugin2->AdvanceTime(t, 1 * Radian);
+  plugin2->InsertOrKeepVessel(vessel_guid, vessel_name, star,
+                              /*loaded=*/false, inserted);
+  plugin2->SetVesselOnRailsBurn(vessel_guid, thrust, specific_impulse,
+                                /*initial_mass=*/m,
+                                Vector<double, World>({0, 1, 0}),
+                                /*max_duration=*/1 * Hour);
+  {
+    VesselSet collided_vessels;
+    plugin2->CatchUpLaggingVessels(collided_vessels);
+  }
+  Speed const Δv_resumed = specific_impulse * std::log(m / (m - δt * mass_flow));
+  EXPECT_THAT(
+      (plugin2->VesselFromParent(star, vessel_guid).velocity() -
+       v_before_resume).Norm(),
+      RelativeErrorFrom(Δv_resumed, Lt(1e-3)));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia
