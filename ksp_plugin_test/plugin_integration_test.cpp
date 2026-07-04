@@ -822,5 +822,147 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
   }
 }
 
+// WS1 × WS3: a vessel runs an on-rails burn (WS3) while it crosses the void and
+// its representation is rebased into another subsystem (WS1).  The burn state
+// must survive the subsystem switch and the accumulated Δv must be correct —
+// velocity is frame-invariant across subsystems, so the burn, commanded in a
+// fixed direction perpendicular to the (dominant) coast velocity, integrates
+// cleanly straight through the rebase.
+TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseDuringOnRailsBurn) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                            /*parent_index=*/std::nullopt,
+                                            gravity_model,
+                                            initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                            /*parent_index=*/star_a,
+                                            gravity_model,
+                                            initial_state);
+  }
+  plugin->EndInitialization();
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid,
+                            vessel_name,
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  Vector<double, AliceSun> const to_star_b =
+      Normalize(plugin->CelestialFromParent(star_b).displacement());
+  Speed const v = 1e12 * Metre / Second;
+  plugin->InsertUnloadedPart(
+      part_id,
+      part_name,
+      vessel_guid,
+      {(1e9 * Metre) * to_star_b, v * to_star_b});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  int const initial_subsystem = vessel.subsystem();
+
+  Force const thrust = 0.1 * Newton;
+  SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
+  Variation<Mass> const mass_flow = thrust / specific_impulse;
+  Mass const m0 = 1 * Kilogram;
+  Mass m = m0;
+
+  // The velocity before any burning; the coast component (along `to_star_b`)
+  // dominates and, in the force-free void, is unchanged by the crossing.
+  Velocity<AliceSun> const v0 =
+      plugin->VesselFromParent(star_a, vessel_guid).velocity();
+
+  Time const δt = 1200 * Second;
+  Instant const t_final = Instant() + 24'000 * Second;
+  int rebases = 0;
+  int previous_subsystem = initial_subsystem;
+  for (Instant t = Instant() + δt; t <= t_final; t += δt) {
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid,
+                              vessel_name,
+                              star_a,
+                              /*loaded=*/false,
+                              inserted);
+    // A burn perpendicular to the coast (commanded in `World`; the constant
+    // planetarium rotation makes it a fixed inertial direction), re-armed each
+    // catch-up per the one-shot contract.
+    plugin->SetVesselOnRailsBurn(vessel_guid,
+                                 thrust,
+                                 specific_impulse,
+                                 /*initial_mass=*/m,
+                                 Vector<double, World>({0, 1, 0}),
+                                 /*max_duration=*/1 * Hour);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+    m -= δt * mass_flow;
+    if (vessel.subsystem() != previous_subsystem) {
+      previous_subsystem = vessel.subsystem();
+      ++rebases;
+    }
+  }
+
+  // The vessel rebased exactly once and ended in star B's subsystem, despite
+  // burning throughout.
+  EXPECT_EQ(1, rebases);
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(), vessel.subsystem());
+
+  // The burn survived the rebase: the accumulated Δv is Циолковский's, and it
+  // lies transverse to the coast (in the z direction, since a `World` y command
+  // comes out along `AliceSun` z), separable from the dominant coast velocity.
+  Speed const Δv = specific_impulse * std::log(m0 / m);
+  Velocity<AliceSun> const Δv_vector =
+      plugin->VesselFromParent(star_a, vessel_guid).velocity() - v0;
+  EXPECT_THAT(Δv_vector.Norm(), RelativeErrorFrom(Δv, Lt(1e-3)));
+  EXPECT_THAT(Δv_vector.coordinates().z, RelativeErrorFrom(Δv, Lt(1e-3)));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia

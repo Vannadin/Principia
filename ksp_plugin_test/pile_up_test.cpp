@@ -515,6 +515,127 @@ TEST_F(PileUpTest, OnRailsBurnPrecedenceAndClear) {
   EXPECT_FALSE(pile_up.on_rails_burn().has_value());
 }
 
+// An on-rails burn (WS3) in the force-free void between two star systems whose
+// far field is damped (WS2/WS2b).  The probe sits off the inter-star axis, so
+// an *undamped* field would push it in −y; the damping makes the void exactly
+// force-free, and the burn (along +x) must therefore produce a pure +x Δv with
+// no gravitational contamination.  Exercises the massless burn integration
+// through the multi-subsystem, far-field-damped ephemeris kernels.
+TEST_F(PileUpTest, OnRailsBurnInDampedVoid) {
+  // Two equal stars, each its own subsystem, 10⁸ m apart on the x axis.
+  Mass const star_mass = 1e24 * Kilogram;
+  Length const separation = 1e8 * Metre;
+  Acceleration const far_field_damping_floor = 1 * Metre / Pow<2>(Second);
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.emplace_back(make_not_null_unique<MassiveBody>(star_mass));
+  bodies.emplace_back(make_not_null_unique<MassiveBody>(star_mass));
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      DegreesOfFreedom<Barycentric>{Barycentric::origin, Barycentric::unmoving},
+      DegreesOfFreedom<Barycentric>{
+          Barycentric::origin +
+              Displacement<Barycentric>({separation, 0 * Metre, 0 * Metre}),
+          Barycentric::unmoving}};
+  Ephemeris<Barycentric> ephemeris{
+      std::move(bodies),
+      initial_state,
+      /*initial_time=*/J2000,
+      /*accuracy_parameters=*/{/*fitting_tolerance=*/1 * Metre,
+                               /*geopotential_tolerance=*/0x1p-24},
+      Ephemeris<Barycentric>::FixedStepParameters{
+          SymplecticRungeKuttaNyströmIntegrator<
+              BlanesMoan2002SRKN6B,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          1 * Second},
+      /*subsystems=*/std::vector<int>{0, 1},
+      far_field_damping_floor};
+
+  // The probe sits well inside the void (√2 · 5×10⁷ m ≈ 7×10⁷ m from each
+  // star, far beyond the ~8×10⁶ m cutoff radius) and off the x axis, so an
+  // undamped field would pull it in −y.
+  Part probe(part_id1_,
+             "probe",
+             mass1_,
+             EccentricPart::origin,
+             inertia_tensor1_,
+             RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+                 DegreesOfFreedom<Barycentric>(
+                     Barycentric::origin +
+                         Displacement<Barycentric>(
+                             {5e7 * Metre, 5e7 * Metre, 0 * Metre}),
+                     Barycentric::unmoving)),
+             /*deletion_callback=*/nullptr);
+
+  Time const fixed_step = 10 * Second;
+  EXPECT_CALL(deletion_callback_, Call()).Times(1);
+  TestablePileUp pile_up({&probe}, J2000,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         deletion_callback_.AsStdFunction());
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 1.5 * fixed_step));
+  pile_up.NudgeParts();
+
+  auto const velocity = [&probe]() {
+    return probe.rigid_motion()({RigidPart::origin, RigidPart::unmoving})
+        .velocity();
+  };
+
+  // The void is exactly force-free: with no burn the probe coasts, keeping its
+  // (zero) velocity.  An undamped field would have added a −y drift here.
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 2.5 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT(velocity().Norm(), Lt(1e-9 * Metre / Second));
+
+  Vector<double, Barycentric> const direction({1, 0, 0});
+  Force const thrust = 2 * Newton;
+  SpecificImpulse const specific_impulse = 100 * Metre / Second;
+  Variation<Mass> const mass_flow = thrust / specific_impulse;
+
+  // A burn along +x whose propellant outlasts the step: the Δv is Циолковский's
+  // and lies purely along +x — the damped void contributes no acceleration.
+  Velocity<Barycentric> const v0 = velocity();
+  Mass const m0 = mass1_;
+  pile_up.set_on_rails_burn({thrust,
+                             specific_impulse,
+                             /*initial_mass=*/m0,
+                             direction,
+                             /*max_duration=*/1 * Hour});
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 3.5 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_FALSE(pile_up.on_rails_burn().has_value());
+  Mass const m1 = m0 - fixed_step * mass_flow;
+  Speed const Δv = specific_impulse * std::log(m0 / m1);
+  Velocity<Barycentric> const Δv_vector = velocity() - v0;
+  EXPECT_THAT(Δv_vector.coordinates().x,
+              AbsoluteErrorFrom(Δv, Lt(1e-6 * Metre / Second)));
+  // No gravitational contamination transverse to the thrust.
+  EXPECT_THAT(Δv_vector.coordinates().y,
+              AbsoluteErrorFrom(0 * Metre / Second, Lt(1e-9 * Metre / Second)));
+  EXPECT_THAT(Δv_vector.coordinates().z,
+              AbsoluteErrorFrom(0 * Metre / Second, Lt(1e-9 * Metre / Second)));
+
+  // A burn that exhausts its propellant midway coasts (force-free) afterwards.
+  Velocity<Barycentric> const v1 = velocity();
+  Time const burn_duration = 4 * Second;
+  pile_up.set_on_rails_burn({thrust,
+                             specific_impulse,
+                             /*initial_mass=*/m1,
+                             direction,
+                             burn_duration});
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 4.5 * fixed_step));
+  pile_up.NudgeParts();
+  Mass const m2 = m1 - burn_duration * mass_flow;
+  Speed const Δv2 = specific_impulse * std::log(m1 / m2);
+  EXPECT_THAT((velocity() - v1).Norm(),
+              AbsoluteErrorFrom(Δv2, Lt(1e-6 * Metre / Second)));
+
+  // With no burn set, the next step is a pure coast in the void.
+  Velocity<Barycentric> const v2 = velocity();
+  EXPECT_OK(pile_up.AdvanceTime(J2000 + 5.5 * fixed_step));
+  pile_up.NudgeParts();
+  EXPECT_THAT(velocity(), AlmostEquals(v2, 0, 8));
+}
+
 TEST_F(PileUpTest, Serialization) {
   MockEphemeris<Barycentric> ephemeris;
   p1_.apply_intrinsic_force(
