@@ -1207,5 +1207,120 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurnHistorySurvivesReanimation
   EXPECT_THAT(velocity_divergence, Lt(1e-6 * Metre / Second));
 }
 
+// WS4 minimal-fork load-bearing assumption (R7 §9.1): a vessel that goes
+// unmanaged is destroyed, and on re-adoption a fresh Vessel is constructed with
+// its subsystem taken from its parent celestial.  So a warped vessel re-adopted
+// around a destination star in another subsystem lands in THAT subsystem — with
+// its trajectory anchored at the destination's local origin, not offset by the
+// interstellar distance.  This confirms no C++ re-seed fork is needed for the
+// minimal-fork warp (the assignment is automatic).
+TEST_F(PluginIntegrationTestWithoutPlugin, WarpReadoptionLandsInDestinationSubsystem) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                            /*parent_index=*/std::nullopt,
+                                            gravity_model,
+                                            initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                            /*parent_index=*/star_a,
+                                            gravity_model,
+                                            initial_state);
+  }
+  plugin->EndInitialization();
+  EXPECT_NE(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetCelestial(star_b).subsystem());
+
+  bool inserted;
+  Length const orbit = 1e9 * Metre;
+
+  // A vessel adopted around star A (the origin system).
+  GUID const guid_a = "vessel-A";
+  plugin->InsertOrKeepVessel(guid_a, "A", star_a, /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      101, "part-A", guid_a,
+      {Displacement<AliceSun>({orbit, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+
+  // A vessel adopted around star B — this is the re-adoption a warp produces at
+  // the destination (a fresh Vessel whose parent is the destination star).
+  GUID const guid_b = "vessel-B";
+  plugin->InsertOrKeepVessel(guid_b, "B", star_b, /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      102, "part-B", guid_b,
+      {Displacement<AliceSun>({orbit, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  // Each vessel is tagged with its parent star's subsystem — automatically,
+  // from the constructor (no distance-triggered rebase, no re-seed fork).
+  EXPECT_EQ(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetVessel(guid_a)->subsystem());
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(),
+            plugin->GetVessel(guid_b)->subsystem());
+  EXPECT_NE(plugin->GetVessel(guid_a)->subsystem(),
+            plugin->GetVessel(guid_b)->subsystem());
+
+  // The destination vessel is anchored at star B's local origin: its trajectory
+  // sits ~1e9 m from that origin, NOT ~4e16 m (which is what a wrong subsystem
+  // assignment relative to star A would produce — the precision catastrophe
+  // WS1 exists to prevent).
+  Length const raw_offset_from_own_origin =
+      (plugin->GetVessel(guid_b)->trajectory().back().degrees_of_freedom.position() -
+       Barycentric::origin).Norm();
+  EXPECT_THAT(raw_offset_from_own_origin, Lt(2e9 * Metre));
+  // And VesselFromParent still reports the true near-star-B orbit.
+  EXPECT_THAT(plugin->VesselFromParent(star_b, guid_b).displacement().Norm(),
+              AbsoluteErrorFrom(orbit, Lt(1 * Kilo(Metre))));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia
