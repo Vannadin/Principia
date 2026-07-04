@@ -1684,6 +1684,99 @@ template<bool has_far_field_damping,
          bool body1_is_oblate,
          bool body2_is_oblate,
          typename MassiveBodyConstPtr>
+FORCE_INLINE void Ephemeris<Frame>::
+AddMassiveBodyPairGravitationalAcceleration(
+    Instant const& t,
+    std::size_t const b1,
+    std::size_t const b2,
+    GravitationalParameter const& μ1,
+    int const s1,
+    Position<Frame> const& position_of_b1,
+    Vector<Acceleration, Frame>& acceleration_on_b1,
+    std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
+    std::vector<Position<Frame>> const& positions,
+    std::vector<Vector<Acceleration, Frame>>& accelerations,
+    std::vector<Geopotential<Frame>> const& geopotentials) const {
+  Vector<Acceleration, Frame>& acceleration_on_b2 = accelerations[b2];
+  MassiveBody const& body2 = *bodies2[b2];
+  GravitationalParameter const& μ2 = body2.gravitational_parameter();
+
+  // A vector from the center of `b2` to the center of `b1`.
+  Displacement<Frame> Δq = position_of_b1 - positions[b2];
+  if constexpr (has_subsystems) {
+    if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+    }
+  }
+
+  Square<Length> const Δq² = Δq.Norm²();
+  if constexpr (has_far_field_damping) {
+    if (Δq² >= PairFarFieldDamping(b1, b2).outer_threshold²()) {
+      // The interaction of this pair is damped to exactly zero here; the
+      // harmonics, which are damped independently (see `HarmonicDamping`),
+      // are zero far below this distance.
+      return;
+    }
+  }
+  Length const Δq_norm = Sqrt(Δq²);
+  Exponentiation<Length, -3> const one_over_Δq³ = Δq_norm / (Δq² * Δq²);
+
+  auto μ1_over_Δq³ = μ1 * one_over_Δq³;
+  auto μ2_over_Δq³ = μ2 * one_over_Δq³;
+  if constexpr (has_far_field_damping) {
+    // The acceleration deriving from the damped point-mass potential
+    // −σ μ / r.  A single factor damps the actions of both bodies, which
+    // keeps them exactly equal and opposite.
+    double σ;
+    double σʹr;
+    PairFarFieldDamping(b1, b2).ComputeDampedRadialQuantities(Δq_norm, σ, σʹr);
+    double const damping_factor = σ - σʹr;
+    μ1_over_Δq³ *= damping_factor;
+    μ2_over_Δq³ *= damping_factor;
+  }
+  acceleration_on_b2 += Δq * μ1_over_Δq³;
+
+  // [New87], Lex. III. Actioni contrariam semper & æqualem esse reactionem:
+  // sive corporum duorum actiones in se mutuo semper esse æquales &
+  // in partes contrarias dirigi.
+  acceleration_on_b1 -= Δq * μ2_over_Δq³;
+
+  if (body1_is_oblate || body2_is_oblate) {
+    if (body1_is_oblate) {
+      Vector<Quotient<Acceleration,
+                      GravitationalParameter>, Frame> const
+          spherical_harmonics_effect =
+              geopotentials[b1].GeneralSphericalHarmonicsAcceleration(
+                  t,
+                  -Δq,
+                  Δq_norm,
+                  Δq²,
+                  one_over_Δq³);
+      acceleration_on_b1 -= μ2 * spherical_harmonics_effect;
+      acceleration_on_b2 += μ1 * spherical_harmonics_effect;
+    }
+    if (body2_is_oblate) {
+      Vector<Quotient<Acceleration,
+                      GravitationalParameter>, Frame> const
+          degree_2_zonal_effect2 =
+              geopotentials[b2].GeneralSphericalHarmonicsAcceleration(
+                  t,
+                  Δq,
+                  Δq_norm,
+                  Δq²,
+                  one_over_Δq³);
+      acceleration_on_b1 += μ2 * degree_2_zonal_effect2;
+      acceleration_on_b2 -= μ1 * degree_2_zonal_effect2;
+    }
+  }
+}
+
+template<typename Frame>
+template<bool has_far_field_damping,
+         bool has_subsystems,
+         bool body1_is_oblate,
+         bool body2_is_oblate,
+         typename MassiveBodyConstPtr>
 void Ephemeris<Frame>::
 ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
     Instant const& t,
@@ -1700,79 +1793,12 @@ ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies(
   GravitationalParameter const& μ1 = body1.gravitational_parameter();
   int const s1 = subsystem_of_body_[b1];
   for (std::size_t b2 = b2_begin; b2 < b2_end; ++b2) {
-    Vector<Acceleration, Frame>& acceleration_on_b2 = accelerations[b2];
-    MassiveBody const& body2 = *bodies2[b2];
-    GravitationalParameter const& μ2 = body2.gravitational_parameter();
-
-    // A vector from the center of `b2` to the center of `b1`.
-    Displacement<Frame> Δq = position_of_b1 - positions[b2];
-    if constexpr (has_subsystems) {
-      if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
-        Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
-      }
-    }
-
-    Square<Length> const Δq² = Δq.Norm²();
-    if constexpr (has_far_field_damping) {
-      if (Δq² >= PairFarFieldDamping(b1, b2).outer_threshold²()) {
-        // The interaction of this pair is damped to exactly zero here; the
-        // harmonics, which are damped independently (see `HarmonicDamping`),
-        // are zero far below this distance.
-        continue;
-      }
-    }
-    Length const Δq_norm = Sqrt(Δq²);
-    Exponentiation<Length, -3> const one_over_Δq³ = Δq_norm / (Δq² * Δq²);
-
-    auto μ1_over_Δq³ = μ1 * one_over_Δq³;
-    auto μ2_over_Δq³ = μ2 * one_over_Δq³;
-    if constexpr (has_far_field_damping) {
-      // The acceleration deriving from the damped point-mass potential
-      // −σ μ / r.  A single factor damps the actions of both bodies, which
-      // keeps them exactly equal and opposite.
-      double σ;
-      double σʹr;
-      PairFarFieldDamping(b1, b2).ComputeDampedRadialQuantities(Δq_norm,
-                                                                σ, σʹr);
-      double const damping_factor = σ - σʹr;
-      μ1_over_Δq³ *= damping_factor;
-      μ2_over_Δq³ *= damping_factor;
-    }
-    acceleration_on_b2 += Δq * μ1_over_Δq³;
-
-    // [New87], Lex. III. Actioni contrariam semper & æqualem esse reactionem:
-    // sive corporum duorum actiones in se mutuo semper esse æquales &
-    // in partes contrarias dirigi.
-    acceleration_on_b1 -= Δq * μ2_over_Δq³;
-
-    if (body1_is_oblate || body2_is_oblate) {
-      if (body1_is_oblate) {
-        Vector<Quotient<Acceleration,
-                        GravitationalParameter>, Frame> const
-            spherical_harmonics_effect =
-                geopotentials[b1].GeneralSphericalHarmonicsAcceleration(
-                    t,
-                    -Δq,
-                    Δq_norm,
-                    Δq²,
-                    one_over_Δq³);
-        acceleration_on_b1 -= μ2 * spherical_harmonics_effect;
-        acceleration_on_b2 += μ1 * spherical_harmonics_effect;
-      }
-      if (body2_is_oblate) {
-        Vector<Quotient<Acceleration,
-                        GravitationalParameter>, Frame> const
-            degree_2_zonal_effect2 =
-                geopotentials[b2].GeneralSphericalHarmonicsAcceleration(
-                    t,
-                    Δq,
-                    Δq_norm,
-                    Δq²,
-                    one_over_Δq³);
-        acceleration_on_b1 += μ2 * degree_2_zonal_effect2;
-        acceleration_on_b2 -= μ1 * degree_2_zonal_effect2;
-      }
-    }
+    AddMassiveBodyPairGravitationalAcceleration<has_far_field_damping,
+                                                has_subsystems,
+                                                body1_is_oblate,
+                                                body2_is_oblate>(
+        t, b1, b2, μ1, s1, position_of_b1, acceleration_on_b1,
+        bodies2, positions, accelerations, geopotentials);
   }
 }
 

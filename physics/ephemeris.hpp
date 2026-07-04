@@ -534,6 +534,38 @@ class Ephemeris {
       std::vector<Vector<Acceleration, Frame>>& accelerations,
       std::vector<Geopotential<Frame>> const& geopotentials) const;
 
+  // Adds to `accelerations` the mutual gravitational acceleration of the pair
+  // of massive bodies `b1` and `b2`.  `b1`'s μ, subsystem, position and
+  // acceleration accumulator are passed already dereferenced, so the caller
+  // can hoist them across a run of `b2`; `b2` indexes `bodies2`, `positions`,
+  // `accelerations` and `geopotentials`.  `b1` and `b2` are indices into this
+  // ephemeris' own arrays and must be distinct (a self-pair would divide by
+  // zero).  This is the body of the loop of
+  // `ComputeGravitationalAccelerationByMassiveBodyOnMassiveBodies`, factored
+  // out so that a pair can be processed with the exact same arithmetic (and
+  // hence the exact same far-field σ) whether it is reached by that dense loop
+  // or by another caller.  Additions into `accelerations` are not associative,
+  // so a caller that needs a result identical to the dense loop must visit the
+  // pairs of each body in the same ascending order.  The template parameters
+  // carry the same meaning as there.
+  template<bool has_far_field_damping,
+           bool has_subsystems,
+           bool body1_is_oblate,
+           bool body2_is_oblate,
+           typename MassiveBodyConstPtr>
+  void AddMassiveBodyPairGravitationalAcceleration(
+      Instant const& t,
+      std::size_t b1,
+      std::size_t b2,
+      GravitationalParameter const& μ1,
+      int s1,
+      Position<Frame> const& position_of_b1,
+      Vector<Acceleration, Frame>& acceleration_on_b1,
+      std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
+      std::vector<Position<Frame>> const& positions,
+      std::vector<Vector<Acceleration, Frame>>& accelerations,
+      std::vector<Geopotential<Frame>> const& geopotentials) const;
+
   // Computes the accelerations due to one body, `body1` (with index `b1` in the
   // `bodies_` and `trajectories_` arrays) on massless bodies at the given
   // `positions`.  The template parameters specify what we know about the
