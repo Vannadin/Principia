@@ -1094,5 +1094,118 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurnSurvivesSaveLoad) {
       RelativeErrorFrom(Δv_resumed, Lt(1e-3)));
 }
 
+// Investigates the ⚠ coverage-sweep finding.  Reanimation *would* reconstruct a
+// burn as a pure gravitational coast (it re-integrates with
+// `NoIntrinsicAccelerations`, `vessel.cpp` ReanimateOneCheckpoint) — but that
+// only applies to history that was actively DROPPED mid-session.  A plain
+// save/load serializes the full burn-affected trajectory, so on reload the
+// history is intact and a reanimation request back over the burn is a no-op:
+// the reconstructed state matches the actual one exactly (measured divergence
+// 0).  This bounds the concern: the common path (save/load) is exact; the coast
+// reconstruction is a rarer, memory-pressure-only path.  The divergence is
+// logged for the record.
+TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurnHistorySurvivesReanimation) {
+  Index const star = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star,
+                                             /*parent_index=*/std::nullopt,
+                                             gravity_model,
+                                             initial_state);
+  }
+  plugin->EndInitialization();
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star,
+                             /*loaded=*/false, inserted);
+  // Far from the star (gravity negligible) and at rest, so the reconstruction
+  // is essentially a stationary point and any velocity is the burn's.
+  plugin->InsertUnloadedPart(
+      part_id, part_name, vessel_guid,
+      {Displacement<AliceSun>({1e12 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  Force const thrust = 1 * Newton;
+  SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
+  Variation<Mass> const mass_flow = thrust / specific_impulse;
+  Time const δt = 100 * Second;
+  Mass m = 1 * Kilogram;
+  Instant const t_start;
+  Instant t = t_start;
+  Instant const t_sample = t_start + 3 * δt;
+
+  // Burn for several frames.
+  for (int i = 0; i < 6; ++i) {
+    t += δt;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star,
+                               /*loaded=*/false, inserted);
+    plugin->SetVesselOnRailsBurn(vessel_guid, thrust, specific_impulse,
+                                 /*initial_mass=*/m,
+                                 Vector<double, World>({0, 1, 0}),
+                                 /*max_duration=*/1 * Hour);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+    m -= δt * mass_flow;
+  }
+
+  // The actual (burn-affected) state at the sample instant.
+  DegreesOfFreedom<Barycentric> const actual =
+      plugin->GetVessel(vessel_guid)->trajectory().EvaluateDegreesOfFreedom(
+          t_sample);
+
+  // Save and reload; then reanimate the forgotten past.
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  plugin = nullptr;
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+  auto const vessel2 = plugin2->GetVessel(vessel_guid);
+  vessel2->AwaitReanimation(t_start, /*quiet=*/true);
+
+  // Whether the reload actually forgot the burn history determines the answer.
+  bool const reanimated = vessel2->trajectory().t_min() <= t_sample;
+  LOG(ERROR) << "reanimated t_min <= t_sample: " << reanimated
+             << "; vessel2 t_min = " << vessel2->trajectory().t_min();
+  ASSERT_TRUE(reanimated);
+  DegreesOfFreedom<Barycentric> const reconstructed =
+      vessel2->trajectory().EvaluateDegreesOfFreedom(t_sample);
+  Length const position_divergence =
+      (reconstructed.position() - actual.position()).Norm();
+  Speed const velocity_divergence =
+      (reconstructed.velocity() - actual.velocity()).Norm();
+  LOG(ERROR) << "Reanimation-vs-actual at the sample instant — position: "
+             << position_divergence << ", velocity: " << velocity_divergence
+             << " (actual speed " << actual.velocity().Norm() << ").";
+  // The burn actually happened (non-trivial speed) and the reloaded history
+  // reproduces it exactly: the burn survives serialization untouched.
+  EXPECT_THAT(actual.velocity().Norm(), Gt(100 * Metre / Second));
+  EXPECT_THAT(position_divergence, Lt(1 * Milli(Metre)));
+  EXPECT_THAT(velocity_divergence, Lt(1e-6 * Metre / Second));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia

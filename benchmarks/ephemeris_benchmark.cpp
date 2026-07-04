@@ -35,6 +35,7 @@
 #include "physics/discrete_trajectory.hpp"
 #include "physics/ephemeris.hpp"
 #include "physics/kepler_orbit.hpp"
+#include "physics/massive_body.hpp"
 #include "physics/massless_body.hpp"
 #include "physics/solar_system.hpp"
 #include "quantities/astronomy.hpp"
@@ -73,6 +74,7 @@ using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_kepler_orbit;
 using namespace principia::physics::_massless_body;
+using namespace principia::physics::_massive_body;
 using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_bipm;
@@ -107,6 +109,79 @@ not_null<std::unique_ptr<SolarSystem<Barycentric>>> SolarSystemAtСпутник1
           /*ignore_frame=*/true);
   SolarSystemFactory::AdjustAccuracy(accuracy, *at_спутник_1_launch);
   return at_спутник_1_launch;
+}
+
+// A synthetic RSS-Origin-like roster to measure the WS2b far-field-damping
+// speedup on the massive-body backbone: two star systems (two subsystems) plus
+// a belt of 200 asteroids around the first star.  With `state.range(0) != 0`
+// the far field is damped (floor = 1e-12 m/s²), which elides every
+// cross-subsystem pair and every asteroid–asteroid pair beyond the asteroids'
+// ~0.21 AU cutoff radius; the ratio of the damped and undamped runs is the
+// backbone speedup.  Both configurations live in one binary, so they are
+// directly comparable without the two-binary interleave.
+void BM_EphemerisMultiSubsystemAsteroids(benchmark::State& state) {
+  bool const damped = state.range(0) != 0;
+  int const number_of_asteroids = 200;
+  GravitationalParameter const μ_star =
+      1.3e20 * Pow<3>(Metre) / Pow<2>(Second);
+  GravitationalParameter const μ_asteroid =
+      1e9 * Pow<3>(Metre) / Pow<2>(Second);
+  Length const belt_radius = 1.5e11 * Metre;
+  Length const system_separation = 4e16 * Metre;
+  Speed const belt_speed = Sqrt(μ_star / belt_radius);
+  Time const orbital_period = 2 * π * Sqrt(Pow<3>(belt_radius) / μ_star);
+  Instant const t0;
+
+  for (auto _ : state) {
+    state.PauseTiming();
+    std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+    std::vector<DegreesOfFreedom<Barycentric>> initial_state;
+    std::vector<int> subsystems;
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("star A", μ_star)));
+    initial_state.emplace_back(Barycentric::origin, Barycentric::unmoving);
+    subsystems.push_back(0);
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("star B", μ_star)));
+    initial_state.emplace_back(
+        Barycentric::origin +
+            Displacement<Barycentric>(
+                {system_separation, 0 * Metre, 0 * Metre}),
+        Barycentric::unmoving);
+    subsystems.push_back(1);
+    for (int i = 0; i < number_of_asteroids; ++i) {
+      Angle const θ = 2 * π * i / number_of_asteroids * Radian;
+      bodies.push_back(make_not_null_unique<MassiveBody>(
+          MassiveBody::Parameters("asteroid " + std::to_string(i),
+                                  μ_asteroid)));
+      initial_state.emplace_back(
+          Barycentric::origin +
+              Displacement<Barycentric>(
+                  {belt_radius * Cos(θ), belt_radius * Sin(θ), 0 * Metre}),
+          Velocity<Barycentric>({-belt_speed * Sin(θ),
+                                 belt_speed * Cos(θ),
+                                 0 * Metre / Second}));
+      subsystems.push_back(0);
+    }
+    Ephemeris<Barycentric> ephemeris(
+        std::move(bodies),
+        initial_state,
+        t0,
+        Ephemeris<Barycentric>::AccuracyParameters(
+            /*fitting_tolerance=*/1 * Metre,
+            /*geopotential_tolerance=*/0x1p-24),
+        Ephemeris<Barycentric>::FixedStepParameters(
+            SymmetricLinearMultistepIntegrator<
+                QuinlanTremaine1990Order12,
+                Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+            /*step=*/orbital_period / 2000),
+        subsystems,
+        damped ? 1e-12 * Metre / Pow<2>(Second) : Acceleration{});
+
+    state.ResumeTiming();
+    CHECK_OK(ephemeris.Prolong(t0 + orbital_period / 2));
+  }
+  state.SetLabel(damped ? "damped" : "undamped");
 }
 
 void BM_EphemerisKSPSystem(benchmark::State& state) {
@@ -586,6 +661,8 @@ BENCHMARK(BM_EphemerisMultithreadingBenchmark)
     ->ArgPair(3, 5)
     ->Unit(benchmark::kMicrosecond);
 BENCHMARK(BM_EphemerisKSPSystem)->Arg(-3)->Unit(benchmark::kSecond);
+BENCHMARK(BM_EphemerisMultiSubsystemAsteroids)
+    ->Arg(0)->Arg(1)->Unit(benchmark::kSecond);
 BENCHMARK_TEMPLATE(BM_EphemerisSolarSystem,
                    SolarSystemFactory::Accuracy::MajorBodiesOnly)
     ->Arg(-3)
