@@ -879,6 +879,72 @@ TEST_P(EphemerisTest, FarFieldDamping) {
                 q_at_distance(mid_shell), t0_));
 }
 
+// An oblate body's far field is damped like a point mass: the harmonics are
+// damped independently (`HarmonicDamping`) and vanish far below the far-field
+// shell, so on the shell the oblateness leaves no trace and the oblate body
+// produces the same damped acceleration as a spherical body of the same mass.
+TEST_P(EphemerisTest, FarFieldDampingOblate) {
+  solar_system_.LimitOblatenessToDegree("Earth", /*max_degree=*/2);
+  solar_system_.LimitOblatenessToZonal("Earth");
+  serialization::GravityModel::Body const oblate_gravity_model =
+      solar_system_.gravity_model_message("Earth");
+  solar_system_.LimitOblatenessToDegree("Earth", /*max_degree=*/0);
+  serialization::GravityModel::Body const spherical_gravity_model =
+      solar_system_.gravity_model_message("Earth");
+  GravitationalParameter const μ =
+      SolarSystem<ICRS>::MakeMassiveBody(spherical_gravity_model)
+          ->gravitational_parameter();
+  // A shell far beyond the distance where the harmonics vanish.
+  Acceleration const floor = μ / Pow<2>(1e12 * Metre);
+  FarFieldDamping const damping(Sqrt(μ / floor));
+
+  std::vector<DegreesOfFreedom<ICRS>> const initial_state = {
+      DegreesOfFreedom<ICRS>(ICRS::origin, ICRS::unmoving)};
+  auto const make_ephemeris =
+      [&](serialization::GravityModel::Body const& gravity_model) {
+        std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+        bodies.push_back(SolarSystem<ICRS>::MakeMassiveBody(gravity_model));
+        return std::make_unique<Ephemeris<ICRS>>(
+            std::move(bodies),
+            initial_state,
+            t0_,
+            Ephemeris<ICRS>::AccuracyParameters(
+                /*fitting_tolerance=*/5 * Milli(Metre),
+                /*geopotential_tolerance=*/0x1p-24),
+            Ephemeris<ICRS>::FixedStepParameters(integrator(), 1 * Hour),
+            /*subsystems=*/std::vector<int>{},
+            floor);
+      };
+  auto const oblate = make_ephemeris(oblate_gravity_model);
+  auto const spherical = make_ephemeris(spherical_gravity_model);
+  EXPECT_OK(oblate->Prolong(t0_ + 12 * Hour));
+  EXPECT_OK(spherical->Prolong(t0_ + 12 * Hour));
+
+  auto const q_at_distance = [](Length const& z) {
+    return ICRS::origin + Displacement<ICRS>({0 * Metre, 0 * Metre, z});
+  };
+
+  // Close in (inside the inner threshold, where the damping is inert), the
+  // oblateness is felt: the oblate body differs from the spherical one.
+  Length const near = 1e8 * Metre;
+  EXPECT_NE(oblate->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(near), t0_),
+            spherical->ComputeGravitationalAccelerationOnMasslessBody(
+                q_at_distance(near), t0_));
+
+  // On the shell the harmonics have long since vanished, so the oblate body's
+  // damped far field equals the spherical body's: the oblateness does not leak
+  // through the damping shell.
+  Length const mid_shell =
+      (damping.inner_threshold() + damping.outer_threshold()) / 2;
+  EXPECT_THAT(
+      oblate->ComputeGravitationalAccelerationOnMasslessBody(
+          q_at_distance(mid_shell), t0_),
+      AlmostEquals(spherical->ComputeGravitationalAccelerationOnMasslessBody(
+                       q_at_distance(mid_shell), t0_),
+                   0, 4));
+}
+
 // A probe falling through the damping shell conserves the energy of the
 // damped dynamics: the boundaries of the shell introduce no kink.
 TEST_P(EphemerisTest, FarFieldDampingEnergyConservation) {
