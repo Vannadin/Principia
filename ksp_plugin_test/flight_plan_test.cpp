@@ -562,6 +562,127 @@ TEST_F(FlightPlanTest, Rebase) {
             front.degrees_of_freedom.velocity());
 }
 
+TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
+  // Regression test for the burn direction after a cross-subsystem rebase.
+  // The flight plan is computed with a non-prograde burn in subsystem 0, then
+  // rebased into subsystem 1 while its manœuvre keeps a frame centred on the
+  // subsystem-0 body.  Since the rebase is only a change of representation of
+  // the same physical trajectory, the velocity at the end of the burn (which
+  // does not depend on the subsystem origin) must be unchanged.  A prograde
+  // burn would follow the velocity, which is unaffected by the representation,
+  // and would not exercise the bug; hence the normal burn below.
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  for (int i = 0; i < 2; ++i) {
+    bodies.emplace_back(make_not_null_unique<RotatingBody<Barycentric>>(
+        1 * Pow<3>(Metre) / Pow<2>(Second),
+        RotatingBody<Barycentric>::Parameters(
+            /*mean_radius=*/1 * Metre,
+            /*reference_angle=*/0 * Radian,
+            /*reference_instant=*/J2000,
+            /*angular_frequency=*/1 * Radian / Second,
+            /*right_ascension_of_pole=*/0 * Radian,
+            /*declination_of_pole=*/0 * Radian)));
+  }
+  // The local origin of subsystem 1 is offset from that of subsystem 0 by far
+  // more than the size of the burn's neighbourhood, so that omitting the
+  // subsystem conversion wrecks the burn direction, yet not so far that the
+  // finite precision of the rebased (subsystem-1) representation of a vessel
+  // that stays near subsystem 0 masks the effect being tested.
+  Displacement<Barycentric> const subsystem_1_origin(
+      {1e6 * Metre, 0 * Metre, 0 * Metre});
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      {Barycentric::origin, Barycentric::unmoving},
+      {Barycentric::origin + subsystem_1_origin, Barycentric::unmoving}};
+  auto ephemeris = std::make_unique<Ephemeris<Barycentric>>(
+      std::move(bodies),
+      initial_state,
+      /*initial_time=*/t0_ - 2 * π * Second,
+      Ephemeris<Barycentric>::AccuracyParameters(
+          /*fitting_tolerance=*/1 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<Barycentric>::FixedStepParameters(
+          SymmetricLinearMultistepIntegrator<
+              QuinlanTremaine1990Order12,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*step=*/10 * Minute),
+      /*subsystems=*/std::vector<int>{0, 1});
+  EXPECT_OK(ephemeris->Prolong(t0_ + 3 * Second));
+  ASSERT_EQ(2, ephemeris->number_of_subsystems());
+
+  // A navigation frame centred on the subsystem-0 body.
+  auto const navigation_frame =
+      std::make_unique<TestNavigationFrame>(ephemeris.get(),
+                                            ephemeris->bodies()[0]);
+
+  // A vessel near the subsystem-0 body, moving tangentially.
+  DegreesOfFreedom<Barycentric> const initial_degrees_of_freedom{
+      Barycentric::origin +
+          Displacement<Barycentric>({1 * Metre, 0 * Metre, 0 * Metre}),
+      Velocity<Barycentric>(
+          {0 * Metre / Second, 1 * Metre / Second, 0 * Metre / Second})};
+
+  auto make_flight_plan = [&]() {
+    return std::make_unique<FlightPlan>(
+        /*initial_mass=*/1 * Kilogram,
+        /*initial_time=*/t0_,
+        initial_degrees_of_freedom,
+        /*desired_final_time=*/t0_ + 3 * Second,
+        ephemeris.get(),
+        Ephemeris<Barycentric>::AdaptiveStepParameters(
+            EmbeddedExplicitRungeKuttaNyströmIntegrator<
+                DormandالمكاوىPrince1986RKN434FM,
+                Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+            /*max_steps=*/1000,
+            /*length_integration_tolerance=*/1 * Milli(Metre),
+            /*speed_integration_tolerance=*/1 * Milli(Metre) / Second),
+        Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters(
+            EmbeddedExplicitGeneralizedRungeKuttaNyströmIntegrator<
+                Fine1987RKNG34,
+                Ephemeris<Barycentric>::GeneralizedNewtonianMotionEquation>(),
+            /*max_steps=*/1000,
+            /*length_integration_tolerance=*/1 * Milli(Metre),
+            /*speed_integration_tolerance=*/1 * Milli(Metre) / Second));
+  };
+
+  // A non-prograde (normal) burn, whose direction depends on the position
+  // relative to the frame's centre.
+  auto make_normal_burn = [&]() -> NavigationManœuvre::Burn {
+    NavigationManœuvre::Intensity intensity;
+    intensity.Δv = Velocity<Frenet<Navigation>>(
+        {0 * Metre / Second, 1 * Metre / Second, 0 * Metre / Second});
+    NavigationManœuvre::Timing timing;
+    timing.initial_time = t0_ + 1 * Second;
+    return {intensity,
+            timing,
+            /*thrust=*/1 * Newton,
+            /*specific_impulse=*/1 * Newton * Second / Kilogram,
+            make_not_null_unique<TestNavigationFrame>(*navigation_frame),
+            /*is_inertially_fixed=*/true};
+  };
+
+  // Reference: computed entirely in subsystem 0.
+  auto const reference_flight_plan = make_flight_plan();
+  EXPECT_OK(reference_flight_plan->Insert(make_normal_burn(), 0));
+  ASSERT_EQ(0, reference_flight_plan->subsystem());
+  Velocity<Barycentric> const reference_velocity =
+      reference_flight_plan->GetSegment(1)
+          ->back().degrees_of_freedom.velocity();
+
+  // Rebased into subsystem 1; the manœuvre's frame stays in subsystem 0.
+  auto const rebased_flight_plan = make_flight_plan();
+  EXPECT_OK(rebased_flight_plan->Insert(make_normal_burn(), 0));
+  EXPECT_OK(rebased_flight_plan->Rebase(
+      ephemeris->subsystem_conversion(/*s1=*/0, /*s2=*/1), /*subsystem=*/1));
+  ASSERT_EQ(1, rebased_flight_plan->subsystem());
+  Velocity<Barycentric> const rebased_velocity =
+      rebased_flight_plan->GetSegment(1)
+          ->back().degrees_of_freedom.velocity();
+
+  // Same physical burn ⇒ same end-of-burn velocity.
+  EXPECT_THAT((rebased_velocity - reference_velocity).Norm(),
+              Lt(1 * Micro(Metre) / Second));
+}
+
 TEST_F(FlightPlanTest, Serialization) {
   EXPECT_OK(flight_plan_->SetDesiredFinalTime(t0_ + 42 * Second));
   EXPECT_OK(flight_plan_->Insert(MakeFirstBurn(), 0));

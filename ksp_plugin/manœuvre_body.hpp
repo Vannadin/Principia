@@ -187,11 +187,13 @@ void Manœuvre<InertialFrame, Frame>::clear_coasting_trajectory() {
 
 template<typename InertialFrame, typename Frame>
 void Manœuvre<InertialFrame, Frame>::set_coasting_trajectory(
-    DiscreteTrajectorySegmentIterator<InertialFrame> const trajectory) {
+    DiscreteTrajectorySegmentIterator<InertialFrame> const trajectory,
+    Displacement<InertialFrame> const& subsystem_conversion) {
   typename DiscreteTrajectory<InertialFrame>::iterator const it =
       trajectory->find(initial_time());
   CHECK(it != trajectory->end());
   initial_degrees_of_freedom_ = it->degrees_of_freedom;
+  subsystem_conversion_ = subsystem_conversion;
 }
 
 template<typename InertialFrame, typename Frame>
@@ -271,12 +273,20 @@ OrthogonalMap<Frenet<Frame>, InertialFrame>
 Manœuvre<InertialFrame, Frame>::ComputeFrenetFrame(
     Instant const& t,
     DegreesOfFreedom<InertialFrame> const& degrees_of_freedom) const {
+  // `degrees_of_freedom` are represented relative to the flight plan's
+  // subsystem origin, whereas `frame()` operates relative to its own
+  // subsystem's origin; convert before evaluating the frame.
+  // `subsystem_conversion_` is zero when both subsystems coincide, leaving the
+  // computation unchanged.
+  DegreesOfFreedom<InertialFrame> const frame_degrees_of_freedom(
+      degrees_of_freedom.position() + subsystem_conversion_,
+      degrees_of_freedom.velocity());
   RigidMotion<InertialFrame, Frame> const to_frame_at_t =
       frame()->ToThisFrameAtTime(t);
   RigidMotion<Frame, InertialFrame> const from_frame_at_t =
       to_frame_at_t.Inverse();
   return from_frame_at_t.orthogonal_map() *
-         frame()->FrenetFrame(t, to_frame_at_t(degrees_of_freedom))
+         frame()->FrenetFrame(t, to_frame_at_t(frame_degrees_of_freedom))
              .template Forget<OrthogonalMap>();
 }
 

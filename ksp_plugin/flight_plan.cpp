@@ -570,7 +570,10 @@ absl::Status FlightPlan::ComputeSegments(
                                                coast,
                                                max_ephemeris_steps);
       if (status.ok()) {
-        manœuvre.set_coasting_trajectory(coast);
+        manœuvre.set_coasting_trajectory(
+            coast,
+            ephemeris_->subsystem_conversion(subsystem_,
+                                             manœuvre.frame()->subsystem()));
       } else {
         overall_status.Update(status);
         anomalous_segments_ = 1;
