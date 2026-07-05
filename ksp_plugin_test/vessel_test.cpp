@@ -472,6 +472,18 @@ TEST_F(VesselTest, IsCollapsible) {
                                        1 * Newton * Metre * Radian,
                                        0 * Newton * Metre * Radian}));
     EXPECT_TRUE(IsCollapsible());
+
+    // On-rails burn.  There is no intrinsic force, but the trajectory is a
+    // powered arc, not a gravitational coast, so it is not collapsible.
+    pile_up->set_on_rails_burn({/*thrust=*/1 * Newton,
+                                /*specific_impulse=*/1 * Metre / Second,
+                                /*initial_mass=*/1 * Kilogram,
+                                /*direction=*/Vector<double, Barycentric>(
+                                    {1, 0, 0}),
+                                /*max_duration=*/1 * Second});
+    EXPECT_FALSE(IsCollapsible());
+    pile_up->clear_on_rails_burn();
+    EXPECT_TRUE(IsCollapsible());
   }
 
   {

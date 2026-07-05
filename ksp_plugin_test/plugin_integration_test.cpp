@@ -1094,16 +1094,16 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurnSurvivesSaveLoad) {
       RelativeErrorFrom(Δv_resumed, Lt(1e-3)));
 }
 
-// Investigates the ⚠ coverage-sweep finding.  Reanimation *would* reconstruct a
-// burn as a pure gravitational coast (it re-integrates with
-// `NoIntrinsicAccelerations`, `vessel.cpp` ReanimateOneCheckpoint) — but that
-// only applies to history that was actively DROPPED mid-session.  A plain
-// save/load serializes the full burn-affected trajectory, so on reload the
-// history is intact and a reanimation request back over the burn is a no-op:
-// the reconstructed state matches the actual one exactly (measured divergence
-// 0).  This bounds the concern: the common path (save/load) is exact; the coast
-// reconstruction is a rarer, memory-pressure-only path.  The divergence is
-// logged for the record.
+// Reanimation reconstructs a segment by re-integrating with
+// `NoIntrinsicAccelerations` (`vessel.cpp` ReanimateOneCheckpoint), which for a
+// burn would produce a gravitational coast rather than the powered arc.  That
+// only happens for a *collapsible* segment; a segment carrying an on-rails burn
+// is now kept non-collapsible (see `Vessel::IsCollapsible` and
+// `Vessel::AdvanceTime`), so it is checkpointed and reconstructed exactly.
+// This test drives a short burn (fully serialized, so the reload does not
+// actually forget it) and confirms the burn survives a save/load/reanimation
+// round-trip; the collapsibility guarantee that makes it robust to an actual
+// drop is covered by `VesselTest.IsCollapsible`.
 TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurnHistorySurvivesReanimation) {
   Index const star = 0;
   auto plugin =

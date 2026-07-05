@@ -424,6 +424,23 @@ void Vessel::ReadFlightPlanFromMessage() {
 }
 
 void Vessel::AdvanceTime() {
+  // An on-rails burn is applied by the pile-up during the catch-up, i.e. after
+  // `DetectCollapsibilityChange` ran in `FreeVesselsAndPartsAndCollectPileUps`,
+  // where the burn was not yet known.  Re-detect collapsibility now, before the
+  // powered points are appended to the backstory below, so that they land in a
+  // non-collapsible segment instead of a collapsible one that reanimation would
+  // later reconstruct as a gravitational coast.
+  bool burning = false;
+  ForSomePart([&burning](Part& part) {
+    PileUp const* const containing_pile_up = part.containing_pile_up();
+    burning = containing_pile_up != nullptr &&
+              (containing_pile_up->on_rails_burn().has_value() ||
+               containing_pile_up->on_rails_burn_for_prediction().has_value());
+  });
+  if (burning) {
+    DetectCollapsibilityChange();
+  }
+
   // Squirrel away the prediction so that we can reattach it if we don't have a
   // prognostication.
   auto prediction = trajectory_.DetachSegments(prediction_);
@@ -1505,6 +1522,17 @@ bool Vessel::IsCollapsible() const {
     }
   }
   CHECK_NE(nullptr, containing_pile_up);
+  // A part undergoing an on-rails burn carries no intrinsic force (the burn is
+  // integrated by the pile-up during the catch-up), but its trajectory is a
+  // powered arc, not a gravitational coast, and must not be collapsed and later
+  // reconstructed by reanimation as a coast.  `on_rails_burn` is a burn the
+  // game just queued; `on_rails_burn_for_prediction` is the one the last
+  // catch-up integrated, and is the signal that is live when `AdvanceTime`
+  // re-detects collapsibility after applying the burn.
+  if (containing_pile_up->on_rails_burn().has_value() ||
+      containing_pile_up->on_rails_burn_for_prediction().has_value()) {
+    return false;
+  }
   return std::ranges::all_of(
       containing_pile_up->parts(),
       [&parts](auto const& part) {
