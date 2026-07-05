@@ -67,6 +67,7 @@ using namespace principia::integrators::_methods;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
 using namespace principia::ksp_plugin::_plugin;
+using namespace principia::ksp_plugin::_vessel;
 using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_ephemeris;
@@ -636,6 +637,24 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurn) {
   EXPECT_THAT(
       (plugin->VesselFromParent(star, vessel_guid).velocity() - v2).Norm(),
       Lt(0.05 * Metre / Second));
+
+  // The prediction no longer anticipates the burn either.  Force a synchronous
+  // recomputation (as `ActivatePlayer` does in-game) so we read the prediction
+  // freshly recomputed from the burn-less state, not the stale one the burn
+  // left behind.  Measured over a fixed 1800 s horizon (the prediction itself
+  // extends far further, so gravity alone accumulates over its whole length),
+  // the gain collapses from the burn's > 1 km/s to the negligible gravity at
+  // this distance.
+  Vessel::MakeSynchronous();
+  plugin->UpdatePrediction({vessel_guid});
+  Vessel::MakeAsynchronous();
+  auto const& from_state = vessel.psychohistory()->back();
+  Instant const horizon = from_state.time + 1800 * Second;
+  Speed const coasting_gain =
+      (vessel.prediction()->EvaluateVelocity(horizon) -
+       from_state.degrees_of_freedom.velocity())
+          .Norm();
+  EXPECT_THAT(coasting_gain, Lt(1 * Metre / Second));
 }
 
 // An end-to-end test of the partitioning of a multi-star system into
