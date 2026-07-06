@@ -475,7 +475,8 @@ void Plugin::InsertUnloadedPart(
     degrees_of_freedom = {
         degrees_of_freedom.position() +
             ephemeris_->subsystem_conversion(parent_subsystem,
-                                             vessel->subsystem()),
+                                             vessel->subsystem(),
+                                             current_time_),
         degrees_of_freedom.velocity()};
   }
 
@@ -522,7 +523,9 @@ void Plugin::InsertOrKeepLoadedPart(
   if (int const main_body_subsystem = main_body_frame.subsystem();
       main_body_subsystem != vessel->subsystem()) {
     world_to_barycentric_motion =
-        SubsystemConversionMotion(main_body_subsystem, vessel->subsystem()) *
+        SubsystemConversionMotion(main_body_subsystem,
+                                  vessel->subsystem(),
+                                  previous_time) *
         world_to_barycentric_motion;
   }
 
@@ -758,7 +761,9 @@ RigidMotion<EccentricPart, World> Plugin::GetPartActualMotion(
           main_body_subsystem = ephemeris_->subsystem_of_body(main_body_);
       vessel_subsystem != main_body_subsystem) {
     part_rigid_motion =
-        SubsystemConversionMotion(vessel_subsystem, main_body_subsystem) *
+        SubsystemConversionMotion(vessel_subsystem,
+                                  main_body_subsystem,
+                                  current_time_) *
         part_rigid_motion;
   }
   return barycentric_to_world * part_rigid_motion *
@@ -778,7 +783,8 @@ DegreesOfFreedom<World> Plugin::CelestialWorldDegreesOfFreedom(
     degrees_of_freedom = {
         degrees_of_freedom.position() +
             ephemeris_->subsystem_conversion(celestial_subsystem,
-                                             main_body_subsystem),
+                                             main_body_subsystem,
+                                             time),
         degrees_of_freedom.velocity()};
   }
   return barycentric_to_world(degrees_of_freedom);
@@ -808,7 +814,8 @@ RigidMotion<Barycentric, World> Plugin::BarycentricToWorld(
     reference_part_barycentric_degrees_of_freedom = {
         reference_part_barycentric_degrees_of_freedom.position() +
             ephemeris_->subsystem_conversion(vessel_subsystem,
-                                             main_body_subsystem),
+                                             main_body_subsystem,
+                                             current_time_),
         reference_part_barycentric_degrees_of_freedom.velocity()};
   }
   auto const reference_part_degrees_of_freedom =
@@ -1025,7 +1032,8 @@ RelativeDegreesOfFreedom<AliceSun> Plugin::VesselFromParent(
     barycentric_result = {
         barycentric_result.displacement() +
             ephemeris_->subsystem_conversion(vessel_subsystem,
-                                             parent_subsystem),
+                                             parent_subsystem,
+                                             current_time_),
         barycentric_result.velocity()};
   }
   RelativeDegreesOfFreedom<AliceSun> const result =
@@ -1049,7 +1057,8 @@ RelativeDegreesOfFreedom<AliceSun> Plugin::CelestialFromParent(
     barycentric_result = {
         barycentric_result.displacement() +
             ephemeris_->subsystem_conversion(celestial_subsystem,
-                                             parent_subsystem),
+                                             parent_subsystem,
+                                             current_time_),
         barycentric_result.velocity()};
   }
   RelativeDegreesOfFreedom<AliceSun> const result =
@@ -1170,9 +1179,13 @@ void Plugin::ComputeAndRenderApsides(
     DistinguishedPoints<World>& periapsides,
     int const subsystem) const {
   auto const& celestial = *FindOrDie(celestials_, celestial_index);
+  // TODO(NearStars): when the offsets become affine in time, the translation
+  // must be evaluated at each point's own time.
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
-      ephemeris_->subsystem_conversion(celestial.subsystem(), subsystem));
+      ephemeris_->subsystem_conversion(celestial.subsystem(),
+                                       subsystem,
+                                       current_time_));
   DistinguishedPoints<Barycentric> barycentric_apoapsides;
   DistinguishedPoints<Barycentric> barycentric_periapsides;
   ComputeApsides(celestial_trajectory,
@@ -1211,9 +1224,13 @@ Plugin::ComputeAndRenderFirstCollision(
     int const subsystem) const {
   auto const& celestial = FindOrDie(celestials_, celestial_index);
   auto const& celestial_body = *celestial->body();
+  // TODO(NearStars): when the offsets become affine in time, the translation
+  // must be evaluated at each point's own time.
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial->trajectory(),
-      ephemeris_->subsystem_conversion(celestial->subsystem(), subsystem));
+      ephemeris_->subsystem_conversion(celestial->subsystem(),
+                                       subsystem,
+                                       current_time_));
 
   // TODO(phl): We should cache the apsides.
   DistinguishedPoints<Barycentric> apoapsides;
@@ -1274,9 +1291,13 @@ void Plugin::ComputeAndRenderClosestApproaches(
   CHECK(renderer_->HasTargetVessel());
 
   Vessel const& target_vessel = renderer_->GetTargetVessel();
+  // TODO(NearStars): when the offsets become affine in time, the translation
+  // must be evaluated at each point's own time.
   TranslatedTrajectory<Barycentric> const target_prediction(
       *target_vessel.prediction(),
-      ephemeris_->subsystem_conversion(target_vessel.subsystem(), subsystem));
+      ephemeris_->subsystem_conversion(target_vessel.subsystem(),
+                                       subsystem,
+                                       current_time_));
   DistinguishedPoints<Barycentric> apoapsides;
   DistinguishedPoints<Barycentric> periapsides;
   ComputeApsides(target_prediction,
@@ -1935,11 +1956,12 @@ void Plugin::UpdatePlanetariumRotation() {
 
 RigidMotion<Barycentric, Barycentric> Plugin::SubsystemConversionMotion(
     int const s1,
-    int const s2) const {
+    int const s2,
+    Instant const& t) const {
   return RigidMotion<Barycentric, Barycentric>(
       RigidTransformation<Barycentric, Barycentric>(
           Barycentric::origin,
-          Barycentric::origin + ephemeris_->subsystem_conversion(s1, s2),
+          Barycentric::origin + ephemeris_->subsystem_conversion(s1, s2, t),
           OrthogonalMap<Barycentric, Barycentric>::Identity()),
       Barycentric::nonrotating,
       Barycentric::unmoving);
@@ -1956,7 +1978,9 @@ Velocity<World> Plugin::VesselVelocity(
       subsystem != plotting_subsystem) {
     converted_degrees_of_freedom = {
         degrees_of_freedom.position() +
-            ephemeris_->subsystem_conversion(subsystem, plotting_subsystem),
+            ephemeris_->subsystem_conversion(subsystem,
+                                             plotting_subsystem,
+                                             time),
         degrees_of_freedom.velocity()};
   }
   DegreesOfFreedom<Navigation> const plotting_frame_degrees_of_freedom =

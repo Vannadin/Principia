@@ -160,12 +160,15 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
 
     BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const
         primary_centred(ephemeris_, primary);
+    // TODO(NearStars): when the offsets become affine in time, the translation
+    // must be evaluated at each point's own time.
     auto const status_or_primary_centred_trajectory =
         ToPrimaryCentred(primary_centred,
                          trajectory,
                          ephemeris_->subsystem_conversion(
                              parameters.subsystem,
-                             primary_centred.subsystem()));
+                             primary_centred.subsystem(),
+                             parameters.first_time));
     RETURN_IF_ERROR(status_or_primary_centred_trajectory);
     auto const& primary_centred_trajectory =
         status_or_primary_centred_trajectory.value();
@@ -241,7 +244,8 @@ absl::Status OrbitAnalyser::FindBodyWithSmallestOsculatingPeriod(
       relative_degrees_of_freedom = {
           relative_degrees_of_freedom.displacement() +
               ephemeris_->subsystem_conversion(parameters.subsystem,
-                                               body_subsystem),
+                                               body_subsystem,
+                                               parameters.first_time),
           relative_degrees_of_freedom.velocity()};
     }
     auto const initial_osculating_elements =
@@ -322,7 +326,8 @@ OrbitAnalyser::ComputeMeanSunIfPossible(
       sun_relative_degrees_of_freedom = {
           sun_relative_degrees_of_freedom.displacement() +
               ephemeris_->subsystem_conversion(sun_subsystem,
-                                               primary_subsystem),
+                                               primary_subsystem,
+                                               parameters.first_time),
           sun_relative_degrees_of_freedom.velocity()};
     }
     auto const sun_osculating_elements =
@@ -338,9 +343,13 @@ OrbitAnalyser::ComputeMeanSunIfPossible(
       RETURN_IF_ERROR(
           ephemeris_->Prolong(ephemeris_->t_max() + 0.5 * JulianYear));
     }
+    // TODO(NearStars): when the offsets become affine in time, the translation
+    // must be evaluated at each point's own time.
     TranslatedTrajectory<Barycentric> const sun_trajectory(
         *ephemeris_->trajectory(sun),
-        ephemeris_->subsystem_conversion(sun_subsystem, primary_subsystem));
+        ephemeris_->subsystem_conversion(sun_subsystem,
+                                         primary_subsystem,
+                                         parameters.first_time));
     auto const sun_elements = OrbitalElements::ForTrajectory(
         sun_trajectory, primary_centred, *primary, *sun);
     if (sun_elements.ok()) {

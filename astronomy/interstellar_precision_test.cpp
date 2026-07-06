@@ -280,11 +280,12 @@ TEST_F(InterstellarPrecisionTest, JacobianAndJerk) {
               Lt(1e-9));
 
   auto const jerks_control = control->ComputeGravitationalJerkOnMassiveBodies(
-      control->bodies(), control->EvaluateAllDegreesOfFreedom(t));
+      control->bodies(), control->EvaluateAllDegreesOfFreedom(t), t);
   auto const jerks_with_subsystems =
       with_subsystems->ComputeGravitationalJerkOnMassiveBodies(
           with_subsystems->bodies(),
-          with_subsystems->EvaluateAllDegreesOfFreedom(t));
+          with_subsystems->EvaluateAllDegreesOfFreedom(t),
+          t);
   EXPECT_THAT(
       RelativeError(jerks_control[0].Norm(), jerks_with_subsystems[0].Norm()),
       Lt(1e-9));
@@ -406,21 +407,25 @@ TEST_F(InterstellarPrecisionTest, Apsides) {
   EXPECT_THAT(apoapsides1.size(), Gt(0));
   EXPECT_THAT(periapsides1.size(), Gt(0));
 
-  auto const& offset = ephemeris->inter_subsystem_offset(/*s1=*/0, /*s2=*/1);
-  auto const separation = [&offset](DegreesOfFreedom<ICRS> const& dof1,
-                                    DegreesOfFreedom<ICRS> const& dof2) {
+  auto const separation = [&ephemeris](Instant const& t,
+                                       DegreesOfFreedom<ICRS> const& dof1,
+                                       DegreesOfFreedom<ICRS> const& dof2) {
+    auto const offset =
+        ephemeris->inter_subsystem_offset(/*s1=*/0, /*s2=*/1, t);
     return (offset.value +
             (offset.error + (dof1.position() - dof2.position()))).Norm();
   };
   for (auto const& [t, degrees_of_freedom] : periapsides1) {
     EXPECT_THAT(AbsoluteError(to_remote_system.Norm() - orbit_radius,
-                              separation(degrees_of_freedom,
+                              separation(t,
+                                         degrees_of_freedom,
                                          periapsides2.at(t))),
                 Lt(100 * Metre));
   }
   for (auto const& [t, degrees_of_freedom] : apoapsides1) {
     EXPECT_THAT(AbsoluteError(to_remote_system.Norm() + orbit_radius,
-                              separation(degrees_of_freedom,
+                              separation(t,
+                                         degrees_of_freedom,
                                          apoapsides2.at(t))),
                 Lt(100 * Metre));
   }
@@ -630,7 +635,7 @@ TEST_F(InterstellarPrecisionTest, ThreeSubsystems) {
       ephemeris->trajectory(ephemeris->bodies()[0])->EvaluatePosition(t0) -
       ICRS::origin;
   Displacement<ICRS> const conversion_2_to_0 =
-      ephemeris->subsystem_conversion(/*s1=*/2, /*s2=*/0);
+      ephemeris->subsystem_conversion(/*s1=*/2, /*s2=*/0, t0);
   Displacement<ICRS> const star2_in_0 =
       (ephemeris->trajectory(ephemeris->bodies()[2])->EvaluatePosition(t0) -
        ICRS::origin) +
@@ -660,7 +665,7 @@ TEST_F(InterstellarPrecisionTest, CrossSubsystemReferenceFrame) {
   // The degrees of freedom of star B, represented relative to the local
   // origin of the subsystem of star A.
   Displacement<ICRS> const conversion =
-      ephemeris->subsystem_conversion(/*s1=*/1, /*s2=*/0);
+      ephemeris->subsystem_conversion(/*s1=*/1, /*s2=*/0, t);
   DegreesOfFreedom<ICRS> const star_b_degrees_of_freedom = {
       ephemeris->trajectory(star_b)->EvaluatePosition(t) + conversion,
       ephemeris->trajectory(star_b)->EvaluateVelocity(t)};

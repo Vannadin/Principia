@@ -553,10 +553,11 @@ class Plugin {
 
   // The rigid motion that translates positions represented relative to the
   // local origin of subsystem `s1` so that they become represented relative
-  // to the local origin of subsystem `s2`.
+  // to the local origin of subsystem `s2` at time `t`.
   RigidMotion<Barycentric, Barycentric> SubsystemConversionMotion(
       int s1,
-      int s2) const;
+      int s2,
+      Instant const& t) const;
 
   // Fill `celestials` using the `index` and `parent_index` fields found in
   // `celestial_messages`.

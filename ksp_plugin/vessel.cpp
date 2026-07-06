@@ -164,7 +164,7 @@ bool Vessel::RebaseIfNeeded() {
   // special-casing.
   auto const squared_distance_to_barycentre = [&](int const s) {
     Position<Barycentric> const q_in_s =
-        q + ephemeris_->subsystem_conversion(subsystem_, s);
+        q + ephemeris_->subsystem_conversion(subsystem_, s, t);
     return (q_in_s - ephemeris_->subsystem_barycentre(s, t)).Norm²();
   };
   Square<Length> const current_distance² =
@@ -193,8 +193,9 @@ bool Vessel::RebaseIfNeeded() {
     return false;
   }
 
+  // TODO(NearStars): affine offsets make the translation below per-point.
   Displacement<Barycentric> const displacement =
-      ephemeris_->subsystem_conversion(subsystem_, dominant_subsystem);
+      ephemeris_->subsystem_conversion(subsystem_, dominant_subsystem, t);
   LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
             << subsystem_ << " to subsystem " << dominant_subsystem;
   {
@@ -437,8 +438,11 @@ void Vessel::ReadFlightPlanFromMessage() {
     // The vessel may have been rebased while this flight plan was lazily held
     // in its serialized form.
     if (flight_plan->subsystem() != subsystem_) {
+      // TODO(NearStars): affine offsets make this translation per-point.
       flight_plan->Rebase(ephemeris_->subsystem_conversion(
-                              flight_plan->subsystem(), subsystem_),
+                              flight_plan->subsystem(),
+                              subsystem_,
+                              flight_plan->initial_time()),
                           subsystem_).IgnoreError();
     }
     selected_flight_plan() = OptimizableFlightPlan{
@@ -583,8 +587,11 @@ void Vessel::AwaitReanimation(Instant const& desired_t_min,
       if (subsystem != subsystem_) {
         // The reanimated trajectory was computed in the representation of its
         // checkpoint; bring it to the current one.
+        // TODO(NearStars): affine offsets make this translation per-point.
         trajectory.Translate(
-            ephemeris_->subsystem_conversion(subsystem, subsystem_));
+            ephemeris_->subsystem_conversion(subsystem,
+                                             subsystem_,
+                                             trajectory.back().time));
       }
       trajectory_.Merge(std::move(trajectory));
       reanimated_trajectories_.pop();
@@ -1064,9 +1071,13 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
           if (!reanimated_trajectory.empty()) {
             if (int const checkpoint_subsystem = message.subsystem();
                 checkpoint_subsystem != vessel->subsystem_) {
+              // TODO(NearStars): affine offsets make this translation
+              // per-point.
               reanimated_trajectory.Translate(
                   vessel->ephemeris_->subsystem_conversion(
-                      checkpoint_subsystem, vessel->subsystem_));
+                      checkpoint_subsystem,
+                      vessel->subsystem_,
+                      reanimated_trajectory.back().time));
             }
             vessel->trajectory_.Merge(std::move(reanimated_trajectory));
           }
@@ -1498,8 +1509,11 @@ void Vessel::AppendToVesselTrajectory(
 void Vessel::AttachPrognostication(Prognostication&& prognostication) {
   if (prognostication.subsystem != subsystem_) {
     // The vessel was rebased while this prognostication was in flight.
+    // TODO(NearStars): affine offsets make this translation per-point.
     prognostication.trajectory.Translate(ephemeris_->subsystem_conversion(
-        prognostication.subsystem, subsystem_));
+        prognostication.subsystem,
+        subsystem_,
+        prognostication.trajectory.front().time));
   }
   AttachPrediction(std::move(prognostication.trajectory));
 }

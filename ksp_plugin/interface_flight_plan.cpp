@@ -374,7 +374,7 @@ XYZ __cdecl principia__FlightPlanGetManoeuvreInitialPlottedVelocity(
     converted_degrees_of_freedom = {
         dof.position() +
             flight_plan.ephemeris().subsystem_conversion(
-                flight_plan.subsystem(), plotting_subsystem),
+                flight_plan.subsystem(), plotting_subsystem, t),
         dof.velocity()};
   }
   Velocity<Navigation> const v =

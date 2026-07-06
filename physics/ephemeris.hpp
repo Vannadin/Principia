@@ -169,16 +169,19 @@ class Ephemeris {
   virtual int number_of_subsystems() const;
 
   // Returns the displacement from the local origin of subsystem `s2` to that
-  // of subsystem `s1`.
-  DoublePrecision<Displacement<Frame>> const& inter_subsystem_offset(
+  // of subsystem `s1`, at time `t`.
+  DoublePrecision<Displacement<Frame>> inter_subsystem_offset(
       int s1,
-      int s2) const;
+      int s2,
+      Instant const& t) const;
 
   // Returns the displacement to add to a position represented relative to the
   // local origin of subsystem `s1` so that it becomes represented relative to
-  // the local origin of subsystem `s2`, rounded to a single displacement.
-  // Zero when `s1 == s2`.
-  virtual Displacement<Frame> subsystem_conversion(int s1, int s2) const;
+  // the local origin of subsystem `s2` at time `t`, rounded to a single
+  // displacement.  Zero when `s1 == s2`.
+  virtual Displacement<Frame> subsystem_conversion(int s1,
+                                                   int s2,
+                                                   Instant const& t) const;
 
   // Returns the total gravitational parameter of the bodies of subsystem `s`.
   // Must not be called unless subsystems were given at construction.
@@ -316,10 +319,11 @@ class Ephemeris {
       Instant const& t) const EXCLUDES(lock_);
 
   // Same as above, but for multiple bodies.  The degrees of freedom must have
-  // been precomputed by `EvaluateAllDegreesOfFreedom`.
+  // been precomputed by `EvaluateAllDegreesOfFreedom` at time `t`.
   std::vector<Vector<Jerk, Frame>> ComputeGravitationalJerkOnMassiveBodies(
       std::vector<not_null<MassiveBody const*>> const& bodies,
-      BodiesToDegreesOfFreedom const& bodies_to_degrees_of_freedom) const;
+      BodiesToDegreesOfFreedom const& bodies_to_degrees_of_freedom,
+      Instant const& t) const;
 
   // Returns the gravitational acceleration on a massless body located at the
   // given `position` at time `t`.  The position is represented relative to the
@@ -466,6 +470,7 @@ class Ephemeris {
   // as described by `subsystem_of_body_`.
   template<typename MassiveBodyConstPtr>
   void ComputeJacobianByMassiveBodyOnMassiveBodies(
+      Instant const& t,
       MassiveBody const& body1,
       std::size_t b1,
       std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
@@ -484,6 +489,7 @@ class Ephemeris {
   // as described by `subsystem_of_body_`.
   template<typename MassiveBodyConstPtr>
   void ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
+      Instant const& t,
       MassiveBody const& body1,
       std::size_t b1,
       std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
@@ -513,13 +519,12 @@ class Ephemeris {
 
   // Returns the gravitational jerk on the massive `body`.  The
   // `degrees_of_freedom` must be for all the bodies in this object, in the
-  // order of `bodies_` and must have been evaluated at the same time.  Note
-  // that this function does not explicitly depend on time because we don't take
-  // into account the geopotential for the jerk.
+  // order of `bodies_` and must have been evaluated at time `t`.
   Vector<Jerk, Frame>
   ComputeGravitationalJerkOnMassiveBody(
       not_null<MassiveBody const*> body,
-      std::vector<DegreesOfFreedom<Frame>> const& degrees_of_freedom) const;
+      std::vector<DegreesOfFreedom<Frame>> const& degrees_of_freedom,
+      Instant const& t) const;
 
   // Computes the accelerations between one body, `body1` (with index `b1` in
   // the `positions` and `accelerations` arrays) and the bodies `bodies2` (with

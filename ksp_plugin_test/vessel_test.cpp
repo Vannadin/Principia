@@ -207,13 +207,13 @@ TEST_F(VesselTest, MassBasedRebaseHysteresis) {
   // The barycentre of each subsystem is at rest at its local origin.
   EXPECT_CALL(ephemeris_, subsystem_barycentre(_, _))
       .WillRepeatedly(Return(Barycentric::origin));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 0))
+  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 0, _))
       .WillRepeatedly(Return(Displacement<Barycentric>{}));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 1))
+  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 1, _))
       .WillRepeatedly(Return(Displacement<Barycentric>{}));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 1))
+  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 1, _))
       .WillRepeatedly(Return(-b_from_a));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 0))
+  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 0, _))
       .WillRepeatedly(Return(b_from_a));
 
   Velocity<Barycentric> const v(

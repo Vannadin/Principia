@@ -142,7 +142,7 @@ LagrangeEquipotentials<Inertial, RotatingPulsating>::ComputeLines(
     if (int const s = ephemeris_->subsystem_of_body(body);
         s != reference_frame.subsystem()) {
       position +=
-          ephemeris_->subsystem_conversion(s, reference_frame.subsystem());
+          ephemeris_->subsystem_conversion(s, reference_frame.subsystem(), t);
     }
     return position;
   };

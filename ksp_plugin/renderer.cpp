@@ -99,8 +99,6 @@ Renderer::RenderBarycentricTrajectoryInPlotting(
     DiscreteTrajectory<Barycentric>::iterator const& end,
     int const subsystem) const {
   int const plotting_subsystem = GetPlottingFrame()->subsystem();
-  Displacement<Barycentric> const conversion =
-      SubsystemConversion(subsystem, plotting_subsystem);
   DiscreteTrajectory<Navigation> trajectory;
   for (auto it = begin; it != end; ++it) {
     auto const& [time, degrees_of_freedom] = *it;
@@ -112,11 +110,13 @@ Renderer::RenderBarycentricTrajectoryInPlotting(
         break;
       }
     }
+    // The conversion is evaluated at each point's own time.
     DegreesOfFreedom<Barycentric> const plotting_degrees_of_freedom =
         subsystem == plotting_subsystem
             ? degrees_of_freedom
             : DegreesOfFreedom<Barycentric>(
-                  degrees_of_freedom.position() + conversion,
+                  degrees_of_freedom.position() +
+                      SubsystemConversion(subsystem, plotting_subsystem, time),
                   degrees_of_freedom.velocity());
     trajectory.Append(time,
                       BarycentricToPlotting(time)(plotting_degrees_of_freedom))
@@ -152,15 +152,15 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
     int const subsystem) const {
   int const plotting_subsystem = GetPlottingFrame()->subsystem();
-  Displacement<Barycentric> const conversion =
-      SubsystemConversion(subsystem, plotting_subsystem);
   DistinguishedPoints<Navigation> plotting_points;
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
+    // The conversion is evaluated at each point's own time.
     DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom =
         subsystem == plotting_subsystem
             ? degrees_of_freedom
             : DegreesOfFreedom<Barycentric>(
-                  degrees_of_freedom.position() + conversion,
+                  degrees_of_freedom.position() +
+                      SubsystemConversion(subsystem, plotting_subsystem, t),
                   degrees_of_freedom.velocity());
     auto const plotting_degrees_of_freedom =
         BarycentricToPlotting(t)(converted_degrees_of_freedom);
@@ -225,7 +225,7 @@ RigidTransformation<Barycentric, World> Renderer::BarycentricToWorld(
   Position<Barycentric> sun_position = sun_->current_position(time);
   if (int const sun_subsystem = sun_->subsystem();
       sun_subsystem != subsystem) {
-    sun_position += SubsystemConversion(sun_subsystem, subsystem);
+    sun_position += SubsystemConversion(sun_subsystem, subsystem, time);
   }
   return RigidTransformation<Barycentric, World>(
       sun_position,
@@ -268,7 +268,9 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
       vessel_subsystem != plotting_subsystem) {
     barycentric_degrees_of_freedom = {
         barycentric_degrees_of_freedom.position() +
-            SubsystemConversion(vessel_subsystem, plotting_subsystem),
+            SubsystemConversion(vessel_subsystem,
+                                plotting_subsystem,
+                                back.time),
         barycentric_degrees_of_freedom.velocity()};
   }
   DegreesOfFreedom<Navigation> const plotting_frame_degrees_of_freedom =
@@ -294,7 +296,7 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
       vessel_subsystem != frame_subsystem) {
     degrees_of_freedom = {
         degrees_of_freedom.position() +
-            SubsystemConversion(vessel_subsystem, frame_subsystem),
+            SubsystemConversion(vessel_subsystem, frame_subsystem, back.time),
         degrees_of_freedom.velocity()};
   }
   auto const to_navigation = navigation_frame.ToThisFrameAtTime(back.time);
@@ -404,12 +406,14 @@ Renderer::Target::Target(
               celestial->body(),
               [this]() { return this->vessel->subsystem(); })) {}
 
-Displacement<Barycentric> Renderer::SubsystemConversion(int const s1,
-                                                        int const s2) const {
+Displacement<Barycentric> Renderer::SubsystemConversion(
+    int const s1,
+    int const s2,
+    Instant const& t) const {
   if (ephemeris_ == nullptr || s1 == s2) {
     return Displacement<Barycentric>{};
   }
-  return ephemeris_->subsystem_conversion(s1, s2);
+  return ephemeris_->subsystem_conversion(s1, s2, t);
 }
 
 template<template<typename Frame> typename Container>

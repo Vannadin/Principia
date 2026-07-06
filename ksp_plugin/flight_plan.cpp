@@ -573,7 +573,8 @@ absl::Status FlightPlan::ComputeSegments(
         manœuvre.set_coasting_trajectory(
             coast,
             ephemeris_->subsystem_conversion(subsystem_,
-                                             manœuvre.frame()->subsystem()));
+                                             manœuvre.frame()->subsystem(),
+                                             manœuvre.initial_time()));
       } else {
         overall_status.Update(status);
         anomalous_segments_ = 1;

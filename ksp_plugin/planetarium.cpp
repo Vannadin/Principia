@@ -323,7 +323,9 @@ std::vector<Sphere<Navigation>> Planetarium::ComputePlottableSpheres(
     if (int const body_subsystem = ephemeris_->subsystem_of_body(body);
         body_subsystem != plotting_subsystem) {
       centre_in_barycentric +=
-          ephemeris_->subsystem_conversion(body_subsystem, plotting_subsystem);
+          ephemeris_->subsystem_conversion(body_subsystem,
+                                           plotting_subsystem,
+                                           now);
     }
     Sphere<Navigation> plottable_sphere(
         similar_motion_at_now.similarity()(centre_in_barycentric),

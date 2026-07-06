@@ -167,11 +167,10 @@ class BarycentricRotatingReferenceFrame
   // The subsystem of the first primary, relative to whose local origin the
   // frame is defined.
   int const subsystem_;
-  // For each body of a subsystem other than `subsystem_`, the displacement
-  // that converts its positions to that subsystem; empty when all the bodies
-  // are in `subsystem_`.
-  absl::flat_hash_map<not_null<MassiveBody const*>,
-                      Displacement<InertialFrame>> body_offsets_;
+  // For each body of a subsystem other than `subsystem_`, that subsystem, so
+  // that its positions can be converted to `subsystem_` at the time of use;
+  // empty when all the bodies are in `subsystem_`.
+  absl::flat_hash_map<not_null<MassiveBody const*>, int> body_subsystems_;
   mutable absl::Mutex lock_;
   // These members optimize costly computations from `BarycentreDerivative` in
   // the frequent case where properties of the frame are repeatedly requested

@@ -67,8 +67,7 @@ BarycentricRotatingReferenceFrame<InertialFrame, ThisFrame>::
     for (not_null const body : bodies) {
       if (int const s = ephemeris_->subsystem_of_body(body);
           s != subsystem_) {
-        body_offsets_.emplace(
-            body, ephemeris_->subsystem_conversion(s, subsystem_));
+        body_subsystems_.emplace(body, s);
       }
     }
   }
@@ -303,10 +302,11 @@ BarycentreDerivative(
         } else {
           position = ephemeris_->trajectory(body)->EvaluatePosition(t);
         }
-        if (!body_offsets_.empty()) {
-          if (auto const it = body_offsets_.find(body);
-              it != body_offsets_.end()) {
-            position += it->second;
+        if (!body_subsystems_.empty()) {
+          if (auto const it = body_subsystems_.find(body);
+              it != body_subsystems_.end()) {
+            position +=
+                ephemeris_->subsystem_conversion(it->second, subsystem_, t);
           }
         }
         result.Add(position, body->gravitational_parameter());
@@ -355,7 +355,7 @@ BarycentreDerivative(
 
       auto const all_jerks =
           ephemeris_->ComputeGravitationalJerkOnMassiveBodies(
-              this->*bodies, *bodies_to_degrees_of_freedom);
+              this->*bodies, *bodies_to_degrees_of_freedom, t);
 
       int i = 0;
       for (not_null const body : this->*bodies) {

@@ -249,7 +249,7 @@ SecondaryDegreesOfFreedom(Instant const& t) const {
   if (int const s2 = primary_subsystem_(); s1 != s2) {
     secondary_degrees_of_freedom = {
         secondary_degrees_of_freedom.position() +
-            ephemeris_->subsystem_conversion(s1, s2),
+            ephemeris_->subsystem_conversion(s1, s2, t),
         secondary_degrees_of_freedom.velocity()};
   }
   return secondary_degrees_of_freedom;

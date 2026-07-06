@@ -327,16 +327,20 @@ int Ephemeris<Frame>::number_of_subsystems() const {
 }
 
 template<typename Frame>
-DoublePrecision<Displacement<Frame>> const&
-Ephemeris<Frame>::inter_subsystem_offset(int const s1, int const s2) const {
+DoublePrecision<Displacement<Frame>>
+Ephemeris<Frame>::inter_subsystem_offset(int const s1,
+                                         int const s2,
+                                         Instant const& t) const {
+  // TODO(NearStars): the offsets are constants for now; they become affine in
+  // `t` when the subsystem origins start moving with their barycentres.
   return inter_subsystem_offsets_[s1 * subsystem_origin_offset_.size() + s2];
 }
 
 template<typename Frame>
 Displacement<Frame> Ephemeris<Frame>::subsystem_conversion(
-    int const s1, int const s2) const {
-  DoublePrecision<Displacement<Frame>> const& offset =
-      inter_subsystem_offset(s1, s2);
+    int const s1, int const s2, Instant const& t) const {
+  DoublePrecision<Displacement<Frame>> const offset =
+      inter_subsystem_offset(s1, s2, t);
   return offset.value + offset.error;
 }
 
@@ -743,12 +747,14 @@ JacobianOfAcceleration<Frame> Ephemeris<Frame>::ComputeJacobianOnMassiveBody(
   }
 
   ComputeJacobianByMassiveBodyOnMassiveBodies(
+      t,
       /*body1=*/*body, b1,
       /*bodies2=*/bodies_,
       /*b2_begin=*/0,
       /*b2_end=*/b1,
       positions, jacobians);
   ComputeJacobianByMassiveBodyOnMassiveBodies(
+      t,
       /*body1=*/*body, b1,
       /*bodies2=*/bodies_,
       /*b2_begin=*/b1 + 1,
@@ -785,7 +791,8 @@ Vector<Jerk, Frame> Ephemeris<Frame>::ComputeGravitationalJerkOnMasslessBody(
     Displacement<Frame> Δq = Δqv.displacement();
     Velocity<Frame> const Δv = Δqv.velocity();
     if (int const s2 = subsystem_of_body_[b2]; subsystem != s2) {
-      Δq = AddInterSubsystemOffset(inter_subsystem_offset(subsystem, s2), Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(subsystem, s2, t),
+                                   Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -840,14 +847,15 @@ Ephemeris<Frame>::ComputeGravitationalJerkOnMassiveBody(
     }
   }
 
-  return ComputeGravitationalJerkOnMassiveBody(body, degrees_of_freedom);
+  return ComputeGravitationalJerkOnMassiveBody(body, degrees_of_freedom, t);
 }
 
 template<typename Frame>
 std::vector<Vector<Jerk, Frame>>
 Ephemeris<Frame>::ComputeGravitationalJerkOnMassiveBodies(
     std::vector<not_null<MassiveBody const*>> const& bodies,
-    BodiesToDegreesOfFreedom const& bodies_to_degrees_of_freedom) const {
+    BodiesToDegreesOfFreedom const& bodies_to_degrees_of_freedom,
+    Instant const& t) const {
   // NOTE(phl): This doesn't take high-order geopotential into account.
   // Put the positions in the order needed by the computation.
   std::vector<DegreesOfFreedom<Frame>> degrees_of_freedom;
@@ -860,7 +868,7 @@ Ephemeris<Frame>::ComputeGravitationalJerkOnMassiveBodies(
   jerks.reserve(bodies.size());
   for (auto const& body : bodies) {
     jerks.push_back(
-        ComputeGravitationalJerkOnMassiveBody(body, degrees_of_freedom));
+        ComputeGravitationalJerkOnMassiveBody(body, degrees_of_freedom, t));
   }
   return jerks;
 }
@@ -967,13 +975,11 @@ void Ephemeris<Frame>::ComputeApsides(
       trajectory(body2);
   int const s1 = subsystem_of_body(body1);
   int const s2 = subsystem_of_body(body2);
-  DoublePrecision<Displacement<Frame>> const& offset =
-      inter_subsystem_offset(s1, s2);
 
   // Computes the derivative of the squared distance between `body1` and `body2`
   // at time `t`.
   auto const evaluate_square_distance_derivative =
-      [body1_trajectory, body2_trajectory, s1, s2, &offset](
+      [this, body1_trajectory, body2_trajectory, s1, s2](
           Instant const& t) -> Variation<Square<Length>> {
     DegreesOfFreedom<Frame> const body1_degrees_of_freedom =
         body1_trajectory->EvaluateDegreesOfFreedomLocked(t);
@@ -983,7 +989,9 @@ void Ephemeris<Frame>::ComputeApsides(
         body1_degrees_of_freedom - body2_degrees_of_freedom;
     Displacement<Frame> displacement = relative.displacement();
     if (s1 != s2) {
-      displacement = AddInterSubsystemOffset(offset, displacement);
+      displacement =
+          AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t),
+                                  displacement);
     }
     return 2.0 * InnerProduct(displacement, relative.velocity());
   };
@@ -1511,6 +1519,7 @@ FarFieldDamping const& Ephemeris<Frame>::PairFarFieldDamping(
 template<typename Frame>
 template<typename MassiveBodyConstPtr>
 void Ephemeris<Frame>::ComputeJacobianByMassiveBodyOnMassiveBodies(
+    Instant const& t,
     MassiveBody const& body1,
     std::size_t b1,
     std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
@@ -1530,7 +1539,7 @@ void Ephemeris<Frame>::ComputeJacobianByMassiveBodyOnMassiveBodies(
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position_of_b1 - positions[b2];
     if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
-      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1568,6 +1577,7 @@ void Ephemeris<Frame>::ComputeJacobianByMassiveBodyOnMassiveBodies(
 template<typename Frame>
 template<typename MassiveBodyConstPtr>
 void Ephemeris<Frame>::ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
+    Instant const& t,
     MassiveBody const& body1,
     std::size_t b1,
     std::vector<not_null<MassiveBodyConstPtr>> const& bodies2,
@@ -1592,7 +1602,7 @@ void Ephemeris<Frame>::ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
     Velocity<Frame> const Δv = Δqv.velocity();
     if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
       // The velocities are unaffected: the origin offsets are constant.
-      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1726,18 +1736,21 @@ template<typename Frame>
 Vector<Jerk, Frame>
 Ephemeris<Frame>::ComputeGravitationalJerkOnMassiveBody(
     not_null<MassiveBody const*> const body,
-    std::vector<DegreesOfFreedom<Frame>> const& degrees_of_freedom) const {
+    std::vector<DegreesOfFreedom<Frame>> const& degrees_of_freedom,
+    Instant const& t) const {
   // NOTE(phl): This doesn't take high-order geopotential into account.
   int const b1 = bodies_indices_.at(body);
   std::vector<Vector<Jerk, Frame>> jerks(degrees_of_freedom.size());
 
   ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
+      t,
       /*body1=*/*body, b1,
       /*bodies2=*/bodies_,
       /*b2_begin=*/0,
       /*b2_end=*/b1,
       degrees_of_freedom, jerks);
   ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
+      t,
       /*body1=*/*body, b1,
       /*bodies2=*/bodies_,
       /*b2_begin=*/b1 + 1,
@@ -1774,7 +1787,7 @@ AddMassiveBodyPairGravitationalAcceleration(
   Displacement<Frame> Δq = position_of_b1 - positions[b2];
   if constexpr (has_subsystems) {
     if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
-      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);
     }
   }
 
@@ -1896,7 +1909,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position1 - positions[b2];
     if (int const s2 = subsystems[b2]; s1 != s2) {
-      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -1963,7 +1976,7 @@ void Ephemeris<Frame>::ComputeGravitationalPotentialsOfMassiveBody(
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position1 - positions[b2];
     if (int const s2 = subsystems[b2]; s1 != s2) {
-      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2), Δq);
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);
     }
 
     Square<Length> const Δq² = Δq.Norm²();

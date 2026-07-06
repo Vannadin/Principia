@@ -250,9 +250,11 @@ class Renderer {
 
   // The displacement to add to a position represented relative to the local
   // origin of subsystem `s1` so that it becomes represented relative to the
-  // local origin of subsystem `s2`.  Zero if no ephemeris was given at
-  // construction.
-  Displacement<Barycentric> SubsystemConversion(int s1, int s2) const;
+  // local origin of subsystem `s2` at time `t`.  Zero if no ephemeris was
+  // given at construction.
+  Displacement<Barycentric> SubsystemConversion(int s1,
+                                                int s2,
+                                                Instant const& t) const;
 
   not_null<Celestial const*> const sun_;
 

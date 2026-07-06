@@ -672,7 +672,10 @@ TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
   auto const rebased_flight_plan = make_flight_plan();
   EXPECT_OK(rebased_flight_plan->Insert(make_normal_burn(), 0));
   EXPECT_OK(rebased_flight_plan->Rebase(
-      ephemeris->subsystem_conversion(/*s1=*/0, /*s2=*/1), /*subsystem=*/1));
+      ephemeris->subsystem_conversion(/*s1=*/0,
+                                      /*s2=*/1,
+                                      rebased_flight_plan->initial_time()),
+      /*subsystem=*/1));
   ASSERT_EQ(1, rebased_flight_plan->subsystem());
   Velocity<Barycentric> const rebased_velocity =
       rebased_flight_plan->GetSegment(1)
