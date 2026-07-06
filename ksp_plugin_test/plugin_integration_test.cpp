@@ -1722,5 +1722,160 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CrossSubsystemDockingReconciles) {
               Lt(100 * Metre));
 }
 
+// At 1000 light years (9.46e18 m) the per-subsystem representation keeps every
+// distance-dependent error confined to the one-time cross-subsystem
+// translation rounding, ~ULP(9.46e18 m) ≈ 2 km: physics local to the
+// destination star is exact to the metre, and a void rendezvous reconciles to
+// within a few ULPs.  This certifies that the interstellar machinery has no
+// distance wall of its own well beyond the NearStars roster (40 ly).
+TEST_F(PluginIntegrationTestWithoutPlugin, ThousandLightYearScale) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                             /*parent_index=*/std::nullopt,
+                                             gravity_model,
+                                             initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "9.46e18 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                             /*parent_index=*/star_a,
+                                             gravity_model,
+                                             initial_state);
+  }
+  plugin->EndInitialization();
+  // Clustering still partitions two stars 1000 ly apart into two subsystems.
+  EXPECT_NE(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetCelestial(star_b).subsystem());
+
+  bool inserted;
+  Length const orbit = 1e9 * Metre;
+  Length const midpoint = 4.73e18 * Metre;
+
+  // A vessel adopted around the destination star — the state a warp arrival
+  // produces.  Its precision must not depend on the 1000 ly to its origin.
+  GUID const guid_orbiter = "orbiter";
+  plugin->InsertOrKeepVessel(guid_orbiter, "orbiter", star_b,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      201, "part-orbiter", guid_orbiter,
+      {Displacement<AliceSun>({orbit, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+
+  // A mid-void rendezvous, 10 m apart, arrived from opposite stars.
+  GUID const guid_a = "station";
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      202, "part-A", guid_a,
+      {Displacement<AliceSun>({midpoint, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  GUID const guid_b = "visitor";
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_b,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      203, "part-B", guid_b,
+      {Displacement<AliceSun>({10 * Metre - midpoint, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->GetVessel(guid_a)->part(202)->set_mass(3 * Kilogram);
+  plugin->GetVessel(guid_b)->part(203)->set_mass(1 * Kilogram);
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  // Destination locality: the orbiter's raw coordinates are anchored at
+  // star B's origin (~1e9 m, not ~1e19 m), and its reported orbit is exact to
+  // well below the metre — no distance dependence.
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(),
+            plugin->GetVessel(guid_orbiter)->subsystem());
+  EXPECT_THAT((plugin->GetVessel(guid_orbiter)
+                   ->trajectory().back().degrees_of_freedom.position() -
+               Barycentric::origin).Norm(),
+              Lt(2e9 * Metre));
+  EXPECT_THAT(
+      plugin->VesselFromParent(star_b, guid_orbiter).displacement().Norm(),
+      AbsoluteErrorFrom(orbit, Lt(1 * Metre)));
+
+  EXPECT_NE(plugin->GetVessel(guid_a)->subsystem(),
+            plugin->GetVessel(guid_b)->subsystem());
+  Displacement<AliceSun> const visitor_from_star_b =
+      plugin->VesselFromParent(star_b, guid_b).displacement();
+
+  // Next frame: the void vessels dock.
+  Instant const t = Instant() + 100 * Second;
+  plugin->AdvanceTime(t, 1 * Radian);
+  plugin->InsertOrKeepVessel(guid_orbiter, "orbiter", star_b,
+                             /*loaded=*/false, inserted);
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_b,
+                             /*loaded=*/false, inserted);
+  plugin->GetVessel(guid_orbiter)->KeepPart(201);
+  plugin->GetVessel(guid_a)->KeepPart(202);
+  plugin->GetVessel(guid_b)->KeepPart(203);
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(202, 203);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  // The reconciliation translated the visitor across 9.46e18 m of
+  // representation change; the entire distance-dependent cost is a few ULPs
+  // of that translation (ULP ≈ 2 km), physically a fixed sub-10-km offset.
+  int const station_subsystem = plugin->GetCelestial(star_a).subsystem();
+  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_a)->subsystem());
+  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_b)->subsystem());
+  EXPECT_EQ(plugin->GetVessel(guid_a)->part(202)->containing_pile_up(),
+            plugin->GetVessel(guid_b)->part(203)->containing_pile_up());
+  EXPECT_THAT((plugin->VesselFromParent(star_b, guid_b).displacement() -
+               visitor_from_star_b).Norm(),
+              Lt(10 * Kilo(Metre)));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia
