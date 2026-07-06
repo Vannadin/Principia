@@ -8,6 +8,7 @@
 #include "absl/log/log.h"
 #include "astronomy/frames.hpp"
 #include "base/not_null.hpp"
+#include "geometry/barycentre_calculator.hpp"
 #include "geometry/frame.hpp"
 #include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
@@ -30,18 +31,21 @@
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
 #include "serialization/physics.pb.h"
+#include "testing_utilities/almost_equals.hpp"
 #include "testing_utilities/matchers.hpp"  // 🧙 For EXPECT_OK.
 #include "testing_utilities/numerics.hpp"
 
 namespace principia {
 namespace astronomy {
 
+using ::testing::AllOf;
 using ::testing::ElementsAre;
 using ::testing::Gt;
 using ::testing::IsEmpty;
 using ::testing::Lt;
 using namespace principia::astronomy::_frames;
 using namespace principia::base::_not_null;
+using namespace principia::geometry::_barycentre_calculator;
 using namespace principia::geometry::_frame;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
@@ -61,6 +65,7 @@ using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
+using namespace principia::testing_utilities::_almost_equals;
 using namespace principia::testing_utilities::_matchers;
 using namespace principia::testing_utilities::_numerics;
 
@@ -328,6 +333,56 @@ TEST_F(InterstellarPrecisionTest, ClusterSubsystems) {
   EXPECT_EQ(0, ephemeris->subsystem_of_body(ephemeris->bodies()[1]));
   EXPECT_EQ(1, ephemeris->subsystem_of_body(ephemeris->bodies()[2]));
   EXPECT_EQ(1, ephemeris->subsystem_of_body(ephemeris->bodies()[3]));
+}
+
+// Checks the per-subsystem barycentric data recorded at construction: total
+// gravitational parameters, initial barycentres relative to the local origins,
+// and the linear extrapolation of the barycentres.
+TEST_F(InterstellarPrecisionTest, SubsystemBarycentre) {
+  auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  Instant const t0;
+
+  EXPECT_EQ(μ_star + μ_planet, ephemeris->subsystem_gravitational_parameter(0));
+  EXPECT_EQ(μ_star + μ_planet, ephemeris->subsystem_gravitational_parameter(1));
+
+  // The two systems have bit-identical initial conditions relative to their
+  // local origins, so their barycentric data are bit-identical too.
+  EXPECT_EQ(ephemeris->subsystem_barycentre(0, t0),
+            ephemeris->subsystem_barycentre(1, t0));
+  EXPECT_EQ(ephemeris->subsystem_barycentre_velocity(0),
+            ephemeris->subsystem_barycentre_velocity(1));
+
+  // The star is at the local origin, so the barycentre is at the mass-weighted
+  // fraction of the star-planet separation.
+  Displacement<ICRS> const star_to_planet({0 * Metre, orbit_radius, 0 * Metre});
+  EXPECT_THAT(ephemeris->subsystem_barycentre(0, t0) - ICRS::origin,
+              AlmostEquals(star_to_planet * (μ_planet / (μ_star + μ_planet)),
+                           0, 4));
+
+  // The orbit is at rest in the barycentric frame of its system, so the
+  // velocity of the barycentre vanishes up to rounding.
+  EXPECT_THAT(ephemeris->subsystem_barycentre_velocity(0).Norm(),
+              Lt(1e-15 * Sqrt((μ_star + μ_planet) / orbit_radius)));
+
+  // The linear extrapolation tracks the barycentre of the integrated system
+  // except for the pull of the remote system, which it ignores; over Δt the
+  // deviation is ½ a Δt² with a = μ / d².  (About 12 mm here, dwarfing the
+  // integration error.)
+  Instant const t_final = t0 + 10 * JulianYear;
+  EXPECT_OK(ephemeris->Prolong(t_final));
+  auto const& star_a = *ephemeris->trajectory(ephemeris->bodies()[0]);
+  auto const& planet_a = *ephemeris->trajectory(ephemeris->bodies()[1]);
+  Position<ICRS> const integrated_barycentre =
+      Barycentre({star_a.EvaluatePosition(t_final),
+                  planet_a.EvaluatePosition(t_final)},
+                 {μ_star, μ_planet});
+  Length const predicted_deviation = 0.5 * (μ_star + μ_planet) *
+                                     Pow<2>(t_final - t0) /
+                                     Pow<2>(ToRemoteSystem().Norm());
+  EXPECT_THAT(
+      (integrated_barycentre - ephemeris->subsystem_barycentre(0, t_final))
+          .Norm(),
+      AllOf(Gt(0.99 * predicted_deviation), Lt(1.01 * predicted_deviation)));
 }
 
 // Checks that the apsides of a cross-subsystem pair are those of the true
@@ -631,6 +686,8 @@ TEST_F(InterstellarPrecisionTest, Serialization) {
   ephemeris->WriteToMessage(&message);
   EXPECT_EQ(4, message.body_subsystem_size());
   EXPECT_EQ(2, message.subsystem_origin_offset_size());
+  EXPECT_EQ(2, message.subsystem_barycentre_size());
+  EXPECT_TRUE(message.has_subsystem_barycentre_time());
 
   auto const ephemeris_read = Ephemeris<ICRS>::ReadFromMessage(
       /*desired_t_min=*/InfiniteFuture, message);
@@ -647,6 +704,18 @@ TEST_F(InterstellarPrecisionTest, Serialization) {
                 ephemeris_read->trajectory(ephemeris_read->bodies()[b])
                     ->EvaluateDegreesOfFreedom(t));
     }
+  }
+
+  // The barycentric data survive the round-trip bit-exactly, including when
+  // extrapolated far beyond the integrated range.
+  Instant const t_extrapolated = ephemeris->t_min() + 100 * JulianYear;
+  for (int s = 0; s < 2; ++s) {
+    EXPECT_EQ(ephemeris->subsystem_gravitational_parameter(s),
+              ephemeris_read->subsystem_gravitational_parameter(s));
+    EXPECT_EQ(ephemeris->subsystem_barycentre(s, t_extrapolated),
+              ephemeris_read->subsystem_barycentre(s, t_extrapolated));
+    EXPECT_EQ(ephemeris->subsystem_barycentre_velocity(s),
+              ephemeris_read->subsystem_barycentre_velocity(s));
   }
 
   serialization::Ephemeris second_message;

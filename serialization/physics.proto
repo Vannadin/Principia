@@ -200,6 +200,11 @@ message Ephemeris {
   repeated DoublePrecision subsystem_origin_offset = 15;  // Added in NearStars.
   // Absent if the far field is not damped.  Added in NearStars.
   optional Quantity far_field_damping_floor = 16;
+  // Absent for a single subsystem; the degrees of freedom of the barycentre of
+  // each subsystem at `subsystem_barycentre_time`, the position relative to
+  // the local origin of the subsystem.  Added in NearStars.
+  repeated Pair subsystem_barycentre = 17;
+  optional Point subsystem_barycentre_time = 18;  // Added in NearStars.
 
   // Pre-Fatou.
   reserved 11;

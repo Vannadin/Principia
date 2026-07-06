@@ -194,6 +194,30 @@ Ephemeris<Frame>::Ephemeris(
       subsystem_origin_offset_[s] =
           TwoDifference(*subsystem_anchors[s], *subsystem_anchors[0]);
     }
+
+    // The barycentric degrees of freedom of each subsystem, which make it
+    // possible to locate the subsystems long after construction by linear
+    // extrapolation; see `subsystem_barycentre`.
+    subsystem_gravitational_parameter_.resize(number_of_subsystems);
+    std::vector<BarycentreCalculator<DegreesOfFreedom<Frame>,
+                                     GravitationalParameter>>
+        subsystem_barycentre_calculators(number_of_subsystems);
+    for (int i = 0; i < bodies.size(); ++i) {
+      int const s = subsystems[i];
+      GravitationalParameter const& μ = bodies[i]->gravitational_parameter();
+      subsystem_gravitational_parameter_[s] += μ;
+      subsystem_barycentre_calculators[s].Add(
+          DegreesOfFreedom<Frame>(
+              Frame::origin +
+                  (initial_state[i].position() - *subsystem_anchors[s]),
+              initial_state[i].velocity()),
+          μ);
+    }
+    subsystem_barycentre_.reserve(number_of_subsystems);
+    for (auto const& calculator : subsystem_barycentre_calculators) {
+      subsystem_barycentre_.push_back(calculator.Get());
+    }
+    subsystem_barycentre_time_ = initial_time;
   }
 
   InitialValueProblem<NewtonianMotionEquation> problem;
@@ -314,6 +338,33 @@ Displacement<Frame> Ephemeris<Frame>::subsystem_conversion(
   DoublePrecision<Displacement<Frame>> const& offset =
       inter_subsystem_offset(s1, s2);
   return offset.value + offset.error;
+}
+
+template<typename Frame>
+GravitationalParameter const&
+Ephemeris<Frame>::subsystem_gravitational_parameter(int const s) const {
+  CHECK_GE(s, 0);
+  CHECK_LT(s, subsystem_gravitational_parameter_.size());
+  return subsystem_gravitational_parameter_[s];
+}
+
+template<typename Frame>
+Position<Frame> Ephemeris<Frame>::subsystem_barycentre(
+    int const s,
+    Instant const& t) const {
+  CHECK_GE(s, 0);
+  CHECK_LT(s, subsystem_barycentre_.size());
+  DegreesOfFreedom<Frame> const& initial_barycentre = subsystem_barycentre_[s];
+  return initial_barycentre.position() +
+         initial_barycentre.velocity() * (t - subsystem_barycentre_time_);
+}
+
+template<typename Frame>
+Velocity<Frame> const& Ephemeris<Frame>::subsystem_barycentre_velocity(
+    int const s) const {
+  CHECK_GE(s, 0);
+  CHECK_LT(s, subsystem_barycentre_.size());
+  return subsystem_barycentre_[s].velocity();
 }
 
 template<typename Frame>
@@ -1021,6 +1072,11 @@ void Ephemeris<Frame>::WriteToMessage(
     for (auto const& offset : subsystem_origin_offset_) {
       offset.WriteToMessage(message->add_subsystem_origin_offset());
     }
+    for (auto const& barycentre : subsystem_barycentre_) {
+      barycentre.WriteToMessage(message->add_subsystem_barycentre());
+    }
+    subsystem_barycentre_time_.WriteToMessage(
+        message->mutable_subsystem_barycentre_time());
   }
   if (far_field_damping_floor_ > Acceleration{}) {
     far_field_damping_floor_.WriteToMessage(
@@ -1059,11 +1115,15 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
   FixedStepParameters const fixed_step_parameters =
       FixedStepParameters::ReadFromMessage(message.fixed_step_parameters());
 
-  // The two subsystem fields are written together; a message that has one but
-  // not the other is corrupt, and quietly accepting it would zero the origin
-  // offsets.
+  // The subsystem fields are written together; a message that has some but
+  // not the others is corrupt, and quietly accepting it would zero the origin
+  // offsets or the barycentres.
   CHECK_EQ(message.body_subsystem_size() == 0,
            message.subsystem_origin_offset_size() == 0);
+  CHECK_EQ(message.body_subsystem_size() == 0,
+           message.subsystem_barycentre_size() == 0);
+  CHECK_EQ(message.body_subsystem_size() == 0,
+           !message.has_subsystem_barycentre_time());
   std::vector<int> const subsystems(message.body_subsystem().begin(),
                                     message.body_subsystem().end());
 
@@ -1087,8 +1147,8 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
                        subsystems,
                        far_field_damping_floor);
 
-  // The origin offsets computed by the constructor are wrong because the
-  // initial state is a dummy; overwrite them from the message.
+  // The origin offsets and barycentres computed by the constructor are wrong
+  // because the initial state is a dummy; overwrite them from the message.
   if (message.subsystem_origin_offset_size() > 0) {
     CHECK_EQ(message.subsystem_origin_offset_size(),
              ephemeris->subsystem_origin_offset_.size());
@@ -1098,6 +1158,15 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
               message.subsystem_origin_offset(s));
     }
     ephemeris->ComputeInterSubsystemOffsets();
+    CHECK_EQ(message.subsystem_barycentre_size(),
+             ephemeris->subsystem_barycentre_.size());
+    for (int s = 0; s < message.subsystem_barycentre_size(); ++s) {
+      ephemeris->subsystem_barycentre_[s] =
+          DegreesOfFreedom<Frame>::ReadFromMessage(
+              message.subsystem_barycentre(s));
+    }
+    ephemeris->subsystem_barycentre_time_ =
+        Instant::ReadFromMessage(message.subsystem_barycentre_time());
   }
 
   int index = 0;

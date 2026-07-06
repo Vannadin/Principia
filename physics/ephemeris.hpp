@@ -180,6 +180,21 @@ class Ephemeris {
   // Zero when `s1 == s2`.
   virtual Displacement<Frame> subsystem_conversion(int s1, int s2) const;
 
+  // Returns the total gravitational parameter of the bodies of subsystem `s`.
+  // Must not be called unless subsystems were given at construction.
+  virtual GravitationalParameter const& subsystem_gravitational_parameter(
+      int s) const;
+
+  // Returns the barycentre of the bodies of subsystem `s` at time `t`,
+  // relative to the local origin of that subsystem, extrapolated linearly
+  // from the initial state at the velocity of the barycentre.  Must not be
+  // called unless subsystems were given at construction.
+  virtual Position<Frame> subsystem_barycentre(int s, Instant const& t) const;
+
+  // Returns the velocity of the barycentre of the bodies of subsystem `s`.
+  // Must not be called unless subsystems were given at construction.
+  virtual Velocity<Frame> const& subsystem_barycentre_velocity(int s) const;
+
   // Returns the trajectory for the given `body`.
   virtual not_null<ContinuousTrajectory<Frame> const*> trajectory(
       not_null<MassiveBody const*> body) const;
@@ -714,6 +729,19 @@ class Ephemeris {
   // The pairwise differences of the entries of `subsystem_origin_offset_`,
   // precomputed for the gravity kernels; see `inter_subsystem_offset`.
   std::vector<DoublePrecision<Displacement<Frame>>> inter_subsystem_offsets_;
+
+  // The total gravitational parameter of the bodies of each subsystem.
+  // Indexed by subsystem; empty unless subsystems were given at construction.
+  std::vector<GravitationalParameter> subsystem_gravitational_parameter_;
+
+  // The degrees of freedom of the barycentre of the bodies of each subsystem
+  // at `subsystem_barycentre_time_`, the position being relative to the local
+  // origin of the subsystem.  Indexed by subsystem; empty unless subsystems
+  // were given at construction.
+  std::vector<DegreesOfFreedom<Frame>> subsystem_barycentre_;
+
+  // The time at which `subsystem_barycentre_` was computed.
+  Instant subsystem_barycentre_time_;
 
   // The floor given at construction; zero if the far field is not damped.
   Acceleration far_field_damping_floor_;
