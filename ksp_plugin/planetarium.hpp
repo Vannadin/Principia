@@ -84,6 +84,11 @@ class Planetarium {
               not_null<PlottingFrame const*> plotting_frame,
               PlottingToScaledSpaceConversion plotting_to_scaled_space);
 
+  // NOTE: unlike `PlotMethod4`, methods 0–3 feed the trajectory to the
+  // plotting frame without any subsystem conversion: they must only be given
+  // trajectories represented in the plotting frame's subsystem.  They have no
+  // production callers; if one is rewired into the interface, convert as
+  // `PlotMethod4` does.
   // A no-op method that just returns all the points in the trajectory defined
   // by `begin` and `end`.
   RP2Lines<Length, Camera> PlotMethod0(

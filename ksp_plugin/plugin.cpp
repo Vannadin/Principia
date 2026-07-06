@@ -89,9 +89,11 @@ constexpr std::int64_t max_steps_in_prediction = 1 << 24;
 
 // Bodies chained within this distance form a single subsystem; the bodies of a
 // multi-star system get partitioned into subsystems whose positions are
-// represented relative to local origins (see `ClusterSubsystems`).  Keep this
-// below `rebase_distance_threshold` in vessel.cpp, which is the point at which
-// a vessel switches representations.
+// represented relative to local origins (see `ClusterSubsystems`).  A vessel
+// switches representations when another subsystem dominates its μ/d² by
+// `rebase_dominance_margin` in vessel.cpp; keep this threshold small against
+// inter-star separations so that the dominance boundary lies between the
+// subsystems, not inside one.
 constexpr Length subsystem_clustering_threshold = 1e14 * Metre;
 
 // In a multi-star system, the point-mass far field seen by the vessels is
