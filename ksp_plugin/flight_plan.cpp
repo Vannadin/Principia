@@ -457,16 +457,19 @@ FlightPlan::FlightPlan()
           /*speed_integration_tolerance=*/1 * Metre / Second) {}
 
 absl::Status FlightPlan::Rebase(
-    Displacement<Barycentric> const& displacement,
+    Displacement<Barycentric> const& displacement_at_epoch,
+    Velocity<Barycentric> const& velocity_offset,
+    Instant const& epoch,
     int const subsystem) {
   initial_degrees_of_freedom_ = DegreesOfFreedom<Barycentric>(
-      initial_degrees_of_freedom_.position() + displacement,
-      initial_degrees_of_freedom_.velocity());
+      initial_degrees_of_freedom_.position() + displacement_at_epoch +
+          velocity_offset * (initial_time_ - epoch),
+      initial_degrees_of_freedom_.velocity() + velocity_offset);
   subsystem_ = subsystem;
   // `RecomputeAllSegments` retains the first point of the first coasting
   // segment and flows from it; translate the trajectory so that the
   // recomputation starts from the rebased initial state.
-  trajectory_.Translate(displacement);
+  trajectory_.Translate(displacement_at_epoch, velocity_offset, epoch);
   return RecomputeAllSegments();
 }
 

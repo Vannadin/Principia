@@ -134,9 +134,14 @@ class PileUp {
   int subsystem() const;
 
   // Re-expresses this pile-up relative to the local origin of the given
-  // `subsystem`, by translating its trajectory by `displacement`.  Must not be
-  // called while the pile-up is being advanced.
-  void Rebase(Displacement<Barycentric> const& displacement, int subsystem);
+  // `subsystem`, by translating its trajectory by
+  // `displacement_at_epoch + velocity_offset * (t - epoch)` in position and by
+  // `velocity_offset` in velocity.  Must not be called while the pile-up is
+  // being advanced.
+  void Rebase(Displacement<Barycentric> const& displacement_at_epoch,
+              Velocity<Barycentric> const& velocity_offset,
+              Instant const& epoch,
+              int subsystem);
 
   std::list<not_null<Part*>> const& parts() const;
   Ephemeris<Barycentric>::FixedStepParameters const& fixed_step_parameters()

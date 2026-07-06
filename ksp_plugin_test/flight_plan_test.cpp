@@ -550,7 +550,10 @@ TEST_F(FlightPlanTest, Rebase) {
       flight_plan_->GetAllSegments().front().time;
   DegreesOfFreedom<Barycentric> const previous_front_degrees_of_freedom =
       flight_plan_->GetAllSegments().front().degrees_of_freedom;
-  EXPECT_OK(flight_plan_->Rebase(displacement, /*subsystem=*/0));
+  EXPECT_OK(flight_plan_->Rebase(displacement,
+                                 /*velocity_offset=*/Barycentric::unmoving,
+                                 /*epoch=*/flight_plan_->initial_time(),
+                                 /*subsystem=*/0));
   EXPECT_EQ(0, flight_plan_->subsystem());
 
   // The recomputed flight plan must start from the translated initial state.
@@ -675,6 +678,8 @@ TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
       ephemeris->subsystem_conversion(/*s1=*/0,
                                       /*s2=*/1,
                                       rebased_flight_plan->initial_time()),
+      ephemeris->subsystem_velocity_conversion(/*s1=*/0, /*s2=*/1),
+      /*epoch=*/rebased_flight_plan->initial_time(),
       /*subsystem=*/1));
   ASSERT_EQ(1, rebased_flight_plan->subsystem());
   Velocity<Barycentric> const rebased_velocity =

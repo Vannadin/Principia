@@ -61,9 +61,14 @@ class FlightPlan {
 
   // Re-expresses this flight plan relative to the local origin of the given
   // `subsystem`, by translating its initial degrees of freedom by
-  // `displacement` and recomputing all the segments.
-  virtual absl::Status Rebase(Displacement<Barycentric> const& displacement,
-                              int subsystem);
+  // `displacement_at_epoch + velocity_offset * (initial_time() - epoch)` in
+  // position and by `velocity_offset` in velocity, and recomputing all the
+  // segments.
+  virtual absl::Status Rebase(
+      Displacement<Barycentric> const& displacement_at_epoch,
+      Velocity<Barycentric> const& velocity_offset,
+      Instant const& epoch,
+      int subsystem);
 
   // Construction parameters.
   virtual Instant initial_time() const;

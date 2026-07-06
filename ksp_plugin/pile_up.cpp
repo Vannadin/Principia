@@ -456,9 +456,11 @@ int PileUp::subsystem() const {
   return subsystem_;
 }
 
-void PileUp::Rebase(Displacement<Barycentric> const& displacement,
+void PileUp::Rebase(Displacement<Barycentric> const& displacement_at_epoch,
+                    Velocity<Barycentric> const& velocity_offset,
+                    Instant const& epoch,
                     int const subsystem) {
-  trajectory_.Translate(displacement);
+  trajectory_.Translate(displacement_at_epoch, velocity_offset, epoch);
   subsystem_ = subsystem;
   // The fixed instance, if any, holds integrator state in the previous
   // representation; it will be re-created as needed.

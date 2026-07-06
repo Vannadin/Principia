@@ -368,6 +368,16 @@ void DiscreteTrajectory<Frame>::Translate(
 }
 
 template<typename Frame>
+void DiscreteTrajectory<Frame>::Translate(
+    Displacement<Frame> const& displacement_at_epoch,
+    Velocity<Frame> const& velocity_offset,
+    Instant const& epoch) {
+  for (auto& segment : *segments_) {
+    segment.Translate(displacement_at_epoch, velocity_offset, epoch);
+  }
+}
+
+template<typename Frame>
 absl::Status DiscreteTrajectory<Frame>::Append(
     Instant const& t,
     DegreesOfFreedom<Frame> const& degrees_of_freedom) {

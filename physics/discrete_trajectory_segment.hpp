@@ -172,6 +172,15 @@ class DiscreteTrajectorySegment : public Trajectory<Frame> {
   // times and velocities are unaffected.
   void Translate(Displacement<Frame> const& displacement);
 
+  // Translates each position of this segment by
+  // `displacement_at_epoch + velocity_offset * (t - epoch)`, where t is the
+  // time of the point, and each velocity by `velocity_offset`.  This is the
+  // conversion between the representations of two subsystems whose local
+  // origins move relative to each other.
+  void Translate(Displacement<Frame> const& displacement_at_epoch,
+                 Velocity<Frame> const& velocity_offset,
+                 Instant const& epoch);
+
   absl::Status Append(Instant const& t,
                       DegreesOfFreedom<Frame> const& degrees_of_freedom);
 

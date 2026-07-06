@@ -573,13 +573,22 @@ void DiscreteTrajectorySegment<Frame>::SetForkPoint(value_type const& point) {
 template<typename Frame>
 void DiscreteTrajectorySegment<Frame>::Translate(
     Displacement<Frame> const& displacement) {
+  Translate(displacement, Frame::unmoving, Instant());
+}
+
+template<typename Frame>
+void DiscreteTrajectorySegment<Frame>::Translate(
+    Displacement<Frame> const& displacement_at_epoch,
+    Velocity<Frame> const& velocity_offset,
+    Instant const& epoch) {
   Timeline translated_timeline;
   DegreesOfFreedom<Frame> const* previous_degrees_of_freedom = nullptr;
   Instant previous_time;
   for (auto const& point : timeline_) {
     DegreesOfFreedom<Frame> const translated_degrees_of_freedom(
-        point.degrees_of_freedom.position() + displacement,
-        point.degrees_of_freedom.velocity());
+        point.degrees_of_freedom.position() + displacement_at_epoch +
+            velocity_offset * (point.time - epoch),
+        point.degrees_of_freedom.velocity() + velocity_offset);
     // The translated interpolation is the translated Hermite interpolation of
     // the translated endpoints, with an unchanged error.
     std::unique_ptr<Interpolation<Frame>> interpolation;
