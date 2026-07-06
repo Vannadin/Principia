@@ -4,6 +4,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -118,6 +119,17 @@ class Ephemeris {
   using GeneralizedAdaptiveStepParameters =
       _integration_parameters::AdaptiveStepParameters<
           GeneralizedNewtonianMotionEquation>;
+
+  // An affine origin relative to a subsystem's local origin: the positions of
+  // a trajectory represented in this anchor are offset from subsystem-relative
+  // positions by `offset + velocity * (t - epoch)`.  Used for vessels anchored
+  // in the force-free void between stellar subsystems, whose subsystem-relative
+  // coordinates would otherwise grow until they quantize rendezvous physics.
+  struct Anchor {
+    Displacement<Frame> offset;
+    Velocity<Frame> velocity;
+    Instant epoch;
+  };
 
   class AccuracyParameters final {
    public:
@@ -251,14 +263,17 @@ class Ephemeris {
   // by `parameters`.  If `subsystems` is nonempty, it must be parallel to
   // `trajectories` and give the subsystem relative to whose local origin the
   // positions of each trajectory are represented; empty means subsystem 0 for
-  // all the trajectories.
+  // all the trajectories.  If `anchors` is nonempty, it must be parallel to
+  // `trajectories` and give, for the trajectories where it is set, the anchor
+  // (relative to their subsystem's origin) of their representation.
   virtual not_null<
       std::unique_ptr<typename Integrator<NewtonianMotionEquation>::Instance>>
   NewInstance(
       std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
       IntrinsicAccelerations const& intrinsic_accelerations,
       FixedStepParameters const& parameters,
-      std::vector<int> const& subsystems = {});
+      std::vector<int> const& subsystems = {},
+      std::vector<std::optional<Anchor>> const& anchors = {});
 
   // Same as above, but returns an error status if the thread is stopped.
   virtual absl::StatusOr<not_null<
@@ -267,21 +282,24 @@ class Ephemeris {
       std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
       IntrinsicAccelerations const& intrinsic_accelerations,
       FixedStepParameters const& parameters,
-      std::vector<int> const& subsystems = {});
+      std::vector<int> const& subsystems = {},
+      std::vector<std::optional<Anchor>> const& anchors = {});
 
   // Integrates, until exactly `t` (except for timeouts or singularities), the
   // `trajectory` followed by a massless body in the gravitational potential
   // described by `*this`.  If `t > t_max()`, calls `Prolong(t)` beforehand.
   // Prolongs the ephemeris by at most `max_ephemeris_steps`.  Returns OK if and
   // only if `*trajectory` was integrated until `t`.  The positions of the
-  // `trajectory` are represented relative to the local origin of `subsystem`.
+  // `trajectory` are represented relative to the local origin of `subsystem`,
+  // further displaced by `anchor` if it is set.
   virtual absl::Status FlowWithAdaptiveStep(
       not_null<DiscreteTrajectory<Frame>*> trajectory,
       IntrinsicAcceleration intrinsic_acceleration,
       Instant const& t,
       AdaptiveStepParameters const& parameters,
       std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps,
-      int subsystem = 0)
+      int subsystem = 0,
+      std::optional<Anchor> const& anchor = std::nullopt)
       EXCLUDES(lock_);
 
   // Same as above, but uses a generalized integrator.
@@ -291,7 +309,8 @@ class Ephemeris {
       Instant const& t,
       GeneralizedAdaptiveStepParameters const& parameters,
       std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps,
-      int subsystem = 0)
+      int subsystem = 0,
+      std::optional<Anchor> const& anchor = std::nullopt)
       EXCLUDES(lock_);
 
   // Integrates, until at most `t`, the trajectories followed by massless
@@ -599,7 +618,9 @@ class Ephemeris {
   // per-pair runtime check would tax this hot kernel measurably when the
   // damping is off.  Returns an integer for efficiency.  The massless
   // positions are represented relative to the local origins of the
-  // `subsystems`, which must be parallel to `positions`.
+  // `subsystems`, which must be parallel to `positions`; where `anchors` is
+  // set (it is either empty or parallel to `positions`), the representation is
+  // further displaced by the anchor.
   template<bool has_far_field_damping, bool body1_is_oblate>
   std::underlying_type_t<absl::StatusCode>
   ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
@@ -608,7 +629,8 @@ class Ephemeris {
       std::size_t b1,
       std::vector<Position<Frame>> const& positions,
       std::vector<Vector<Acceleration, Frame>>& accelerations,
-      std::vector<int> const& subsystems) const
+      std::vector<int> const& subsystems,
+      std::vector<std::optional<Anchor>> const& anchors) const
       REQUIRES_SHARED(lock_);
 
   // Computes the potential resulting from one body, `body1` (with index `b1` in
@@ -645,14 +667,17 @@ class Ephemeris {
   // Computes the acceleration exerted by the massive bodies in `bodies_` on
   // massless bodies.  The massless bodies are at the given `positions`,
   // represented relative to the local origins of the `subsystems`, which must
-  // be parallel to `positions`.  Returns an error iff a collision occurred,
-  // i.e., the massless body is inside one of the `bodies_`.
+  // be parallel to `positions`, and further displaced by the `anchors` where
+  // set (`anchors` is either empty or parallel to `positions`).  Returns an
+  // error iff a collision occurred, i.e., the massless body is inside one of
+  // the `bodies_`.
   absl::StatusCode
   ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
       Instant const& t,
       std::vector<Position<Frame>> const& positions,
       std::vector<Vector<Acceleration, Frame>>& accelerations,
-      std::vector<int> const& subsystems) const
+      std::vector<int> const& subsystems,
+      std::vector<std::optional<Anchor>> const& anchors) const
       EXCLUDES(lock_);
 
   // The implementation of the above, on which see
@@ -664,7 +689,8 @@ class Ephemeris {
       Instant const& t,
       std::vector<Position<Frame>> const& positions,
       std::vector<Vector<Acceleration, Frame>>& accelerations,
-      std::vector<int> const& subsystems) const
+      std::vector<int> const& subsystems,
+      std::vector<std::optional<Anchor>> const& anchors) const
       EXCLUDES(lock_);
 
   // Computes the potential resulting from the massive bodies in `bodies_`.  The

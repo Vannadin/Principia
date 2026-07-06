@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "gmock/gmock.h"
@@ -20,6 +21,7 @@ template<typename Frame>
 class MockEphemeris : public Ephemeris<Frame> {
  public:
   using typename Ephemeris<Frame>::AdaptiveStepParameters;
+  using typename Ephemeris<Frame>::Anchor;
   using typename Ephemeris<Frame>::FixedStepParameters;
   using typename Ephemeris<Frame>::IntrinsicAcceleration;
   using typename Ephemeris<Frame>::IntrinsicAccelerations;
@@ -77,7 +79,8 @@ class MockEphemeris : public Ephemeris<Frame> {
       (std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
        IntrinsicAccelerations const& intrinsic_accelerations,
        FixedStepParameters const& parameters,
-       std::vector<int> const& subsystems),
+       std::vector<int> const& subsystems,
+       std::vector<std::optional<Anchor>> const& anchors),
       (override));
   MOCK_METHOD(absl::Status,
               FlowWithAdaptiveStep,
@@ -86,7 +89,8 @@ class MockEphemeris : public Ephemeris<Frame> {
                Instant const& t,
                AdaptiveStepParameters const& parameters,
                std::int64_t max_ephemeris_steps,
-               int subsystem),
+               int subsystem,
+               std::optional<Anchor> const& anchor),
               (override));
   MOCK_METHOD(
       absl::Status,

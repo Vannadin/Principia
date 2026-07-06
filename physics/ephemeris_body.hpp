@@ -575,9 +575,13 @@ Ephemeris<Frame>::NewInstance(
     std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
     IntrinsicAccelerations const& intrinsic_accelerations,
     FixedStepParameters const& parameters,
-    std::vector<int> const& subsystems) {
-  return StoppableNewInstance(
-             trajectories, intrinsic_accelerations, parameters, subsystems)
+    std::vector<int> const& subsystems,
+    std::vector<std::optional<Anchor>> const& anchors) {
+  return StoppableNewInstance(trajectories,
+                              intrinsic_accelerations,
+                              parameters,
+                              subsystems,
+                              anchors)
       .value();
 }
 
@@ -588,7 +592,8 @@ Ephemeris<Frame>::StoppableNewInstance(
     std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
     IntrinsicAccelerations const& intrinsic_accelerations,
     FixedStepParameters const& parameters,
-    std::vector<int> const& subsystems) {
+    std::vector<int> const& subsystems,
+    std::vector<std::optional<Anchor>> const& anchors) {
   InitialValueProblem<NewtonianMotionEquation> problem;
 
   CHECK(subsystems.empty() || subsystems.size() == trajectories.size());
@@ -598,11 +603,17 @@ Ephemeris<Frame>::StoppableNewInstance(
   }
   std::vector<int> massless_subsystems = subsystems;
   massless_subsystems.resize(trajectories.size());
+  CHECK(anchors.empty() || anchors.size() == trajectories.size());
+  std::vector<std::optional<Anchor>> massless_anchors = anchors;
+  if (!massless_anchors.empty()) {
+    massless_anchors.resize(trajectories.size());
+  }
 
   problem.equation.compute_acceleration =
       [this,
        intrinsic_accelerations,
-       massless_subsystems = std::move(massless_subsystems)](
+       massless_subsystems = std::move(massless_subsystems),
+       massless_anchors = std::move(massless_anchors)](
           Instant const& t,
           std::vector<Position<Frame>> const& positions,
           std::vector<Vector<Acceleration, Frame>>& accelerations) {
@@ -611,7 +622,8 @@ Ephemeris<Frame>::StoppableNewInstance(
             t,
             positions,
             accelerations,
-            massless_subsystems);
+            massless_subsystems,
+            massless_anchors);
     // Add the intrinsic accelerations.
     for (int i = 0; i < intrinsic_accelerations.size(); ++i) {
       auto const intrinsic_acceleration = intrinsic_accelerations[i];
@@ -658,13 +670,18 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     Instant const& t,
     AdaptiveStepParameters const& parameters,
     std::int64_t const max_ephemeris_steps,
-    int const subsystem) {
+    int const subsystem,
+    std::optional<Anchor> const& anchor) {
   CHECK_GE(subsystem, 0);
   CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<int> const massless_subsystems(1, subsystem);
+  std::vector<std::optional<Anchor>> const massless_anchors =
+      anchor.has_value() ? std::vector<std::optional<Anchor>>(1, anchor)
+                         : std::vector<std::optional<Anchor>>{};
   auto compute_acceleration = [this,
                                &intrinsic_acceleration,
-                               &massless_subsystems](
+                               &massless_subsystems,
+                               &massless_anchors](
       Instant const& t,
       std::vector<Position<Frame>> const& positions,
       std::vector<Vector<Acceleration, Frame>>& accelerations) {
@@ -673,7 +690,8 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
             t,
             positions,
             accelerations,
-            massless_subsystems);
+            massless_subsystems,
+            massless_anchors);
     if (intrinsic_acceleration != nullptr) {
       accelerations[0] += intrinsic_acceleration(t);
     }
@@ -696,12 +714,16 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     Instant const& t,
     GeneralizedAdaptiveStepParameters const& parameters,
     std::int64_t max_ephemeris_steps,
-    int const subsystem) {
+    int const subsystem,
+    std::optional<Anchor> const& anchor) {
   CHECK_GE(subsystem, 0);
   CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<int> const massless_subsystems(1, subsystem);
+  std::vector<std::optional<Anchor>> const massless_anchors =
+      anchor.has_value() ? std::vector<std::optional<Anchor>>(1, anchor)
+                         : std::vector<std::optional<Anchor>>{};
   auto compute_acceleration =
-      [this, &intrinsic_acceleration, &massless_subsystems](
+      [this, &intrinsic_acceleration, &massless_subsystems, &massless_anchors](
           Instant const& t,
           std::vector<Position<Frame>> const& positions,
           std::vector<Velocity<Frame>> const& velocities,
@@ -711,7 +733,8 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
                 t,
                 positions,
                 accelerations,
-                massless_subsystems);
+                massless_subsystems,
+                massless_anchors);
         if (intrinsic_acceleration != nullptr) {
           accelerations[0] +=
               intrinsic_acceleration(t, {positions[0], velocities[0]});
@@ -910,7 +933,8 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationOnMasslessBody(
       t,
       {position},
       accelerations,
-      {subsystem});
+      {subsystem},
+      /*anchors=*/{});
 
   return accelerations[0];
 }
@@ -1919,7 +1943,8 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
     std::size_t const b1,
     std::vector<Position<Frame>> const& positions,
     std::vector<Vector<Acceleration, Frame>>& accelerations,
-    std::vector<int> const& subsystems) const {
+    std::vector<int> const& subsystems,
+    std::vector<std::optional<Anchor>> const& anchors) const {
   lock_.AssertReaderHeld();
   GravitationalParameter const& μ1 = body1.gravitational_parameter();
   auto const& trajectory1 = *trajectories_[b1];
@@ -1927,6 +1952,7 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
   Length const body1_collision_radius =
       min_radius_tolerance * body1.min_radius();
   int const s1 = subsystem_of_body_[b1];
+  bool const has_anchors = !anchors.empty();
   // TODO(phl): Use std::to_underlying when we have C++23.
   auto error = static_cast<std::underlying_type_t<absl::StatusCode>>(
       absl::StatusCode::kOk);
@@ -1934,6 +1960,15 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
   for (std::size_t b2 = 0; b2 < positions.size(); ++b2) {
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position1 - positions[b2];
+    if (has_anchors && anchors[b2].has_value()) {
+      // The anchor origin moves at a constant velocity relative to the
+      // subsystem origin; the rounding of the product is far below the
+      // anchor's raison d'être (see `inter_subsystem_offset` for the same
+      // argument).  This term must be applied even on a force-free coast:
+      // the far-field damping cutoff below reads `Δq`.
+      Anchor const& anchor = *anchors[b2];
+      Δq -= anchor.offset + anchor.velocity * (t - anchor.epoch);
+    }
     if (int const s2 = subsystems[b2]; s1 != s2) {
       Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);
     }
@@ -2133,15 +2168,16 @@ ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
     Instant const& t,
     std::vector<Position<Frame>> const& positions,
     std::vector<Vector<Acceleration, Frame>>& accelerations,
-    std::vector<int> const& subsystems) const {
+    std::vector<int> const& subsystems,
+    std::vector<std::optional<Anchor>> const& anchors) const {
   if (far_field_damping_.empty()) {
     return ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies<
         /*has_far_field_damping=*/false>(
-        t, positions, accelerations, subsystems);
+        t, positions, accelerations, subsystems, anchors);
   } else {
     return ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies<
         /*has_far_field_damping=*/true>(
-        t, positions, accelerations, subsystems);
+        t, positions, accelerations, subsystems, anchors);
   }
 }
 
@@ -2153,9 +2189,11 @@ ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
     Instant const& t,
     std::vector<Position<Frame>> const& positions,
     std::vector<Vector<Acceleration, Frame>>& accelerations,
-    std::vector<int> const& subsystems) const {
+    std::vector<int> const& subsystems,
+    std::vector<std::optional<Anchor>> const& anchors) const {
   CHECK_EQ(positions.size(), accelerations.size());
   CHECK_EQ(positions.size(), subsystems.size());
+  CHECK(anchors.empty() || anchors.size() == positions.size());
   accelerations.assign(accelerations.size(), Vector<Acceleration, Frame>());
   // TODO(phl): Use std::to_underlying when we have C++23.
   auto error = static_cast<std::underlying_type_t<absl::StatusCode>>(
@@ -2172,7 +2210,8 @@ ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
                  body1, b1,
                  positions,
                  accelerations,
-                 subsystems);
+                 subsystems,
+                 anchors);
   }
   for (std::size_t b1 = number_of_oblate_bodies_;
        b1 < number_of_oblate_bodies_ +
@@ -2186,7 +2225,8 @@ ComputeGravitationalAccelerationByAllMassiveBodiesOnMasslessBodies(
                  body1, b1,
                  positions,
                  accelerations,
-                 subsystems);
+                 subsystems,
+                 anchors);
   }
   return static_cast<absl::StatusCode>(error);
 }
