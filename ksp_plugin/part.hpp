@@ -4,6 +4,7 @@
 #include <list>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "base/algebra.hpp"
@@ -17,6 +18,7 @@
 #include "ksp_plugin/part_subsets.hpp"  // 🧙 For Subset<Part>.
 #include "ksp_plugin/pile_up.hpp"
 #include "physics/degrees_of_freedom.hpp"
+#include "physics/ephemeris.hpp"
 #include "physics/discrete_trajectory.hpp"
 #include "physics/discrete_trajectory_segment_iterator.hpp"
 #include "physics/rigid_motion.hpp"
@@ -40,6 +42,7 @@ using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
 using namespace principia::ksp_plugin::_pile_up;
 using namespace principia::physics::_degrees_of_freedom;
+using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_discrete_trajectory_segment_iterator;
 using namespace principia::physics::_rigid_motion;
@@ -80,6 +83,11 @@ class Part final {
   // Barycentric degrees of freedom of this part are represented.
   void set_subsystem(int subsystem);
   int subsystem() const;
+
+  // Sets or returns the anchor further displacing that representation when
+  // the part's vessel coasts in the force-free inter-subsystem void.
+  void set_anchor(std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
+  std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
 
   // Sets or returns the mass and inertia tensor.  Even though a part is
   // massless in the sense that it doesn't exert gravity, it has a mass and an
@@ -200,6 +208,7 @@ class Part final {
   std::string const name_;
   bool truthful_;
   int subsystem_ = 0;
+  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
   Mass mass_;
   Position<EccentricPart> centre_of_mass_ = EccentricPart::origin;
   // NOTE(eggrobin): `mass_change_` and `is_solid_rocket_motor_` are set by

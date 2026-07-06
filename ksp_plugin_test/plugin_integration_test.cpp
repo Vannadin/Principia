@@ -1877,5 +1877,138 @@ TEST_F(PluginIntegrationTestWithoutPlugin, ThousandLightYearScale) {
               Lt(10 * Kilo(Metre)));
 }
 
+// An unloaded vessel coasting where the damped far field is exactly zero
+// adopts an anchor — a private origin moving with it — so that its stored
+// coordinates stay near zero instead of growing to ~10¹⁶ m.  The anchor
+// survives a save, and loading the vessel drops it without moving the vessel
+// physically.
+TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                             /*parent_index=*/std::nullopt,
+                                             gravity_model,
+                                             initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                             /*parent_index=*/star_a,
+                                             gravity_model,
+                                             initial_state);
+  }
+  plugin->EndInitialization();
+
+  bool inserted;
+  // A vessel orbiting star A: near a star, no anchor.
+  GUID const guid_near = "near";
+  plugin->InsertOrKeepVessel(guid_near, "near", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      301, "part-near", guid_near,
+      {Displacement<AliceSun>({1e9 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  // A vessel adrift in the middle of the void.
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      302, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  EXPECT_FALSE(plugin->GetVessel(guid_near)->anchor().has_value());
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+  ASSERT_TRUE(drifter->anchor().has_value());
+  // The anchored coordinates and velocity are near zero (the coordinates were
+  // ~2e16 m); the anchor records where the vessel really is and how it moves.
+  EXPECT_THAT((drifter->trajectory().back().degrees_of_freedom.position() -
+               Barycentric::origin).Norm(),
+              Lt(1 * Kilo(Metre)));
+  EXPECT_THAT(drifter->trajectory().back().degrees_of_freedom.velocity()
+                  .Norm(),
+              Lt(1e-6 * Metre / Second));
+  EXPECT_THAT(drifter->anchor()->offset.Norm(),
+              AbsoluteErrorFrom(2e16 * Metre, Lt(1e12 * Metre)));
+  EXPECT_THAT(drifter->anchor()->velocity.Norm(),
+              AbsoluteErrorFrom(3 * Kilo(Metre) / Second,
+                                Lt(1 * Metre / Second)));
+  auto const saved_anchor = *drifter->anchor();
+
+  // The representation survives a save.
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  plugin = nullptr;
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+  not_null<Vessel*> const drifter2 = plugin2->GetVessel(guid_void);
+  ASSERT_TRUE(drifter2->anchor().has_value());
+  EXPECT_EQ(saved_anchor, *drifter2->anchor());
+
+  // Loading the vessel drops the anchor and restores subsystem-relative
+  // coordinates without moving the vessel physically.
+  auto const& [t_head, anchored_degrees_of_freedom] =
+      drifter2->trajectory().back();
+  Position<Barycentric> const expected_position =
+      anchored_degrees_of_freedom.position() +
+      drifter2->anchor()->OffsetAt(t_head);
+  plugin2->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                              /*loaded=*/true, inserted);
+  EXPECT_FALSE(drifter2->anchor().has_value());
+  EXPECT_EQ(expected_position,
+            drifter2->trajectory().back().degrees_of_freedom.position());
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia

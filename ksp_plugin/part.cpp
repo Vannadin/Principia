@@ -90,6 +90,15 @@ int Part::subsystem() const {
   return subsystem_;
 }
 
+void Part::set_anchor(
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
+  anchor_ = anchor;
+}
+
+std::optional<Ephemeris<Barycentric>::Anchor> const& Part::anchor() const {
+  return anchor_;
+}
+
 void Part::set_mass(Mass const& mass) {
   mass_change_ = mass - mass_;
   mass_ = mass;

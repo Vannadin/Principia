@@ -64,6 +64,9 @@ constexpr std::int64_t max_points_to_serialize = 20'000;
 // the inverse ratio, so a vessel weaving around the balance point does not
 // oscillate between representations, and a transit that merely grazes a
 // subsystem's region does not adopt it.
+// While anchored in the void, a vessel whose coordinates grow beyond this
+// bound (under thrust) re-anchors, keeping the local ULP at ~0.2 mm.
+constexpr Length re_anchor_bound = 1e12 * Metre;
 constexpr double rebase_dominance_margin = 3;
 
 auto* const where_elephants_go_to_die =
@@ -163,8 +166,25 @@ bool Vessel::RebaseIfNeeded() {
   // A copy, not a reference: the translation below rebuilds the timeline that
   // `back()` points into.
   Instant const t = trajectory_.back().time;
-  Position<Barycentric> const q =
+  Position<Barycentric> q =
       trajectory_.back().degrees_of_freedom.position();
+  if (anchor_.has_value()) {
+    // The dominance geometry below assumes subsystem-relative coordinates:
+    // while anchored we only watch for the void exit and for coordinate
+    // growth (a burn can carry the vessel away from its anchor).
+    if (ephemeris_->FarFieldIsZero(q + anchor_->OffsetAt(t), subsystem_, t)) {
+      if ((q - Barycentric::origin).Norm²() >
+          re_anchor_bound * re_anchor_bound) {
+        AdoptAnchor();
+      }
+      return false;
+    }
+    DropAnchor();
+    q = trajectory_.back().degrees_of_freedom.position();
+  } else if (ephemeris_->FarFieldIsZero(q, subsystem_, t)) {
+    AdoptAnchor();
+    return true;
+  }
   // The dominance μ/d² is computed from the subsystem masses and (linearly
   // extrapolated) barycentres, not from the acceleration field: far-field
   // damping zeroes the field precisely in the region where the boundary lies.
@@ -206,7 +226,13 @@ bool Vessel::RebaseIfNeeded() {
 }
 
 void Vessel::RebaseTo(int const subsystem) {
-  if (subsystem == subsystem_ || trajectory_.empty()) {
+  if (trajectory_.empty()) {
+    return;
+  }
+  if (anchor_.has_value()) {
+    DropAnchor();
+  }
+  if (subsystem == subsystem_) {
     return;
   }
   // A copy, not a reference: the translation below rebuilds the timeline that
@@ -248,7 +274,7 @@ void Vessel::RebaseTo(int const subsystem) {
     pile_up = part.containing_pile_up();
   });
   if (pile_up != nullptr && pile_up->subsystem() != subsystem_) {
-    pile_up->Rebase(displacement, velocity_offset, t, subsystem_);
+    pile_up->Rebase(displacement, velocity_offset, t, subsystem_, anchor_);
   }
   for (auto& flight_plan : flight_plans_) {
     if (auto* const optimizable_flight_plan =
@@ -265,6 +291,81 @@ void Vessel::RebaseTo(int const subsystem) {
   }
 }
 
+std::optional<Ephemeris<Barycentric>::Anchor> const& Vessel::anchor() const {
+  return anchor_;
+}
+
+void Vessel::DropAnchor() {
+  if (!anchor_.has_value() || trajectory_.empty()) {
+    return;
+  }
+  // Value copies: the translations rebuild the timeline.
+  Instant const t = trajectory_.back().time;
+  Displacement<Barycentric> const displacement = anchor_->OffsetAt(t);
+  Velocity<Barycentric> const velocity_offset = anchor_->velocity;
+  LOG(INFO) << "Vessel " << ShortDebugString() << " drops its anchor";
+  {
+    absl::MutexLock l(&lock_);
+    trajectory_.Translate(displacement, velocity_offset, t);
+    anchor_.reset();
+  }
+  TranslateParts(displacement, velocity_offset, t);
+}
+
+void Vessel::AdoptAnchor() {
+  if (trajectory_.empty()) {
+    return;
+  }
+  // Value copies: the translations rebuild the timeline.
+  Instant const t = trajectory_.back().time;
+  DegreesOfFreedom<Barycentric> const degrees_of_freedom =
+      trajectory_.back().degrees_of_freedom;
+  Displacement<Barycentric> const displacement =
+      degrees_of_freedom.position() - Barycentric::origin;
+  Velocity<Barycentric> const velocity_offset = degrees_of_freedom.velocity();
+  Ephemeris<Barycentric>::Anchor new_anchor{.offset = displacement,
+                                            .velocity = velocity_offset,
+                                            .epoch = t};
+  if (anchor_.has_value()) {
+    // Re-anchoring: the new anchor is displaced from the subsystem origin by
+    // the old anchor as well as by the anchored coordinates.
+    new_anchor.offset += anchor_->OffsetAt(t);
+    new_anchor.velocity += anchor_->velocity;
+  }
+  LOG(INFO) << "Vessel " << ShortDebugString() << " adopts an anchor";
+  {
+    absl::MutexLock l(&lock_);
+    trajectory_.Translate(-displacement, -velocity_offset, t);
+    anchor_ = new_anchor;
+  }
+  TranslateParts(-displacement, -velocity_offset, t);
+}
+
+void Vessel::TranslateParts(Displacement<Barycentric> const& displacement,
+                            Velocity<Barycentric> const& velocity_offset,
+                            Instant const& t) {
+  // Flight plans and predictions are represented relative to the subsystem
+  // origin, not to the anchor, so they are unaffected here.
+  RigidMotion<Barycentric, Barycentric> const conversion_motion(
+      RigidTransformation<Barycentric, Barycentric>(
+          Barycentric::origin,
+          Barycentric::origin + displacement,
+          OrthogonalMap<Barycentric, Barycentric>::Identity()),
+      Barycentric::nonrotating,
+      -velocity_offset);
+  ForAllParts([this, &conversion_motion](Part& part) {
+    part.set_anchor(anchor_);
+    part.set_rigid_motion(conversion_motion * part.rigid_motion());
+  });
+  PileUp* pile_up = nullptr;
+  ForSomePart([&pile_up](Part& part) {
+    pile_up = part.containing_pile_up();
+  });
+  if (pile_up != nullptr) {
+    pile_up->Rebase(displacement, velocity_offset, t, subsystem_, anchor_);
+  }
+}
+
 void Vessel::set_parent(not_null<Celestial const*> const parent) {
   LOG(INFO) << "Vessel " << ShortDebugString() << " switches parent from "
             << parent_->body()->name() << " to " << parent->body()->name();
@@ -275,6 +376,7 @@ void Vessel::AddPart(not_null<std::unique_ptr<Part>> part) {
   LOG(INFO) << "Adding part " << part->ShortDebugString() << " to vessel "
             << ShortDebugString();
   part->set_subsystem(subsystem_);
+  part->set_anchor(anchor_);
   parts_.emplace(part->part_id(), std::move(part));
 }
 
@@ -835,6 +937,9 @@ void Vessel::WriteToMessage(not_null<serialization::Vessel*> const message,
   if (subsystem_ != 0) {
     message->set_subsystem(subsystem_);
   }
+  if (anchor_.has_value()) {
+    anchor_->WriteToMessage(message->mutable_anchor());
+  }
   body_.WriteToMessage(message->mutable_body());
   prediction_adaptive_step_parameters_.WriteToMessage(
       message->mutable_prediction_adaptive_step_parameters());
@@ -946,6 +1051,10 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
           message.prediction_adaptive_step_parameters()),
       DefaultDownsamplingParameters());
   vessel->subsystem_ = message.subsystem();
+  if (message.has_anchor()) {
+    vessel->anchor_ =
+        Ephemeris<Barycentric>::Anchor::ReadFromMessage(message.anchor());
+  }
   for (auto const& serialized_part : message.parts()) {
     PartId const part_id = serialized_part.part_id();
     auto part =
@@ -955,6 +1064,7 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
           }
         });
     part->set_subsystem(vessel->subsystem_);
+    part->set_anchor(vessel->anchor_);
     vessel->parts_.emplace(part_id, std::move(part));
   }
   for (PartId const part_id : message.kept_parts()) {

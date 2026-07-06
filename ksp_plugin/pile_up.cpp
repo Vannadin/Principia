@@ -76,12 +76,16 @@ PileUp::PileUp(
       deletion_callback_(std::move(deletion_callback)) {
   LOG(INFO) << "Constructing pile up at " << this;
   subsystem_ = parts_.front()->subsystem();
+  anchor_ = parts_.front()->anchor();
   MechanicalSystem<Barycentric, NonRotatingPileUp> mechanical_system;
   for (not_null<Part*> const part : parts_) {
     // Parts in contact are aeons away from a subsystem boundary, so their
-    // vessels must all have rebased consistently.
+    // vessels must all have rebased consistently; the plugin reconciles the
+    // representations (subsystem and anchor) before collecting the pile-ups.
     CHECK_EQ(part->subsystem(), subsystem_)
         << "Pile up with parts in distinct subsystems";
+    CHECK(part->anchor() == anchor_)
+        << "Pile up with parts in distinct anchors";
     mechanical_system.AddRigidBody(
         part->rigid_motion(), part->mass(), part->inertia_tensor());
   }
@@ -442,6 +446,7 @@ PileUp::PileUp(
       angular_momentum_(angular_momentum),
       deletion_callback_(std::move(deletion_callback)) {
   subsystem_ = parts_.front()->subsystem();
+  anchor_ = parts_.front()->anchor();
   if (history.has_value()) {
     history_ = history.value();
   } else {
@@ -456,12 +461,19 @@ int PileUp::subsystem() const {
   return subsystem_;
 }
 
+std::optional<Ephemeris<Barycentric>::Anchor> const& PileUp::anchor() const {
+  return anchor_;
+}
+
 void PileUp::Rebase(Displacement<Barycentric> const& displacement_at_epoch,
                     Velocity<Barycentric> const& velocity_offset,
                     Instant const& epoch,
-                    int const subsystem) {
+                    int const subsystem,
+                    std::optional<Ephemeris<Barycentric>::Anchor> const&
+                        anchor) {
   trajectory_.Translate(displacement_at_epoch, velocity_offset, epoch);
   subsystem_ = subsystem;
+  anchor_ = anchor;
   // The fixed instance, if any, holds integrator state in the previous
   // representation; it will be re-created as needed.
   fixed_instance_ = nullptr;
@@ -643,7 +655,8 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           {&trajectory_},
           Ephemeris<Barycentric>::NoIntrinsicAccelerations,
           fixed_step_parameters_,
-          {subsystem_});
+          {subsystem_},
+          {anchor_});
     }
     CHECK_LT(history_->back().time, t);
     status = ephemeris_->FlowWithFixedStep(t, *fixed_instance_);
@@ -657,7 +670,8 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           t,
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          subsystem_));
+          subsystem_,
+          anchor_));
     }
   } else {
     // Destroy the fixed instance, it wouldn't be correct to use it the next
@@ -689,7 +703,8 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           t,
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          subsystem_);
+          subsystem_,
+          anchor_);
     } else {
       OnRailsBurn const& burn = *on_rails_burn_;
       Variation<Mass> const mass_flow = burn.thrust / burn.specific_impulse;
@@ -723,7 +738,8 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           std::min(final_time, t),
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          subsystem_);
+          subsystem_,
+          anchor_);
       if (status.ok() && trajectory_.back().time < t) {
         status.Update(ephemeris_->FlowWithAdaptiveStep(
             &trajectory_,
@@ -731,7 +747,8 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
             t,
             adaptive_step_parameters_,
             Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-            subsystem_));
+            subsystem_,
+          anchor_));
       }
     }
     psychohistory_ = trajectory_.NewSegment();

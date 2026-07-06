@@ -133,15 +133,18 @@ class PileUp {
   // degrees of freedom of this pile-up are represented.
   int subsystem() const;
 
-  // Re-expresses this pile-up relative to the local origin of the given
-  // `subsystem`, by translating its trajectory by
-  // `displacement_at_epoch + velocity_offset * (t - epoch)` in position and by
-  // `velocity_offset` in velocity.  Must not be called while the pile-up is
-  // being advanced.
+  // Returns the anchor further displacing that representation, if any.
+  std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
+
+  // Re-expresses this pile-up in the given representation, by translating its
+  // trajectory by `displacement_at_epoch + velocity_offset * (t - epoch)` in
+  // position and by `velocity_offset` in velocity.  Must not be called while
+  // the pile-up is being advanced.
   void Rebase(Displacement<Barycentric> const& displacement_at_epoch,
               Velocity<Barycentric> const& velocity_offset,
               Instant const& epoch,
-              int subsystem);
+              int subsystem,
+              std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
   std::list<not_null<Part*>> const& parts() const;
   Ephemeris<Barycentric>::FixedStepParameters const& fixed_step_parameters()
@@ -243,6 +246,7 @@ class PileUp {
   // The subsystem relative to whose local origin the Barycentric degrees of
   // freedom of this pile-up are represented; deduced from the parts.
   int subsystem_ = 0;
+  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
   Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters_;
   Ephemeris<Barycentric>::FixedStepParameters fixed_step_parameters_;
 

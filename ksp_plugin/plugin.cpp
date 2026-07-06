@@ -455,6 +455,9 @@ void Plugin::InsertOrKeepVessel(GUID const& vessel_guid,
   }
   if (loaded) {
     loaded_vessels_.insert(vessel);
+    // The loaded physics paths represent everything relative to the subsystem
+    // origin: a loaded vessel never carries an anchor.
+    vessel->DropAnchor();
   }
   LOG_IF(INFO, inserted) << "Inserted " << (loaded ? "loaded" : "unloaded")
                          << " vessel " << vessel->ShortDebugString();
@@ -732,6 +735,13 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
       });
     }
     for (auto const& [_, subset_vessels] : vessels_by_subset) {
+      if (subset_vessels.size() > 1) {
+        // The pile-up constructed below requires a single representation;
+        // anchors are per-vessel, so a merge drops them.
+        for (not_null<Vessel*> const vessel : subset_vessels) {
+          vessel->DropAnchor();
+        }
+      }
       std::map<int, Mass> mass_by_subsystem;
       for (not_null<Vessel*> const vessel : subset_vessels) {
         Mass& subsystem_mass = mass_by_subsystem[vessel->subsystem()];
@@ -1088,6 +1098,11 @@ RelativeDegreesOfFreedom<AliceSun> Plugin::VesselFromParent(
   RelativeDegreesOfFreedom<Barycentric> barycentric_result =
       vessel->psychohistory()->back().degrees_of_freedom -
       vessel->parent()->current_degrees_of_freedom(current_time_);
+  if (auto const& anchor = vessel->anchor(); anchor.has_value()) {
+    barycentric_result = {
+        barycentric_result.displacement() + anchor->OffsetAt(current_time_),
+        barycentric_result.velocity() + anchor->velocity};
+  }
   if (int const vessel_subsystem = vessel->subsystem(),
           parent_subsystem = vessel->parent()->subsystem();
       vessel_subsystem != parent_subsystem) {

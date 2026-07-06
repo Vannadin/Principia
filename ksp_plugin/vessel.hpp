@@ -122,10 +122,25 @@ class Vessel {
 
   // Re-expresses all the trajectories of this vessel (and those of its parts,
   // pile-up and flight plans) relative to the local origin of the given
-  // subsystem, translating each point at its own time.  Does nothing if the
-  // vessel is already represented in that subsystem.  Must not be called while
-  // the pile-ups are being advanced.
+  // subsystem, translating each point at its own time.  Drops any anchor
+  // first.  Does nothing if the vessel is already represented in that
+  // subsystem and unanchored.  Must not be called while the pile-ups are
+  // being advanced.
   virtual void RebaseTo(int subsystem);
+
+  // The anchor further displacing the representation of this vessel while it
+  // coasts in the force-free inter-subsystem void, if any.  A loaded vessel
+  // is never anchored.
+  virtual std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
+
+  // Re-expresses this vessel relative to its subsystem's origin, dropping the
+  // anchor.  Does nothing if the vessel is not anchored.
+  virtual void DropAnchor();
+
+  // Adopts an anchor at the head of the trajectory, moving with it (composing
+  // with any current anchor): the anchored coordinates and velocity start at
+  // zero.  Only meaningful where the far field is zero.
+  virtual void AdoptAnchor();
 
   // Adds the given part to this vessel.  Note that this does not add the part
   // to the set of kept parts, and that unless `KeepPart` is called, the part
@@ -454,7 +469,14 @@ class Vessel {
   // The parent body for the 2-body approximation.
   not_null<Celestial const*> parent_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
+  // Translates the rigid motions of the parts (and the pile-up) by the given
+  // affine offset, retagging them with the current anchor.
+  void TranslateParts(Displacement<Barycentric> const& displacement,
+                      Velocity<Barycentric> const& velocity_offset,
+                      Instant const& t);
+
   int subsystem_ = 0;
+  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
   std::optional<DiscreteTrajectorySegment<Barycentric>::DownsamplingParameters>
       downsampling_parameters_;
 
