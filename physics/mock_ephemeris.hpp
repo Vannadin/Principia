@@ -99,6 +99,11 @@ class MockEphemeris : public Ephemeris<Frame> {
        typename Integrator<NewtonianMotionEquation>::Instance& instance),
       (override));
 
+  MOCK_METHOD(bool,
+              FarFieldIsZero,
+              (Position<Frame> const& position, int subsystem, Instant const& t),
+              (const, override));
+
   MOCK_METHOD((Vector<Acceleration, Frame>),
               ComputeGravitationalAccelerationOnMasslessBody,
               (Position<Frame> const& position,

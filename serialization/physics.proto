@@ -183,6 +183,14 @@ message Ephemeris {
     required Quantity fitting_tolerance = 1;
     required double geopotential_tolerance = 2;
   }
+  // An affine origin relative to a subsystem's local origin, anchoring the
+  // representation of a trajectory in the force-free inter-subsystem void.
+  // Added in NearStars.
+  message Anchor {
+    required Multivector offset = 1;
+    required Multivector velocity = 2;
+    required Point epoch = 3;
+  }
   message Checkpoint {
     required Point time = 1;
     required IntegratorInstance instance = 2;

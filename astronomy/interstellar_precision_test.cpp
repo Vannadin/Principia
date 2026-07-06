@@ -610,6 +610,80 @@ TEST_F(InterstellarPrecisionTest, FarFieldDampedCoast) {
               Lt(1 * Kilo(Metre)));
 }
 
+// An anchored representation is a pure relabelling: a probe coasting in the
+// void, represented relative to an anchor moving with it, has exactly-zero
+// acceleration (the damping cutoff sees the true distances through the
+// anchor), so its anchored coordinates do not move at all.  Without the
+// anchor term the same coordinates would sit deep in star A's field and feel
+// spurious gravity.
+TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
+  Instant const t0;
+  Acceleration const far_field_damping_floor =
+      1e-12 * Metre / Pow<2>(Second);
+  auto const damped = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1},
+                                    far_field_damping_floor);
+  EXPECT_OK(damped->Prolong(t0 + Period() / 10));
+
+  Position<ICRS> const mid_void = ICRS::origin + 0.5 * ToRemoteSystem();
+  Position<ICRS> const near_star_a =
+      ICRS::origin +
+      Displacement<ICRS>({0 * Metre, 2 * orbit_radius, 0 * Metre});
+  Velocity<ICRS> const v0({3 * Kilo(Metre) / Second,
+                           1 * Kilo(Metre) / Second,
+                           0 * Metre / Second});
+
+  // The void query: false near a star, true in the void, false everywhere
+  // when the far field is not damped.
+  EXPECT_FALSE(damped->FarFieldIsZero(near_star_a, /*subsystem=*/0, t0));
+  EXPECT_TRUE(damped->FarFieldIsZero(mid_void, /*subsystem=*/0, t0));
+  EXPECT_TRUE(damped->FarFieldIsZero(mid_void, /*subsystem=*/1, t0));
+  auto const undamped = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  EXPECT_OK(undamped->Prolong(t0 + Period() / 10));
+  EXPECT_FALSE(undamped->FarFieldIsZero(mid_void, /*subsystem=*/0, t0));
+
+  // The anchor is adopted at the probe, moving with it; the anchored
+  // coordinates start small and force-free coasting keeps them exactly there.
+  Displacement<ICRS> const anchored_q₀(
+      {1.0e6 * Metre, 0 * Metre, 0 * Metre});
+  Ephemeris<ICRS>::Anchor const anchor{
+      .offset = (mid_void - ICRS::origin) - anchored_q₀,
+      .velocity = v0,
+      .epoch = t0};
+
+  serialization::Ephemeris::Anchor message;
+  anchor.WriteToMessage(&message);
+  EXPECT_EQ(anchor, Ephemeris<ICRS>::Anchor::ReadFromMessage(message));
+
+  DiscreteTrajectory<ICRS> probe;
+  EXPECT_OK(probe.Append(
+      t0,
+      DegreesOfFreedom<ICRS>(ICRS::origin + anchored_q₀, ICRS::unmoving)));
+  EXPECT_OK(damped->FlowWithAdaptiveStep(
+      &probe,
+      Ephemeris<ICRS>::NoIntrinsicAcceleration,
+      t0 + 10 * JulianYear,
+      Ephemeris<ICRS>::AdaptiveStepParameters(
+          EmbeddedExplicitRungeKuttaNyströmIntegrator<
+              DormandالمكاوىPrince1986RKN434FM,
+              Ephemeris<ICRS>::NewtonianMotionEquation>(),
+          /*max_steps=*/std::numeric_limits<std::int64_t>::max(),
+          /*length_integration_tolerance=*/1 * Metre,
+          /*speed_integration_tolerance=*/1e-3 * Metre / Second),
+      Ephemeris<ICRS>::unlimited_max_ephemeris_steps,
+      /*subsystem=*/0,
+      anchor));
+  auto const& [final_time, final_degrees_of_freedom] = probe.back();
+  EXPECT_EQ(final_time, t0 + 10 * JulianYear);
+  EXPECT_EQ(final_degrees_of_freedom.velocity(), ICRS::unmoving);
+  EXPECT_EQ(final_degrees_of_freedom.position(), ICRS::origin + anchored_q₀);
+
+  // The failure mode the kernel term prevents: at the anchored coordinates,
+  // interpreted without the anchor, the field is star A's — far from zero.
+  EXPECT_THAT(damped->ComputeGravitationalAccelerationOnMasslessBody(
+                  ICRS::origin + anchored_q₀, t0, /*subsystem=*/0).Norm(),
+              Gt(1 * Metre / Pow<2>(Second)));
+}
+
 // With the far field damped, cross-system pairs of massive bodies are damped
 // too: the backbone of each system evolves as if it were isolated.  This
 // removes a physically meaningless secular drift of each system as a whole

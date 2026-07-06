@@ -395,6 +395,67 @@ Velocity<Frame> const& Ephemeris<Frame>::subsystem_barycentre_velocity(
 }
 
 template<typename Frame>
+Displacement<Frame> Ephemeris<Frame>::Anchor::OffsetAt(
+    Instant const& t) const {
+  // The rounding of the product is far below the anchor's raison d'être; see
+  // `inter_subsystem_offset` for the same argument.
+  return offset + velocity * (t - epoch);
+}
+
+template<typename Frame>
+void Ephemeris<Frame>::Anchor::WriteToMessage(
+    not_null<serialization::Ephemeris::Anchor*> const message) const {
+  offset.WriteToMessage(message->mutable_offset());
+  velocity.WriteToMessage(message->mutable_velocity());
+  epoch.WriteToMessage(message->mutable_epoch());
+}
+
+template<typename Frame>
+typename Ephemeris<Frame>::Anchor Ephemeris<Frame>::Anchor::ReadFromMessage(
+    serialization::Ephemeris::Anchor const& message) {
+  return Anchor{
+      .offset = Displacement<Frame>::ReadFromMessage(message.offset()),
+      .velocity = Velocity<Frame>::ReadFromMessage(message.velocity()),
+      .epoch = Instant::ReadFromMessage(message.epoch())};
+}
+
+template<typename Frame>
+bool Ephemeris<Frame>::FarFieldIsZero(Position<Frame> const& position,
+                                      int const subsystem,
+                                      Instant const& t) const {
+  if (far_field_damping_.empty()) {
+    return false;
+  }
+  CHECK_GE(subsystem, 0);
+  CHECK_LT(subsystem, subsystem_origin_offset_.size());
+  absl::ReaderMutexLock l(&lock_);
+  auto const within_far_field = [&](std::size_t const b) {
+    // The same arithmetic as the massless-acceleration kernel, so that this
+    // test and the damping cutoff agree bit for bit.
+    Displacement<Frame> Δq =
+        trajectories_[b]->EvaluatePositionLocked(t) - position;
+    if (int const s1 = subsystem_of_body_[b]; s1 != subsystem) {
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, subsystem, t),
+                                   Δq);
+    }
+    return Δq.Norm²() < far_field_damping_[b].outer_threshold²();
+  };
+  // A position near a star is rejected by that star: check the bodies of its
+  // own subsystem first, so that the common case costs a handful of tests.
+  for (std::size_t b = 0; b < bodies_.size(); ++b) {
+    if (subsystem_of_body_[b] == subsystem && within_far_field(b)) {
+      return false;
+    }
+  }
+  for (std::size_t b = 0; b < bodies_.size(); ++b) {
+    if (subsystem_of_body_[b] != subsystem && within_far_field(b)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template<typename Frame>
 void Ephemeris<Frame>::ComputeInterSubsystemOffsets() {
   int const number_of_subsystems = subsystem_origin_offset_.size();
   inter_subsystem_offsets_.resize(number_of_subsystems * number_of_subsystems);
@@ -1961,13 +2022,9 @@ Ephemeris<Frame>::ComputeGravitationalAccelerationByMassiveBodyOnMasslessBodies(
     // A vector from the center of `b2` to the center of `b1`.
     Displacement<Frame> Δq = position1 - positions[b2];
     if (has_anchors && anchors[b2].has_value()) {
-      // The anchor origin moves at a constant velocity relative to the
-      // subsystem origin; the rounding of the product is far below the
-      // anchor's raison d'être (see `inter_subsystem_offset` for the same
-      // argument).  This term must be applied even on a force-free coast:
-      // the far-field damping cutoff below reads `Δq`.
-      Anchor const& anchor = *anchors[b2];
-      Δq -= anchor.offset + anchor.velocity * (t - anchor.epoch);
+      // This term must be applied even on a force-free coast: the far-field
+      // damping cutoff below reads `Δq`.
+      Δq -= anchors[b2]->OffsetAt(t);
     }
     if (int const s2 = subsystems[b2]; s1 != s2) {
       Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);

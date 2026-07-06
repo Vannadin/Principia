@@ -129,6 +129,17 @@ class Ephemeris {
     Displacement<Frame> offset;
     Velocity<Frame> velocity;
     Instant epoch;
+
+    // Evaluates `offset + velocity * (t - epoch)`; all consumers must use this
+    // so that the rounding is identical everywhere.
+    Displacement<Frame> OffsetAt(Instant const& t) const;
+
+    friend bool operator==(Anchor const& left, Anchor const& right) = default;
+
+    void WriteToMessage(
+        not_null<serialization::Ephemeris::Anchor*> message) const;
+    static Anchor ReadFromMessage(
+        serialization::Ephemeris::Anchor const& message);
   };
 
   class AccuracyParameters final {
@@ -214,6 +225,15 @@ class Ephemeris {
   // Returns the velocity of the barycentre of the bodies of subsystem `s`.
   // Must not be called unless subsystems were given at construction.
   virtual Velocity<Frame> const& subsystem_barycentre_velocity(int s) const;
+
+  // Returns true iff the far field of every massive body is damped to exactly
+  // zero at the given `position` (represented relative to the local origin of
+  // `subsystem`) — i.e., a massless body there coasts force-free.  Always
+  // false if the far field is not damped.  The bodies of `subsystem` are
+  // checked first, so a position near its own star exits on the first test.
+  virtual bool FarFieldIsZero(Position<Frame> const& position,
+                              int subsystem,
+                              Instant const& t) const EXCLUDES(lock_);
 
   // Returns the trajectory for the given `body`.
   virtual not_null<ContinuousTrajectory<Frame> const*> trajectory(
