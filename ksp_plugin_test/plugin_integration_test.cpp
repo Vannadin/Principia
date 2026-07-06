@@ -1582,5 +1582,145 @@ TEST_F(PluginIntegrationTestWithoutPlugin, WarpReadoptionLandsInDestinationSubsy
               AbsoluteErrorFrom(orbit, Lt(1 * Kilo(Metre))));
 }
 
+// Docking two vessels whose representations live in different subsystems.  The
+// rebase is only evaluated for unloaded vessels and its dominance hysteresis
+// makes the subsystem of a deep-void vessel depend on its approach history, so
+// a void rendezvous legitimately puts parts tagged with distinct subsystems
+// into one collision subset.  The pile-up constructor requires a single
+// representation; the plugin must reconcile the vessels (to the subsystem
+// carrying the largest part mass) before collecting the pile-ups instead of
+// dying on the pile-up's consistency check.
+TEST_F(PluginIntegrationTestWithoutPlugin, CrossSubsystemDockingReconciles) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                             /*parent_index=*/std::nullopt,
+                                             gravity_model,
+                                             initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                             /*parent_index=*/star_a,
+                                             gravity_model,
+                                             initial_state);
+  }
+  plugin->EndInitialization();
+  EXPECT_NE(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetCelestial(star_b).subsystem());
+
+  bool inserted;
+
+  // A rendezvous in the middle of the void, where μ/d² dominance is
+  // ambiguous: the (heavier) station arrived from star A, the (lighter)
+  // visitor from star B, so they hold different subsystems while sitting
+  // 10 m apart physically.
+  Length const midpoint = 2e16 * Metre;
+  GUID const guid_a = "station";
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      101, "part-A", guid_a,
+      {Displacement<AliceSun>({midpoint, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  GUID const guid_b = "visitor";
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_b,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      102, "part-B", guid_b,
+      {Displacement<AliceSun>({10 * Metre - midpoint, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->GetVessel(guid_a)->part(101)->set_mass(3 * Kilogram);
+  plugin->GetVessel(guid_b)->part(102)->set_mass(1 * Kilogram);
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  EXPECT_NE(plugin->GetVessel(guid_a)->subsystem(),
+            plugin->GetVessel(guid_b)->subsystem());
+  Displacement<AliceSun> const visitor_from_star_b =
+      plugin->VesselFromParent(star_b, guid_b).displacement();
+
+  // Next frame: the vessels dock.
+  Instant const t = Instant() + 100 * Second;
+  plugin->AdvanceTime(t, 1 * Radian);
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_b,
+                             /*loaded=*/false, inserted);
+  plugin->GetVessel(guid_a)->KeepPart(101);
+  plugin->GetVessel(guid_b)->KeepPart(102);
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(101, 102);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  // Both vessels were reconciled to the heavier side (the station's
+  // subsystem) and share a single pile-up in that subsystem.
+  int const station_subsystem = plugin->GetCelestial(star_a).subsystem();
+  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_a)->subsystem());
+  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_b)->subsystem());
+  auto* const pile_up_a =
+      plugin->GetVessel(guid_a)->part(101)->containing_pile_up();
+  auto* const pile_up_b =
+      plugin->GetVessel(guid_b)->part(102)->containing_pile_up();
+  ASSERT_NE(nullptr, pile_up_a);
+  EXPECT_EQ(pile_up_a, pile_up_b);
+  EXPECT_EQ(station_subsystem, pile_up_a->subsystem());
+
+  // The rebase changed only the representation of the visitor, not its
+  // physical state: it is still where it was relative to star B (both are at
+  // rest, so the elapsed frame moves nothing), up to the rounding of the
+  // interstellar translation (~ULP of 4e16 m ≈ 10 m).
+  EXPECT_THAT((plugin->VesselFromParent(star_b, guid_b).displacement() -
+               visitor_from_star_b).Norm(),
+              Lt(100 * Metre));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia

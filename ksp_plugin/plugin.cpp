@@ -537,8 +537,20 @@ void Plugin::InsertOrKeepLoadedPart(
     not_null<Vessel*> const current_vessel = associated_vessel;
     if (vessel == current_vessel) {
     } else {
+      int const previous_subsystem = current_vessel->subsystem();
       associated_vessel = vessel;
       vessel->AddPart(current_vessel->ExtractPart(part_id));
+      if (previous_subsystem != vessel->subsystem()) {
+        // The part's rigid motion is expressed relative to the origin of its
+        // previous vessel's subsystem; `AddPart` retagged the part, so keep
+        // the representation consistent with the tag.
+        not_null<Part*> const transferred_part = vessel->part(part_id);
+        transferred_part->set_rigid_motion(
+            SubsystemConversionMotion(previous_subsystem,
+                                      vessel->subsystem(),
+                                      previous_time) *
+            transferred_part->rigid_motion());
+      }
     }
   } else {
     AddPart(vessel,
@@ -697,6 +709,48 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
       zombie_prediction_adaptive_step_parameters_.insert_or_assign(
           vessel->guid(), vessel->prediction_adaptive_step_parameters());
       CHECK_EQ(vessels_.erase(vessel->guid()), 1);
+    }
+  }
+
+  // Colliding (docking) vessels may hold representations in different
+  // subsystems: the rebase is only evaluated for unloaded vessels, and its
+  // dominance hysteresis leaves a band of the inter-star void where the
+  // subsystem is set by approach history rather than by position.  The
+  // pile-ups constructed below require a single representation, so rebase
+  // every vessel of a subset to the subsystem of the subset that carries the
+  // largest part mass.
+  if (ephemeris_->number_of_subsystems() > 1) {
+    std::map<Subset<Part>::Properties const*, std::vector<not_null<Vessel*>>>
+        vessels_by_subset;
+    for (auto const& [_, vessel] : vessels_) {
+      vessel->ForSomePart([&vessel = vessel,
+                           &vessels_by_subset](Part& first_part) {
+        vessels_by_subset[&Subset<Part>::Find(first_part).properties()]
+            .push_back(vessel.get());
+      });
+    }
+    for (auto const& [_, subset_vessels] : vessels_by_subset) {
+      std::map<int, Mass> mass_by_subsystem;
+      for (not_null<Vessel*> const vessel : subset_vessels) {
+        Mass& subsystem_mass = mass_by_subsystem[vessel->subsystem()];
+        vessel->ForAllParts([&subsystem_mass](Part const& part) {
+          subsystem_mass += part.mass();
+        });
+      }
+      if (mass_by_subsystem.size() < 2) {
+        continue;
+      }
+      int target_subsystem = mass_by_subsystem.begin()->first;
+      Mass target_mass = mass_by_subsystem.begin()->second;
+      for (auto const& [subsystem, mass] : mass_by_subsystem) {
+        if (mass > target_mass) {
+          target_subsystem = subsystem;
+          target_mass = mass;
+        }
+      }
+      for (not_null<Vessel*> const vessel : subset_vessels) {
+        vessel->RebaseTo(target_subsystem);
+      }
     }
   }
 

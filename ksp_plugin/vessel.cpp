@@ -27,8 +27,11 @@
 #include "base/map_util.hpp"
 #include "base/status_utilities.hpp"  // 🧙 For CHECK_OK.
 #include "geometry/barycentre_calculator.hpp"
+#include "geometry/orthogonal_map.hpp"
+#include "geometry/space_transformations.hpp"
 #include "ksp_plugin/integrators.hpp"
 #include "base/algebra.hpp"
+#include "physics/rigid_motion.hpp"
 #include "quantities/named_quantities.hpp"
 #include "testing_utilities/make_not_null.hpp"
 
@@ -42,7 +45,10 @@ using namespace principia::base::_concepts;
 using namespace principia::base::_graveyard;
 using namespace principia::base::_map_util;
 using namespace principia::geometry::_barycentre_calculator;
+using namespace principia::geometry::_orthogonal_map;
+using namespace principia::geometry::_space_transformations;
 using namespace principia::ksp_plugin::_integrators;
+using namespace principia::physics::_rigid_motion;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_make_not_null;
@@ -195,23 +201,48 @@ bool Vessel::RebaseIfNeeded() {
     return false;
   }
 
+  RebaseTo(dominant_subsystem);
+  return true;
+}
+
+void Vessel::RebaseTo(int const subsystem) {
+  if (subsystem == subsystem_ || trajectory_.empty()) {
+    return;
+  }
+  // A copy, not a reference: the translation below rebuilds the timeline that
+  // `back()` points into.
+  Instant const t = trajectory_.back().time;
   // The origins move relative to each other, so the translation is affine in
   // time: each point of each trajectory is translated at its own time.
   Displacement<Barycentric> const displacement =
-      ephemeris_->subsystem_conversion(subsystem_, dominant_subsystem, t);
+      ephemeris_->subsystem_conversion(subsystem_, subsystem, t);
   Velocity<Barycentric> const velocity_offset =
-      ephemeris_->subsystem_velocity_conversion(subsystem_,
-                                                dominant_subsystem);
+      ephemeris_->subsystem_velocity_conversion(subsystem_, subsystem);
   LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
-            << subsystem_ << " to subsystem " << dominant_subsystem;
+            << subsystem_ << " to subsystem " << subsystem;
   {
     // `AwaitReanimation` merges into `trajectory_` under `lock_`, and the
     // translation rewrites all of its points.
     absl::MutexLock l(&lock_);
     trajectory_.Translate(displacement, velocity_offset, t);
-    subsystem_ = dominant_subsystem;
+    subsystem_ = subsystem;
   }
-  ForAllParts([this](Part& part) { part.set_subsystem(subsystem_); });
+  // The parts' rigid motions are expressed in the old representation; keep
+  // them consistent with their subsystem tag.  For piled-up parts they are
+  // regenerated from the (rebased) pile-up trajectory at the next advance, but
+  // between pile-ups — a docking merge constructs the new pile-up directly
+  // from these motions — the parts must carry the translation themselves.
+  RigidMotion<Barycentric, Barycentric> const conversion_motion(
+      RigidTransformation<Barycentric, Barycentric>(
+          Barycentric::origin,
+          Barycentric::origin + displacement,
+          OrthogonalMap<Barycentric, Barycentric>::Identity()),
+      Barycentric::nonrotating,
+      -velocity_offset);
+  ForAllParts([this, &conversion_motion](Part& part) {
+    part.set_subsystem(subsystem_);
+    part.set_rigid_motion(conversion_motion * part.rigid_motion());
+  });
   PileUp* pile_up = nullptr;
   ForSomePart([&pile_up](Part& part) {
     pile_up = part.containing_pile_up();
@@ -232,7 +263,6 @@ bool Vessel::RebaseIfNeeded() {
           .IgnoreError();
     }
   }
-  return true;
 }
 
 void Vessel::set_parent(not_null<Celestial const*> const parent) {

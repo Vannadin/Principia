@@ -120,6 +120,13 @@ class Vessel {
   // the pile-ups are being advanced.
   virtual bool RebaseIfNeeded();
 
+  // Re-expresses all the trajectories of this vessel (and those of its parts,
+  // pile-up and flight plans) relative to the local origin of the given
+  // subsystem, translating each point at its own time.  Does nothing if the
+  // vessel is already represented in that subsystem.  Must not be called while
+  // the pile-ups are being advanced.
+  virtual void RebaseTo(int subsystem);
+
   // Adds the given part to this vessel.  Note that this does not add the part
   // to the set of kept parts, and that unless `KeepPart` is called, the part
   // will be removed by the next call to `FreeParts`.
