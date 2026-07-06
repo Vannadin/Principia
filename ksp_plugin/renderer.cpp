@@ -117,7 +117,9 @@ Renderer::RenderBarycentricTrajectoryInPlotting(
             : DegreesOfFreedom<Barycentric>(
                   degrees_of_freedom.position() +
                       SubsystemConversion(subsystem, plotting_subsystem, time),
-                  degrees_of_freedom.velocity());
+                  degrees_of_freedom.velocity() +
+                      SubsystemVelocityConversion(subsystem,
+                                                  plotting_subsystem));
     trajectory.Append(time,
                       BarycentricToPlotting(time)(plotting_degrees_of_freedom))
         .IgnoreError();
@@ -161,7 +163,9 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
             : DegreesOfFreedom<Barycentric>(
                   degrees_of_freedom.position() +
                       SubsystemConversion(subsystem, plotting_subsystem, t),
-                  degrees_of_freedom.velocity());
+                  degrees_of_freedom.velocity() +
+                      SubsystemVelocityConversion(subsystem,
+                                                  plotting_subsystem));
     auto const plotting_degrees_of_freedom =
         BarycentricToPlotting(t)(converted_degrees_of_freedom);
     plotting_points.emplace(t, plotting_degrees_of_freedom);
@@ -271,7 +275,9 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
             SubsystemConversion(vessel_subsystem,
                                 plotting_subsystem,
                                 back.time),
-        barycentric_degrees_of_freedom.velocity()};
+        barycentric_degrees_of_freedom.velocity() +
+            SubsystemVelocityConversion(vessel_subsystem,
+                                        plotting_subsystem)};
   }
   DegreesOfFreedom<Navigation> const plotting_frame_degrees_of_freedom =
       BarycentricToPlotting(back.time)(barycentric_degrees_of_freedom);
@@ -297,7 +303,8 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
     degrees_of_freedom = {
         degrees_of_freedom.position() +
             SubsystemConversion(vessel_subsystem, frame_subsystem, back.time),
-        degrees_of_freedom.velocity()};
+        degrees_of_freedom.velocity() +
+            SubsystemVelocityConversion(vessel_subsystem, frame_subsystem)};
   }
   auto const to_navigation = navigation_frame.ToThisFrameAtTime(back.time);
   auto const from_navigation = to_navigation.orthogonal_map().Inverse();
@@ -414,6 +421,15 @@ Displacement<Barycentric> Renderer::SubsystemConversion(
     return Displacement<Barycentric>{};
   }
   return ephemeris_->subsystem_conversion(s1, s2, t);
+}
+
+Velocity<Barycentric> Renderer::SubsystemVelocityConversion(
+    int const s1,
+    int const s2) const {
+  if (ephemeris_ == nullptr || s1 == s2) {
+    return Velocity<Barycentric>{};
+  }
+  return ephemeris_->subsystem_velocity_conversion(s1, s2);
 }
 
 template<template<typename Frame> typename Container>

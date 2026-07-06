@@ -313,13 +313,20 @@ BarycentreDerivative(
       }
     } else if constexpr (degree == 1) {
       for (not_null const body : this->*bodies) {
+        Velocity<InertialFrame> velocity;
         if (bodies_to_degrees_of_freedom != nullptr) {
-          result.Add(bodies_to_degrees_of_freedom->at(body).velocity(),
-                     body->gravitational_parameter());
+          velocity = bodies_to_degrees_of_freedom->at(body).velocity();
         } else {
-          result.Add(ephemeris_->trajectory(body)->EvaluateVelocity(t),
-                     body->gravitational_parameter());
+          velocity = ephemeris_->trajectory(body)->EvaluateVelocity(t);
         }
+        if (!body_subsystems_.empty()) {
+          if (auto const it = body_subsystems_.find(body);
+              it != body_subsystems_.end()) {
+            velocity += ephemeris_->subsystem_velocity_conversion(it->second,
+                                                                  subsystem_);
+          }
+        }
+        result.Add(velocity, body->gravitational_parameter());
       }
     } else if constexpr (degree == 2) {
       BodiesToPositions local_bodies_to_positions;

@@ -375,7 +375,9 @@ XYZ __cdecl principia__FlightPlanGetManoeuvreInitialPlottedVelocity(
         dof.position() +
             flight_plan.ephemeris().subsystem_conversion(
                 flight_plan.subsystem(), plotting_subsystem, t),
-        dof.velocity()};
+        dof.velocity() +
+            flight_plan.ephemeris().subsystem_velocity_conversion(
+                flight_plan.subsystem(), plotting_subsystem)};
   }
   Velocity<Navigation> const v =
       plugin->renderer().BarycentricToPlotting(t)(

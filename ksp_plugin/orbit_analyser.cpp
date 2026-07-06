@@ -343,13 +343,14 @@ OrbitAnalyser::ComputeMeanSunIfPossible(
       RETURN_IF_ERROR(
           ephemeris_->Prolong(ephemeris_->t_max() + 0.5 * JulianYear));
     }
-    // TODO(NearStars): when the offsets become affine in time, the translation
-    // must be evaluated at each point's own time.
     TranslatedTrajectory<Barycentric> const sun_trajectory(
         *ephemeris_->trajectory(sun),
         ephemeris_->subsystem_conversion(sun_subsystem,
                                          primary_subsystem,
-                                         parameters.first_time));
+                                         parameters.first_time),
+        ephemeris_->subsystem_velocity_conversion(sun_subsystem,
+                                                  primary_subsystem),
+        parameters.first_time);
     auto const sun_elements = OrbitalElements::ForTrajectory(
         sun_trajectory, primary_centred, *primary, *sun);
     if (sun_elements.ok()) {

@@ -557,12 +557,13 @@ FlightPlanOptimizer::EvaluateClosestPeriapsis(
     Celestial const& celestial,
     Instant const& begin_time,
     bool const extend_if_needed) const {
-  // TODO(NearStars): when the offsets become affine in time, the translation
-  // must be evaluated at each point's own time.
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
       flight_plan_->ephemeris().subsystem_conversion(
-          celestial.subsystem(), flight_plan_->subsystem(), begin_time));
+          celestial.subsystem(), flight_plan_->subsystem(), begin_time),
+      flight_plan_->ephemeris().subsystem_velocity_conversion(
+          celestial.subsystem(), flight_plan_->subsystem()),
+      begin_time);
   auto const& vessel_trajectory = flight_plan_->GetAllSegments();
 
   Length distance_at_closest_periapsis;
@@ -665,7 +666,10 @@ Length FlightPlanOptimizer::EvaluateDistanceToCelestialWithReplacement(
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
       flight_plan_->ephemeris().subsystem_conversion(
-          celestial.subsystem(), flight_plan_->subsystem(), time));
+          celestial.subsystem(), flight_plan_->subsystem(), time),
+      flight_plan_->ephemeris().subsystem_velocity_conversion(
+          celestial.subsystem(), flight_plan_->subsystem()),
+      time);
   return (degrees_of_freedom.position() -
           celestial_trajectory.EvaluatePosition(time)).Norm();
 }
@@ -729,7 +733,9 @@ Angle FlightPlanOptimizer::EvaluateRelativeInclinationWithReplacement(
         converted_degrees_of_freedom.position() +
             flight_plan_->ephemeris().subsystem_conversion(
                 flight_plan_->subsystem(), frame_subsystem, time),
-        converted_degrees_of_freedom.velocity()};
+        converted_degrees_of_freedom.velocity() +
+            flight_plan_->ephemeris().subsystem_velocity_conversion(
+                flight_plan_->subsystem(), frame_subsystem)};
   }
   auto const navigation_degrees_of_freedom =
       frame.ToThisFrameAtTime(time)(converted_degrees_of_freedom);

@@ -188,12 +188,14 @@ void Manœuvre<InertialFrame, Frame>::clear_coasting_trajectory() {
 template<typename InertialFrame, typename Frame>
 void Manœuvre<InertialFrame, Frame>::set_coasting_trajectory(
     DiscreteTrajectorySegmentIterator<InertialFrame> const trajectory,
-    Displacement<InertialFrame> const& subsystem_conversion) {
+    Displacement<InertialFrame> const& subsystem_conversion,
+    Velocity<InertialFrame> const& subsystem_velocity_conversion) {
   typename DiscreteTrajectory<InertialFrame>::iterator const it =
       trajectory->find(initial_time());
   CHECK(it != trajectory->end());
   initial_degrees_of_freedom_ = it->degrees_of_freedom;
   subsystem_conversion_ = subsystem_conversion;
+  subsystem_velocity_conversion_ = subsystem_velocity_conversion;
 }
 
 template<typename InertialFrame, typename Frame>
@@ -275,12 +277,14 @@ Manœuvre<InertialFrame, Frame>::ComputeFrenetFrame(
     DegreesOfFreedom<InertialFrame> const& degrees_of_freedom) const {
   // `degrees_of_freedom` are represented relative to the flight plan's
   // subsystem origin, whereas `frame()` operates relative to its own
-  // subsystem's origin; convert before evaluating the frame.
-  // `subsystem_conversion_` is zero when both subsystems coincide, leaving the
-  // computation unchanged.
+  // subsystem's origin; convert before evaluating the frame.  The conversions
+  // are zero when both subsystems coincide, leaving the computation
+  // unchanged; the displacement was captured at `initial_time()` and the
+  // origins move relative to each other, so it is propagated to `t`.
   DegreesOfFreedom<InertialFrame> const frame_degrees_of_freedom(
-      degrees_of_freedom.position() + subsystem_conversion_,
-      degrees_of_freedom.velocity());
+      degrees_of_freedom.position() + subsystem_conversion_ +
+          subsystem_velocity_conversion_ * (t - initial_time()),
+      degrees_of_freedom.velocity() + subsystem_velocity_conversion_);
   RigidMotion<InertialFrame, Frame> const to_frame_at_t =
       frame()->ToThisFrameAtTime(t);
   RigidMotion<Frame, InertialFrame> const from_frame_at_t =

@@ -250,7 +250,8 @@ SecondaryDegreesOfFreedom(Instant const& t) const {
     secondary_degrees_of_freedom = {
         secondary_degrees_of_freedom.position() +
             ephemeris_->subsystem_conversion(s1, s2, t),
-        secondary_degrees_of_freedom.velocity()};
+        secondary_degrees_of_freedom.velocity() +
+            ephemeris_->subsystem_velocity_conversion(s1, s2)};
   }
   return secondary_degrees_of_freedom;
 }

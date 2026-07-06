@@ -163,13 +163,14 @@ void Planetarium::PlotMethod4(
   if constexpr (std::is_same_v<Frame, Barycentric>) {
     if (int const plotting_subsystem = plotting_frame_->subsystem();
         subsystem != plotting_subsystem) {
-      // TODO(NearStars): when the offsets become affine in time, the
-      // translation must be evaluated at each point's own time.
       TranslatedTrajectory<Barycentric> const translated_trajectory(
           trajectory,
           ephemeris_->subsystem_conversion(subsystem,
                                            plotting_subsystem,
-                                           last_time));
+                                           last_time),
+          ephemeris_->subsystem_velocity_conversion(subsystem,
+                                                    plotting_subsystem),
+          last_time);
       PlotMethod4(translated_trajectory,
                   first_time,
                   last_time,

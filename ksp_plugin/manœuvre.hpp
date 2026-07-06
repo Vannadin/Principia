@@ -142,13 +142,16 @@ class Manœuvre {
   // Sets the trajectory segment at the end of which the manœuvre takes place.
   // Must be called before any of the functions below.  `trajectory` must have a
   // point at `initial_time()`.  `subsystem_conversion` is the displacement to
-  // add to a position of `trajectory` (represented relative to the local origin
-  // of the flight plan's subsystem) so that it becomes represented relative to
-  // the local origin of the subsystem of `frame()`; it is zero unless the
-  // manœuvre's frame lives in a different subsystem than the flight plan.
+  // add, at `initial_time()`, to a position of `trajectory` (represented
+  // relative to the local origin of the flight plan's subsystem) so that it
+  // becomes represented relative to the local origin of the subsystem of
+  // `frame()`, and `subsystem_velocity_conversion` is the corresponding
+  // velocity; they are zero unless the manœuvre's frame lives in a different
+  // subsystem than the flight plan.
   void set_coasting_trajectory(
       DiscreteTrajectorySegmentIterator<InertialFrame> trajectory,
-      Displacement<InertialFrame> const& subsystem_conversion = {});
+      Displacement<InertialFrame> const& subsystem_conversion = {},
+      Velocity<InertialFrame> const& subsystem_velocity_conversion = {});
 
   // This manœuvre must be inertially fixed.
   virtual Vector<double, InertialFrame> InertialDirection() const;
@@ -194,11 +197,13 @@ class Manœuvre {
   Burn construction_burn_;  // As given at construction.
   Burn burn_;  // All optionals filled.
   std::optional<DegreesOfFreedom<InertialFrame>> initial_degrees_of_freedom_;
-  // The displacement to add to a position represented relative to the flight
-  // plan's subsystem origin to obtain its representation relative to the
-  // subsystem origin of `frame()`.  Set by `set_coasting_trajectory`; zero in
-  // the common case where both live in the same subsystem.
+  // The displacement to add, at `initial_time()`, to a position represented
+  // relative to the flight plan's subsystem origin to obtain its
+  // representation relative to the subsystem origin of `frame()`, and the
+  // corresponding velocity.  Set by `set_coasting_trajectory`; zero in the
+  // common case where both live in the same subsystem.
   Displacement<InertialFrame> subsystem_conversion_;
+  Velocity<InertialFrame> subsystem_velocity_conversion_;
 };
 
 }  // namespace internal

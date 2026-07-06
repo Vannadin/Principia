@@ -256,6 +256,11 @@ class Renderer {
                                                 int s2,
                                                 Instant const& t) const;
 
+  // The velocity to add to a velocity represented relative to the (moving)
+  // local origin of subsystem `s1` so that it becomes represented relative to
+  // that of subsystem `s2`.  Zero if no ephemeris was given at construction.
+  Velocity<Barycentric> SubsystemVelocityConversion(int s1, int s2) const;
+
   not_null<Celestial const*> const sun_;
 
   not_null<std::unique_ptr<PlottingFrame>> plotting_frame_;
