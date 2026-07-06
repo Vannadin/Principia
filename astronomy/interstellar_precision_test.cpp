@@ -100,7 +100,8 @@ class InterstellarPrecisionTest : public ::testing::Test {
   // massless bodies is damped (see `FarFieldDamping`).
   static not_null<std::unique_ptr<Ephemeris<ICRS>>> MakeEphemeris(
       std::vector<int> const& subsystems,
-      Acceleration const& far_field_damping_floor = {}) {
+      Acceleration const& far_field_damping_floor = {},
+      Velocity<ICRS> const& remote_system_velocity = {}) {
     Instant const t0;
     Displacement<ICRS> const to_remote_system = ToRemoteSystem();
 
@@ -129,8 +130,10 @@ class InterstellarPrecisionTest : public ::testing::Test {
     std::vector<DegreesOfFreedom<ICRS>> const initial_state{
         {ICRS::origin, star_velocity},
         {ICRS::origin + star_to_planet, planet_velocity},
-        {ICRS::origin + to_remote_system, star_velocity},
-        {ICRS::origin + to_remote_system + star_to_planet, planet_velocity}};
+        {ICRS::origin + to_remote_system,
+         star_velocity + remote_system_velocity},
+        {ICRS::origin + to_remote_system + star_to_planet,
+         planet_velocity + remote_system_velocity}};
 
     return make_not_null_unique<Ephemeris<ICRS>>(
         std::move(bodies),
@@ -365,10 +368,10 @@ TEST_F(InterstellarPrecisionTest, SubsystemBarycentre) {
   EXPECT_THAT(ephemeris->subsystem_barycentre_velocity(0).Norm(),
               Lt(1e-15 * Sqrt((μ_star + μ_planet) / orbit_radius)));
 
-  // The linear extrapolation tracks the barycentre of the integrated system
-  // except for the pull of the remote system, which it ignores; over Δt the
-  // deviation is ½ a Δt² with a = μ / d².  (About 12 mm here, dwarfing the
-  // integration error.)
+  // The local origin moves with the barycentre, so the barycentre of the
+  // integrated system stays at its (constant) initial local position except
+  // for the pull of the remote system; over Δt the deviation is ½ a Δt² with
+  // a = μ / d².  (About 12 mm here, dwarfing the integration error.)
   Instant const t_final = t0 + 10 * JulianYear;
   EXPECT_OK(ephemeris->Prolong(t_final));
   auto const& star_a = *ephemeris->trajectory(ephemeris->bodies()[0]);
@@ -384,6 +387,106 @@ TEST_F(InterstellarPrecisionTest, SubsystemBarycentre) {
       (integrated_barycentre - ephemeris->subsystem_barycentre(0, t_final))
           .Norm(),
       AllOf(Gt(0.99 * predicted_deviation), Lt(1.01 * predicted_deviation)));
+}
+
+// A remote system given a bulk velocity of the order of the fastest NearStars
+// stars: the local origin moves with the barycentre of its subsystem, so the
+// local coordinates stay bounded and the local evolution is that of the same
+// system at rest; the cross-subsystem physics — offsets, jerk — sees the
+// true, time-dependent geometry.
+TEST_F(InterstellarPrecisionTest, MovingRemoteSubsystem) {
+  Velocity<ICRS> const bulk_velocity({300 * Kilo(Metre) / Second,
+                                      0 * Metre / Second,
+                                      0 * Metre / Second});
+  auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1},
+                                       /*far_field_damping_floor=*/{},
+                                       bulk_velocity);
+  Instant const t0;
+  Instant const t_final = t0 + 100 * JulianYear;
+  EXPECT_OK(ephemeris->Prolong(t_final));
+
+  auto const& star_a = *ephemeris->trajectory(ephemeris->bodies()[0]);
+  auto const& planet_a = *ephemeris->trajectory(ephemeris->bodies()[1]);
+  auto const& star_b = *ephemeris->trajectory(ephemeris->bodies()[2]);
+  auto const& planet_b = *ephemeris->trajectory(ephemeris->bodies()[3]);
+
+  // Over a century the remote system moves by ~9.5e14 m, but its local
+  // coordinates remain bounded: the origin moves with it.
+  EXPECT_THAT((star_b.EvaluatePosition(t_final) - ICRS::origin).Norm(),
+              Lt(1e10 * Metre));
+
+  // The bulk velocity is removed from the stored velocities, so the local
+  // evolution is insensitive to it: the star-planet separations of the two
+  // systems agree as tightly as they do for systems at rest.
+  Length max_separation_error;
+  for (Instant t = t0; t <= t_final; t += 30 * Day) {
+    Length const separation_a =
+        (planet_a.EvaluatePosition(t) - star_a.EvaluatePosition(t)).Norm();
+    Length const separation_b =
+        (planet_b.EvaluatePosition(t) - star_b.EvaluatePosition(t)).Norm();
+    max_separation_error =
+        std::max(max_separation_error, Abs(separation_b - separation_a));
+  }
+  EXPECT_THAT(max_separation_error, Lt(1 * Milli(Metre)));
+
+  // The inter-subsystem offset is affine in time and tracks the bulk motion.
+  EXPECT_EQ(ToRemoteSystem(),
+            ephemeris->subsystem_conversion(/*s1=*/1, /*s2=*/0, t0));
+  EXPECT_THAT(ephemeris->subsystem_conversion(/*s1=*/1, /*s2=*/0, t_final),
+              AlmostEquals(ToRemoteSystem() + bulk_velocity * (t_final - t0),
+                           0, 4));
+  EXPECT_THAT(ephemeris->subsystem_velocity_conversion(/*s1=*/1, /*s2=*/0),
+              AlmostEquals(bulk_velocity, 0, 8));
+
+  // The cross-subsystem jerk sees the true relative velocity.  For a pair of
+  // isolated stars receding at the bulk velocity the jerk is dominated by its
+  // velocity-dependent term, so this fails outright if the stored velocities
+  // are not converted between subsystems.  (The four-body systems above make
+  // a poor control: in a single frame the remote system's own geometry is
+  // quantized at ~9 m, i.e. ~1e-8 of the orbit radius.)
+  auto const make_pair_ephemeris = [&](std::vector<int> const& subsystems) {
+    std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("star A", μ_star)));
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("star B", μ_star)));
+    std::vector<DegreesOfFreedom<ICRS>> const initial_state{
+        {ICRS::origin, ICRS::unmoving},
+        {ICRS::origin + ToRemoteSystem(), bulk_velocity}};
+    return make_not_null_unique<Ephemeris<ICRS>>(
+        std::move(bodies),
+        initial_state,
+        t0,
+        Ephemeris<ICRS>::AccuracyParameters(
+            /*fitting_tolerance=*/0.1 * Milli(Metre),
+            /*geopotential_tolerance=*/0x1p-24),
+        Ephemeris<ICRS>::FixedStepParameters(
+            SymmetricLinearMultistepIntegrator<
+                QuinlanTremaine1990Order12,
+                Ephemeris<ICRS>::NewtonianMotionEquation>(),
+            /*step=*/Period() / 1000),
+        subsystems);
+  };
+  auto const pair_control = make_pair_ephemeris(/*subsystems=*/{});
+  auto const pair_with_subsystems = make_pair_ephemeris(/*subsystems=*/{0, 1});
+  Instant const t_jerk = t0 + Period() / 3;
+  EXPECT_OK(pair_control->Prolong(t_jerk));
+  EXPECT_OK(pair_with_subsystems->Prolong(t_jerk));
+  auto const jerks_control =
+      pair_control->ComputeGravitationalJerkOnMassiveBodies(
+          pair_control->bodies(),
+          pair_control->EvaluateAllDegreesOfFreedom(t_jerk),
+          t_jerk);
+  auto const jerks_with_subsystems =
+      pair_with_subsystems->ComputeGravitationalJerkOnMassiveBodies(
+          pair_with_subsystems->bodies(),
+          pair_with_subsystems->EvaluateAllDegreesOfFreedom(t_jerk),
+          t_jerk);
+  for (int b = 0; b < 2; ++b) {
+    EXPECT_THAT(RelativeError(jerks_control[b].Norm(),
+                              jerks_with_subsystems[b].Norm()),
+                Lt(1e-9));
+  }
 }
 
 // Checks that the apsides of a cross-subsystem pair are those of the true

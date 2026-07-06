@@ -183,15 +183,20 @@ class Ephemeris {
                                                    int s2,
                                                    Instant const& t) const;
 
+  // Returns the velocity to add to a velocity represented relative to the
+  // (moving) local origin of subsystem `s1` so that it becomes represented
+  // relative to that of subsystem `s2`.  Zero when `s1 == s2`.
+  virtual Velocity<Frame> subsystem_velocity_conversion(int s1, int s2) const;
+
   // Returns the total gravitational parameter of the bodies of subsystem `s`.
   // Must not be called unless subsystems were given at construction.
   virtual GravitationalParameter const& subsystem_gravitational_parameter(
       int s) const;
 
   // Returns the barycentre of the bodies of subsystem `s` at time `t`,
-  // relative to the local origin of that subsystem, extrapolated linearly
-  // from the initial state at the velocity of the barycentre.  Must not be
-  // called unless subsystems were given at construction.
+  // relative to the local origin of that subsystem.  The origin moves with
+  // the barycentre, so this is the (constant) initial barycentre.  Must not
+  // be called unless subsystems were given at construction.
   virtual Position<Frame> subsystem_barycentre(int s, Instant const& t) const;
 
   // Returns the velocity of the barycentre of the bodies of subsystem `s`.

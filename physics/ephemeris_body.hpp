@@ -231,11 +231,14 @@ Ephemeris<Frame>::Ephemeris(
     DegreesOfFreedom<Frame> degrees_of_freedom = initial_state[i];
     if (!subsystems.empty()) {
       // Represent the position relative to the local origin of the subsystem
-      // of this body.
+      // of this body, and the velocity relative to that origin, which moves
+      // with the barycentre of the subsystem.
+      int const s = subsystems[i];
       degrees_of_freedom = DegreesOfFreedom<Frame>(
-          Frame::origin + (degrees_of_freedom.position() -
-                           *subsystem_anchors[subsystems[i]]),
-          degrees_of_freedom.velocity());
+          Frame::origin +
+              (degrees_of_freedom.position() - *subsystem_anchors[s]),
+          degrees_of_freedom.velocity() -
+              subsystem_barycentre_[s].velocity());
     }
 
     unowned_bodies_.emplace_back(body.get());
@@ -331,9 +334,18 @@ DoublePrecision<Displacement<Frame>>
 Ephemeris<Frame>::inter_subsystem_offset(int const s1,
                                          int const s2,
                                          Instant const& t) const {
-  // TODO(NearStars): the offsets are constants for now; they become affine in
-  // `t` when the subsystem origins start moving with their barycentres.
-  return inter_subsystem_offsets_[s1 * subsystem_origin_offset_.size() + s2];
+  DoublePrecision<Displacement<Frame>> offset =
+      inter_subsystem_offsets_[s1 * subsystem_origin_offset_.size() + s2];
+  if (s1 != s2) {
+    // The origins move with the barycentres of their subsystems.  The
+    // rounding of this product is far below the residual of the linear
+    // extrapolation itself (the curvature of the barycentres under the pull
+    // of the other subsystems), so no double-precision product is needed.
+    offset += (subsystem_barycentre_[s1].velocity() -
+               subsystem_barycentre_[s2].velocity()) *
+              (t - subsystem_barycentre_time_);
+  }
+  return offset;
 }
 
 template<typename Frame>
@@ -342,6 +354,16 @@ Displacement<Frame> Ephemeris<Frame>::subsystem_conversion(
   DoublePrecision<Displacement<Frame>> const offset =
       inter_subsystem_offset(s1, s2, t);
   return offset.value + offset.error;
+}
+
+template<typename Frame>
+Velocity<Frame> Ephemeris<Frame>::subsystem_velocity_conversion(
+    int const s1, int const s2) const {
+  if (s1 == s2) {
+    return Velocity<Frame>{};
+  }
+  return subsystem_barycentre_[s1].velocity() -
+         subsystem_barycentre_[s2].velocity();
 }
 
 template<typename Frame>
@@ -355,12 +377,13 @@ Ephemeris<Frame>::subsystem_gravitational_parameter(int const s) const {
 template<typename Frame>
 Position<Frame> Ephemeris<Frame>::subsystem_barycentre(
     int const s,
-    Instant const& t) const {
+    Instant const& /*t*/) const {
   CHECK_GE(s, 0);
   CHECK_LT(s, subsystem_barycentre_.size());
-  DegreesOfFreedom<Frame> const& initial_barycentre = subsystem_barycentre_[s];
-  return initial_barycentre.position() +
-         initial_barycentre.velocity() * (t - subsystem_barycentre_time_);
+  // The local origin moves with the barycentre of the subsystem, so in local
+  // coordinates the barycentre stays at its initial position, up to the
+  // curvature caused by the pull of the other subsystems.
+  return subsystem_barycentre_[s].position();
 }
 
 template<typename Frame>
@@ -789,10 +812,11 @@ Vector<Jerk, Frame> Ephemeris<Frame>::ComputeGravitationalJerkOnMasslessBody(
     RelativeDegreesOfFreedom<Frame> const Δqv =
         degrees_of_freedom_of_b1 - degrees_of_freedom_of_b2;
     Displacement<Frame> Δq = Δqv.displacement();
-    Velocity<Frame> const Δv = Δqv.velocity();
+    Velocity<Frame> Δv = Δqv.velocity();
     if (int const s2 = subsystem_of_body_[b2]; subsystem != s2) {
       Δq = AddInterSubsystemOffset(inter_subsystem_offset(subsystem, s2, t),
                                    Δq);
+      Δv += subsystem_velocity_conversion(subsystem, s2);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
@@ -988,12 +1012,14 @@ void Ephemeris<Frame>::ComputeApsides(
     RelativeDegreesOfFreedom<Frame> const relative =
         body1_degrees_of_freedom - body2_degrees_of_freedom;
     Displacement<Frame> displacement = relative.displacement();
+    Velocity<Frame> velocity = relative.velocity();
     if (s1 != s2) {
       displacement =
           AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t),
                                   displacement);
+      velocity += subsystem_velocity_conversion(s1, s2);
     }
-    return 2.0 * InnerProduct(displacement, relative.velocity());
+    return 2.0 * InnerProduct(displacement, velocity);
   };
 
   std::optional<Instant> previous_time;
@@ -1599,10 +1625,10 @@ void Ephemeris<Frame>::ComputeGravitationalJerkByMassiveBodyOnMassiveBodies(
     RelativeDegreesOfFreedom<Frame> const Δqv =
         degrees_of_freedom_of_b1 - degrees_of_freedom[b2];
     Displacement<Frame> Δq = Δqv.displacement();
-    Velocity<Frame> const Δv = Δqv.velocity();
+    Velocity<Frame> Δv = Δqv.velocity();
     if (int const s2 = subsystem_of_body_[b2]; s1 != s2) {
-      // The velocities are unaffected: the origin offsets are constant.
       Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, s2, t), Δq);
+      Δv += subsystem_velocity_conversion(s1, s2);
     }
 
     Square<Length> const Δq² = Δq.Norm²();
