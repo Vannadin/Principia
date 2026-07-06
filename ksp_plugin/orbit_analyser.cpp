@@ -160,15 +160,17 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
 
     BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const
         primary_centred(ephemeris_, primary);
-    // TODO(NearStars): when the offsets become affine in time, the translation
-    // must be evaluated at each point's own time.
     auto const status_or_primary_centred_trajectory =
         ToPrimaryCentred(primary_centred,
                          trajectory,
                          ephemeris_->subsystem_conversion(
                              parameters.subsystem,
                              primary_centred.subsystem(),
-                             parameters.first_time));
+                             parameters.first_time),
+                         ephemeris_->subsystem_velocity_conversion(
+                             parameters.subsystem,
+                             primary_centred.subsystem()),
+                         parameters.first_time);
     RETURN_IF_ERROR(status_or_primary_centred_trajectory);
     auto const& primary_centred_trajectory =
         status_or_primary_centred_trajectory.value();
@@ -246,7 +248,9 @@ absl::Status OrbitAnalyser::FindBodyWithSmallestOsculatingPeriod(
               ephemeris_->subsystem_conversion(parameters.subsystem,
                                                body_subsystem,
                                                parameters.first_time),
-          relative_degrees_of_freedom.velocity()};
+          relative_degrees_of_freedom.velocity() +
+              ephemeris_->subsystem_velocity_conversion(parameters.subsystem,
+                                                        body_subsystem)};
     }
     auto const initial_osculating_elements =
         KeplerOrbit<Barycentric>{
@@ -328,7 +332,9 @@ OrbitAnalyser::ComputeMeanSunIfPossible(
               ephemeris_->subsystem_conversion(sun_subsystem,
                                                primary_subsystem,
                                                parameters.first_time),
-          sun_relative_degrees_of_freedom.velocity()};
+          sun_relative_degrees_of_freedom.velocity() +
+              ephemeris_->subsystem_velocity_conversion(sun_subsystem,
+                                                        primary_subsystem)};
     }
     auto const sun_osculating_elements =
         KeplerOrbit<Barycentric>{
@@ -373,15 +379,20 @@ OrbitAnalyser::ToPrimaryCentred(
     BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const&
         primary_centred,
     DiscreteTrajectory<Barycentric> const& trajectory,
-    Displacement<Barycentric> const& conversion) {
-  bool const convert = conversion != Displacement<Barycentric>{};
+    Displacement<Barycentric> const& conversion_at_epoch,
+    Velocity<Barycentric> const& velocity_conversion,
+    Instant const& epoch) {
+  bool const convert =
+      conversion_at_epoch != Displacement<Barycentric>{} ||
+      velocity_conversion != Velocity<Barycentric>{};
   DiscreteTrajectory<PrimaryCentred> primary_centred_trajectory;
   for (auto const& [time, degrees_of_freedom] : trajectory) {
     RETURN_IF_STOPPED;
     DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom =
         convert ? DegreesOfFreedom<Barycentric>(
-                      degrees_of_freedom.position() + conversion,
-                      degrees_of_freedom.velocity())
+                      degrees_of_freedom.position() + conversion_at_epoch +
+                          velocity_conversion * (time - epoch),
+                      degrees_of_freedom.velocity() + velocity_conversion)
                 : degrees_of_freedom;
     primary_centred_trajectory
         .Append(time,

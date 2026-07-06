@@ -581,6 +581,10 @@ void DiscreteTrajectorySegment<Frame>::Translate(
     Displacement<Frame> const& displacement_at_epoch,
     Velocity<Frame> const& velocity_offset,
     Instant const& epoch) {
+  // The arguments may safely refer into this segment's own timeline: it is
+  // only replaced after the loop below completes.  They must not refer into
+  // another segment of the same trajectory; `DiscreteTrajectory::Translate`
+  // copies them for this reason.
   Timeline translated_timeline;
   DegreesOfFreedom<Frame> const* previous_degrees_of_freedom = nullptr;
   Instant previous_time;

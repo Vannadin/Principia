@@ -205,7 +205,7 @@ bool Vessel::RebaseIfNeeded() {
   LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
             << subsystem_ << " to subsystem " << dominant_subsystem;
   {
-    // The reanimator reads the front of `trajectory_` under `lock_`, and the
+    // `AwaitReanimation` merges into `trajectory_` under `lock_`, and the
     // translation rewrites all of its points.
     absl::MutexLock l(&lock_);
     trajectory_.Translate(displacement, velocity_offset, t);

@@ -568,12 +568,14 @@ TEST_F(FlightPlanTest, Rebase) {
 TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
   // Regression test for the burn direction after a cross-subsystem rebase.
   // The flight plan is computed with a non-prograde burn in subsystem 0, then
-  // rebased into subsystem 1 while its manœuvre keeps a frame centred on the
-  // subsystem-0 body.  Since the rebase is only a change of representation of
-  // the same physical trajectory, the velocity at the end of the burn (which
-  // does not depend on the subsystem origin) must be unchanged.  A prograde
-  // burn would follow the velocity, which is unaffected by the representation,
-  // and would not exercise the bug; hence the normal burn below.
+  // rebased into subsystem 1 — whose origin moves with its body — while its
+  // manœuvre keeps a frame centred on the subsystem-0 body.  Since the rebase
+  // is only a change of representation of the same physical trajectory, the
+  // velocity at the end of the burn must be unchanged once it is expressed
+  // back in subsystem 0; this exercises both the displacement and the
+  // velocity conversions of the manœuvre's Frenet frame.  A prograde burn
+  // would follow the velocity and would not exercise the displacement
+  // conversion; hence the normal burn below.
   std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
   for (int i = 0; i < 2; ++i) {
     bodies.emplace_back(make_not_null_unique<RotatingBody<Barycentric>>(
@@ -593,9 +595,11 @@ TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
   // that stays near subsystem 0 masks the effect being tested.
   Displacement<Barycentric> const subsystem_1_origin(
       {1e6 * Metre, 0 * Metre, 0 * Metre});
+  Velocity<Barycentric> const subsystem_1_velocity(
+      {0 * Metre / Second, 100 * Metre / Second, 0 * Metre / Second});
   std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
       {Barycentric::origin, Barycentric::unmoving},
-      {Barycentric::origin + subsystem_1_origin, Barycentric::unmoving}};
+      {Barycentric::origin + subsystem_1_origin, subsystem_1_velocity}};
   auto ephemeris = std::make_unique<Ephemeris<Barycentric>>(
       std::move(bodies),
       initial_state,
@@ -686,8 +690,11 @@ TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
       rebased_flight_plan->GetSegment(1)
           ->back().degrees_of_freedom.velocity();
 
-  // Same physical burn ⇒ same end-of-burn velocity.
-  EXPECT_THAT((rebased_velocity - reference_velocity).Norm(),
+  // Same physical burn ⇒ same end-of-burn velocity, once the rebased one is
+  // expressed back relative to subsystem 0's origin.
+  EXPECT_THAT((rebased_velocity +
+               ephemeris->subsystem_velocity_conversion(/*s1=*/1, /*s2=*/0) -
+               reference_velocity).Norm(),
               Lt(1 * Micro(Metre) / Second));
 }
 

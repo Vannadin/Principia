@@ -176,13 +176,17 @@ class OrbitAnalyser {
       std::optional<OrbitGroundTrack::MeanSun>& mean_sun);
 
   // Converts the `trajectory` to the given `primary_centred` frame, after
-  // adding `conversion` to its positions to represent them in the subsystem of
-  // that frame.  This function may be stopped.
+  // translating each of its points at its own time by
+  // `conversion_at_epoch + velocity_conversion * (t - epoch)` in position and
+  // by `velocity_conversion` in velocity, to represent them in the subsystem
+  // of that frame.  This function may be stopped.
   static absl::StatusOr<DiscreteTrajectory<PrimaryCentred>> ToPrimaryCentred(
       BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const&
           primary_centred,
       DiscreteTrajectory<Barycentric> const& trajectory,
-      Displacement<Barycentric> const& conversion);
+      Displacement<Barycentric> const& conversion_at_epoch,
+      Velocity<Barycentric> const& velocity_conversion,
+      Instant const& epoch);
 
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
   Ephemeris<Barycentric>::FixedStepParameters const
