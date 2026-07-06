@@ -154,7 +154,9 @@ bool Vessel::RebaseIfNeeded() {
   if (number_of_subsystems < 2 || trajectory_.empty()) {
     return false;
   }
-  Instant const& t = trajectory_.back().time;
+  // A copy, not a reference: the translation below rebuilds the timeline that
+  // `back()` points into.
+  Instant const t = trajectory_.back().time;
   Position<Barycentric> const q =
       trajectory_.back().degrees_of_freedom.position();
   // The dominance μ/d² is computed from the subsystem masses and (linearly
@@ -594,8 +596,9 @@ void Vessel::AwaitReanimation(Instant const& desired_t_min,
       if (subsystem != subsystem_) {
         // The reanimated trajectory was computed in the representation of its
         // checkpoint; bring it to the current one, translating each point at
-        // its own time.
-        Instant const& epoch = trajectory.back().time;
+        // its own time.  A copy, not a reference: the translation rebuilds
+        // the timeline that `back()` points into.
+        Instant const epoch = trajectory.back().time;
         trajectory.Translate(
             ephemeris_->subsystem_conversion(subsystem, subsystem_, epoch),
             ephemeris_->subsystem_velocity_conversion(subsystem, subsystem_),
@@ -1079,7 +1082,7 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
           if (!reanimated_trajectory.empty()) {
             if (int const checkpoint_subsystem = message.subsystem();
                 checkpoint_subsystem != vessel->subsystem_) {
-              Instant const& epoch = reanimated_trajectory.back().time;
+              Instant const epoch = reanimated_trajectory.back().time;
               reanimated_trajectory.Translate(
                   vessel->ephemeris_->subsystem_conversion(
                       checkpoint_subsystem, vessel->subsystem_, epoch),
@@ -1517,7 +1520,7 @@ void Vessel::AppendToVesselTrajectory(
 void Vessel::AttachPrognostication(Prognostication&& prognostication) {
   if (prognostication.subsystem != subsystem_) {
     // The vessel was rebased while this prognostication was in flight.
-    Instant const& epoch = prognostication.trajectory.front().time;
+    Instant const epoch = prognostication.trajectory.front().time;
     prognostication.trajectory.Translate(
         ephemeris_->subsystem_conversion(prognostication.subsystem,
                                          subsystem_,

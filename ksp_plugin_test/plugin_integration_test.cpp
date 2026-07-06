@@ -958,6 +958,130 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseMassBoundary) {
   EXPECT_EQ(subsystem_b, vessel.subsystem());
 }
 
+// A vessel crosses the void into a subsystem that moves at the speed of the
+// fastest nearby stars.  The motion seen through `VesselFromParent` must be
+// continuous through the rebase — which now involves a trajectory whose
+// points are hours old, translated at their own times, and a velocity
+// re-expressed relative to the destination's moving origin — and the coast
+// velocity, which is frame-invariant, must be unchanged throughout.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       InterstellarRebaseIntoMovingSubsystem) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                            /*parent_index=*/std::nullopt,
+                                            gravity_model,
+                                            initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "-3e5 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                            /*parent_index=*/star_a,
+                                            gravity_model,
+                                            initial_state);
+  }
+  plugin->EndInitialization();
+  EXPECT_NE(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetCelestial(star_b).subsystem());
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid,
+                            vessel_name,
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  Vector<double, AliceSun> const to_star_b =
+      Normalize(plugin->CelestialFromParent(star_b).displacement());
+  Speed const v = 1e12 * Metre / Second;
+  plugin->InsertUnloadedPart(
+      part_id,
+      part_name,
+      vessel_guid,
+      {(1e9 * Metre) * to_star_b, v * to_star_b});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  Velocity<AliceSun> const v0 =
+      plugin->VesselFromParent(star_a, vessel_guid).velocity();
+
+  Time const δt = 1200 * Second;
+  Instant const t_final = Instant() + 33'600 * Second;
+  int rebases = 0;
+  int previous_subsystem = vessel.subsystem();
+  std::optional<Displacement<AliceSun>> previous_displacement;
+  for (Instant t = Instant() + δt; t <= t_final; t += δt) {
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid,
+                              vessel_name,
+                              star_a,
+                              /*loaded=*/false,
+                              inserted);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+
+    auto const from_parent = plugin->VesselFromParent(star_a, vessel_guid);
+    if (previous_displacement.has_value()) {
+      EXPECT_THAT((from_parent.displacement() - *previous_displacement).Norm(),
+                  RelativeErrorFrom(v * δt, Lt(1e-6)));
+    }
+    previous_displacement = from_parent.displacement();
+    // The coast velocity relative to star A is unaffected by the
+    // representation switch into the moving subsystem.
+    EXPECT_THAT((from_parent.velocity() - v0).Norm() / v0.Norm(), Lt(1e-9));
+    if (vessel.subsystem() != previous_subsystem) {
+      previous_subsystem = vessel.subsystem();
+      ++rebases;
+    }
+  }
+  EXPECT_EQ(1, rebases);
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(), vessel.subsystem());
+}
+
 // WS1 × WS3: a vessel runs an on-rails burn (WS3) while it crosses the void and
 // its representation is rebased into another subsystem (WS1).  The burn state
 // must survive the subsystem switch and the accumulated Δv must be correct —

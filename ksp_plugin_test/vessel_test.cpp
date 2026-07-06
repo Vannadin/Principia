@@ -54,6 +54,7 @@ using ::testing::AllOf;
 using ::testing::AnyNumber;
 using ::testing::DoAll;
 using ::testing::ElementsAre;
+using ::testing::Invoke;
 using ::testing::Ge;
 using ::testing::Le;
 using ::testing::MockFunction;
@@ -255,6 +256,73 @@ TEST_F(VesselTest, MassBasedRebaseHysteresis) {
   AppendToVesselTrajectory(t0_ + 5 * Second, at_x(1.0e16 * Metre - separation));
   EXPECT_TRUE(vessel_.RebaseIfNeeded());
   EXPECT_EQ(0, vessel_.subsystem());
+}
+
+// A rebase into a subsystem whose local origin moves relative to the vessel's:
+// each point of the trajectory must be translated by the offset at the POINT's
+// own time and its velocity by the relative velocity of the origins.
+// Translating the whole history by the offset at a single instant would
+// misplace a point aged Δt by v_rel · Δt — a day of history against a
+// 300 km/s pair is off by 2.6 × 10¹⁰ m.
+TEST_F(VesselTest, RebaseTranslatesEachPointAtItsOwnTime) {
+  Length const separation = 4e16 * Metre;
+  GravitationalParameter const μ_b =
+      1.3e20 * si::Unit<GravitationalParameter>;
+  GravitationalParameter const μ_a = 16 * μ_b;
+  Displacement<Barycentric> const b_from_a_at_t0(
+      {separation, 0 * Metre, 0 * Metre});
+  Velocity<Barycentric> const v_rel({300 * Kilo(Metre) / Second,
+                                     0 * Metre / Second,
+                                     0 * Metre / Second});
+  Instant const t0 = t0_;
+  auto const b_from_a = [&](Instant const& t) {
+    return b_from_a_at_t0 + v_rel * (t - t0);
+  };
+
+  EXPECT_CALL(ephemeris_, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(0))
+      .WillRepeatedly(ReturnRef(μ_a));
+  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(1))
+      .WillRepeatedly(ReturnRef(μ_b));
+  EXPECT_CALL(ephemeris_, subsystem_barycentre(_, _))
+      .WillRepeatedly(Return(Barycentric::origin));
+  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 0, _))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 1, _))
+      .WillRepeatedly(Invoke([&](int, int, Instant const& t) {
+        return -b_from_a(t);
+      }));
+  EXPECT_CALL(ephemeris_, subsystem_velocity_conversion(0, 1))
+      .WillRepeatedly(Return(-v_rel));
+
+  Velocity<Barycentric> const v(
+      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  auto const at_x = [&](Length const& x) {
+    return DegreesOfFreedom<Barycentric>(
+        Barycentric::origin +
+            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
+        v);
+  };
+
+  // A day of history, then a point where B dominates beyond the margin.
+  Instant const t1 = t0 + 1 * Day;
+  AppendToVesselTrajectory(t0, at_x(3.5e16 * Metre));
+  AppendToVesselTrajectory(t1, at_x(3.8e16 * Metre));
+  EXPECT_TRUE(vessel_.RebaseIfNeeded());
+  EXPECT_EQ(1, vessel_.subsystem());
+
+  // The points are translated at their own times, not at the time of the
+  // rebase, and the velocities are translated by the origins' relative
+  // velocity.
+  auto const& front = vessel_.trajectory().front();
+  auto const& back = vessel_.trajectory().back();
+  EXPECT_EQ(at_x(3.5e16 * Metre).position() - b_from_a(t0),
+            front.degrees_of_freedom.position());
+  EXPECT_EQ(at_x(3.8e16 * Metre).position() - b_from_a(t1),
+            back.degrees_of_freedom.position());
+  EXPECT_EQ(v - v_rel, front.degrees_of_freedom.velocity());
+  EXPECT_EQ(v - v_rel, back.degrees_of_freedom.velocity());
 }
 
 TEST_F(VesselTest, KeepAndFreeParts) {

@@ -372,8 +372,13 @@ void DiscreteTrajectory<Frame>::Translate(
     Displacement<Frame> const& displacement_at_epoch,
     Velocity<Frame> const& velocity_offset,
     Instant const& epoch) {
+  // Copies, in case the arguments refer into the timelines that the
+  // translation rebuilds.
+  Displacement<Frame> const displacement = displacement_at_epoch;
+  Velocity<Frame> const velocity = velocity_offset;
+  Instant const time = epoch;
   for (auto& segment : *segments_) {
-    segment.Translate(displacement_at_epoch, velocity_offset, epoch);
+    segment.Translate(displacement, velocity, time);
   }
 }
 
