@@ -46,6 +46,14 @@ class MockEphemeris : public Ephemeris<Frame> {
               subsystem_conversion,
               (int s1, int s2),
               (const, override));
+  MOCK_METHOD(GravitationalParameter const&,
+              subsystem_gravitational_parameter,
+              (int s),
+              (const, override));
+  MOCK_METHOD(Position<Frame>,
+              subsystem_barycentre,
+              (int s, Instant const& t),
+              (const, override));
   MOCK_METHOD(bool, empty, (), (const, override));
   MOCK_METHOD(Instant, t_min, (), (const, override));
   MOCK_METHOD(Instant, t_max, (), (const, override));

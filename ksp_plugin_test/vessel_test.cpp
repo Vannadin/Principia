@@ -142,6 +142,12 @@ class VesselTest : public testing::Test {
     vessel_.checkpointer_->WriteToMessage(message->mutable_checkpoint());
   }
 
+  void AppendToVesselTrajectory(
+      Instant const& time,
+      DegreesOfFreedom<Barycentric> const& degrees_of_freedom) {
+    CHECK_OK(vessel_.trajectory_.Append(time, degrees_of_freedom));
+  }
+
   std::vector<not_null<MassiveBody const*>> const bodies_;
   RotatingBody<Barycentric> const body_;
   Celestial const celestial_;
@@ -176,6 +182,79 @@ TEST_F(VesselTest, Parent) {
   EXPECT_EQ(&celestial_, vessel_.parent());
   vessel_.set_parent(&other_celestial);
   EXPECT_EQ(&other_celestial, vessel_.parent());
+}
+
+// The mass-based rebase boundary and its hysteresis, on an unequal pair of
+// subsystems: A (the vessel's, heavy) and B (light), separated by 4 × 10¹⁶ m.
+// The dominance boundary μ_A/d_A² = μ_B/d_B² is not the geometric midpoint —
+// it sits at d_B/d_A = √(μ_B/μ_A) — and switching representations further
+// requires the destination to dominate by the hysteresis margin, in either
+// direction.
+TEST_F(VesselTest, MassBasedRebaseHysteresis) {
+  Length const separation = 4e16 * Metre;
+  GravitationalParameter const μ_b =
+      1.3e20 * si::Unit<GravitationalParameter>;
+  GravitationalParameter const μ_a = 16 * μ_b;
+  Displacement<Barycentric> const b_from_a(
+      {separation, 0 * Metre, 0 * Metre});
+
+  EXPECT_CALL(ephemeris_, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(0))
+      .WillRepeatedly(ReturnRef(μ_a));
+  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(1))
+      .WillRepeatedly(ReturnRef(μ_b));
+  // The barycentre of each subsystem is at rest at its local origin.
+  EXPECT_CALL(ephemeris_, subsystem_barycentre(_, _))
+      .WillRepeatedly(Return(Barycentric::origin));
+  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 0))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 1))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 1))
+      .WillRepeatedly(Return(-b_from_a));
+  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 0))
+      .WillRepeatedly(Return(b_from_a));
+
+  Velocity<Barycentric> const v(
+      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  auto const at_x = [&](Length const& x) {
+    return DegreesOfFreedom<Barycentric>(
+        Barycentric::origin +
+            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
+        v);
+  };
+
+  // Past the geometric midpoint — nearer to B than to A — but A, sixteen
+  // times heavier, still dominates: no rebase.
+  AppendToVesselTrajectory(t0_ + 1 * Second, at_x(2.5e16 * Metre));
+  EXPECT_FALSE(vessel_.RebaseIfNeeded());
+  EXPECT_EQ(0, vessel_.subsystem());
+
+  // B dominates, but by less than the hysteresis margin: still no rebase.
+  AppendToVesselTrajectory(t0_ + 2 * Second, at_x(3.45e16 * Metre));
+  EXPECT_FALSE(vessel_.RebaseIfNeeded());
+  EXPECT_EQ(0, vessel_.subsystem());
+
+  // B dominates beyond the margin: the vessel is rebased, and its trajectory
+  // is now represented relative to B's local origin.
+  AppendToVesselTrajectory(t0_ + 3 * Second, at_x(3.6e16 * Metre));
+  EXPECT_TRUE(vessel_.RebaseIfNeeded());
+  EXPECT_EQ(1, vessel_.subsystem());
+  EXPECT_EQ(at_x(3.6e16 * Metre).position() - b_from_a,
+            vessel_.trajectory().back().degrees_of_freedom.position());
+
+  // Back on the A side of the dominance boundary — A is the (raw) dominant
+  // subsystem again — but not beyond the margin: the hysteresis keeps the
+  // vessel on B, so weaving around the boundary does not churn.
+  AppendToVesselTrajectory(t0_ + 4 * Second, at_x(3.0e16 * Metre - separation));
+  EXPECT_FALSE(vessel_.RebaseIfNeeded());
+  EXPECT_EQ(1, vessel_.subsystem());
+
+  // Deep into A's system: the margin is exceeded and the vessel returns.
+  AppendToVesselTrajectory(t0_ + 5 * Second, at_x(1.0e16 * Metre - separation));
+  EXPECT_TRUE(vessel_.RebaseIfNeeded());
+  EXPECT_EQ(0, vessel_.subsystem());
 }
 
 TEST_F(VesselTest, KeepAndFreeParts) {

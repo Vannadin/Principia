@@ -112,11 +112,12 @@ class Vessel {
   // positions of the trajectories of this vessel are represented.
   virtual int subsystem() const;
 
-  // If the vessel is in interstellar space and nearer to the local origin of
-  // another subsystem than to that of its own, re-expresses all its
-  // trajectories (and those of its pile-up and flight plans) relative to the
-  // local origin of the nearest subsystem.  Returns true if a rebase
-  // happened.  Must not be called while the pile-ups are being advanced.
+  // If another subsystem gravitationally dominates the vessel — its μ/d²
+  // exceeds that of the current subsystem by a hysteresis margin —
+  // re-expresses all the trajectories of this vessel (and those of its
+  // pile-up and flight plans) relative to the local origin of the dominant
+  // subsystem.  Returns true if a rebase happened.  Must not be called while
+  // the pile-ups are being advanced.
   virtual bool RebaseIfNeeded();
 
   // Adds the given part to this vessel.  Note that this does not add the part

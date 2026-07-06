@@ -12,6 +12,7 @@
 
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/strings/str_cat.h"
 #include "astronomy/frames.hpp"
 #include "astronomy/time_scales.hpp"
 #include "base/not_null.hpp"
@@ -748,9 +749,11 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
   int const initial_subsystem = vessel.subsystem();
   EXPECT_EQ(plugin->GetCelestial(star_a).subsystem(), initial_subsystem);
 
-  // Coast past the midpoint of the void; the rebase happens there.
+  // Coast across the void; the stars have equal masses, so the dominance
+  // boundary is the midpoint, and the hysteresis margin puts the rebase a
+  // bit past it, where star B dominates by `rebase_dominance_margin`.
   Time const δt = 1200 * Second;
-  Instant const t_final = Instant() + 24'000 * Second;
+  Instant const t_final = Instant() + 33'600 * Second;
   int rebases = 0;
   int previous_subsystem = initial_subsystem;
   std::optional<Displacement<AliceSun>> previous_displacement;
@@ -839,6 +842,120 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
                 RelativeErrorFrom(v * δt, Lt(1e-6)));
     previous_displacement = from_parent.displacement();
   }
+}
+
+// The mass-based rebase boundary, end-to-end, on an unequal pair: star A is
+// sixteen times heavier than star B, so the dominance boundary sits at 4/5 of
+// the way — far past the geometric midpoint — and the hysteresis margin puts
+// the actual rebase past x/(D−x) = 4√3, at x ≈ 3.50 × 10¹⁶ m.  A third star
+// system C, grazed en route (closest approach 6 × 10¹⁵ m, where its dominance
+// is still below A's), must not capture the representation: the transit
+// rebases exactly once, directly from A to B.
+TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseMassBoundary) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  Index const star_c = 2;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  auto const insert_star = [&plugin](Index const index,
+                                     std::optional<Index> const parent_index,
+                                     std::string const& name,
+                                     std::string const& gravitational_parameter,
+                                     std::string const& x,
+                                     std::string const& y) {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name                    : ")", name, R"("
+                        gravitational_parameter : ")",
+                     gravitational_parameter, R"("
+                        reference_instant       : "JD2451545.0"
+                        mean_radius             : "1e6 m"
+                        axis_right_ascension    : "0 deg"
+                        axis_declination        : "90 deg"
+                        reference_angle         : "0 rad"
+                        angular_frequency       : "1 rad/s")"),
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name : ")", name, R"("
+                        x    : ")", x, R"("
+                        y    : ")", y, R"("
+                        z    : "0 m"
+                        vx   : "0 m/s"
+                        vy   : "0 m/s"
+                        vz   : "0 m/s")"),
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(
+        index, parent_index, gravity_model, initial_state);
+  };
+  insert_star(star_a, std::nullopt, "star A", "2.08e21 m^3/s^2", "0 m", "0 m");
+  insert_star(star_b, star_a, "star B", "1.3e20 m^3/s^2", "4e16 m", "0 m");
+  insert_star(star_c, star_a, "star C", "1.3e20 m^3/s^2", "2e16 m", "6e15 m");
+  plugin->EndInitialization();
+
+  // Three distinct subsystems.
+  int const subsystem_a = plugin->GetCelestial(star_a).subsystem();
+  int const subsystem_b = plugin->GetCelestial(star_b).subsystem();
+  int const subsystem_c = plugin->GetCelestial(star_c).subsystem();
+  EXPECT_NE(subsystem_a, subsystem_b);
+  EXPECT_NE(subsystem_a, subsystem_c);
+  EXPECT_NE(subsystem_b, subsystem_c);
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid,
+                            vessel_name,
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  Vector<double, AliceSun> const to_star_b =
+      Normalize(plugin->CelestialFromParent(star_b).displacement());
+  Speed const v = 1e12 * Metre / Second;
+  plugin->InsertUnloadedPart(
+      part_id,
+      part_name,
+      vessel_guid,
+      {(1e9 * Metre) * to_star_b, v * to_star_b});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  EXPECT_EQ(subsystem_a, vessel.subsystem());
+
+  Time const δt = 1200 * Second;
+  Instant const t_final = Instant() + 37'200 * Second;
+  int rebases = 0;
+  int previous_subsystem = vessel.subsystem();
+  for (Instant t = Instant() + δt; t <= t_final; t += δt) {
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid,
+                              vessel_name,
+                              star_a,
+                              /*loaded=*/false,
+                              inserted);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+    // The graze never captures the representation.
+    EXPECT_NE(subsystem_c, vessel.subsystem());
+    if (t == Instant() + 20'400 * Second) {
+      // Closest approach to star C: still A's.
+      EXPECT_EQ(subsystem_a, vessel.subsystem());
+    }
+    if (t == Instant() + 26'400 * Second) {
+      // Past the geometric midpoint, but A, heavier, still dominates.
+      EXPECT_EQ(subsystem_a, vessel.subsystem());
+    }
+    if (t == Instant() + 33'600 * Second) {
+      // Past the mass-weighted balance at 3.2e16 m, but short of the
+      // hysteresis margin: still A's.
+      EXPECT_EQ(subsystem_a, vessel.subsystem());
+    }
+    if (vessel.subsystem() != previous_subsystem) {
+      previous_subsystem = vessel.subsystem();
+      ++rebases;
+    }
+  }
+  EXPECT_EQ(1, rebases);
+  EXPECT_EQ(subsystem_b, vessel.subsystem());
 }
 
 // WS1 × WS3: a vessel runs an on-rails burn (WS3) while it crosses the void and
@@ -940,7 +1057,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseDuringOnRailsBurn) 
       plugin->VesselFromParent(star_a, vessel_guid).velocity();
 
   Time const δt = 1200 * Second;
-  Instant const t_final = Instant() + 24'000 * Second;
+  Instant const t_final = Instant() + 33'600 * Second;
   int rebases = 0;
   int previous_subsystem = initial_subsystem;
   for (Instant t = Instant() + δt; t <= t_final; t += δt) {

@@ -28,6 +28,7 @@
 #include "base/status_utilities.hpp"  // 🧙 For CHECK_OK.
 #include "geometry/barycentre_calculator.hpp"
 #include "ksp_plugin/integrators.hpp"
+#include "base/algebra.hpp"
 #include "quantities/named_quantities.hpp"
 #include "testing_utilities/make_not_null.hpp"
 
@@ -36,6 +37,7 @@ namespace ksp_plugin {
 namespace _vessel {
 namespace internal {
 
+using namespace principia::base::_algebra;
 using namespace principia::base::_concepts;
 using namespace principia::base::_graveyard;
 using namespace principia::base::_map_util;
@@ -50,10 +52,13 @@ using namespace std::chrono_literals;
 // TODO(phl): Move this to some kind of parameters.
 constexpr std::int64_t max_points_to_serialize = 20'000;
 
-// A vessel this far from the local origins of both its subsystem and the
-// nearest one is in interstellar space, where gravity is negligible and a
-// rebase is glitch-free.
-constexpr Length rebase_distance_threshold = 1e15 * Metre;
+// A vessel is rebased into another subsystem when the gravitational dominance
+// μ/d² of that subsystem exceeds that of its current subsystem by this
+// factor.  The margin makes the boundary hysteretic: switching back requires
+// the inverse ratio, so a vessel weaving around the balance point does not
+// oscillate between representations, and a transit that merely grazes a
+// subsystem's region does not adopt it.
+constexpr double rebase_dominance_margin = 3;
 
 auto* const where_elephants_go_to_die =
     new Graveyard(std::thread::hardware_concurrency());
@@ -149,36 +154,55 @@ bool Vessel::RebaseIfNeeded() {
   if (number_of_subsystems < 2 || trajectory_.empty()) {
     return false;
   }
-  Displacement<Barycentric> const q =
-      trajectory_.back().degrees_of_freedom.position() - Barycentric::origin;
-  int nearest_subsystem = subsystem_;
-  Length nearest_distance = q.Norm();
+  Instant const& t = trajectory_.back().time;
+  Position<Barycentric> const q =
+      trajectory_.back().degrees_of_freedom.position();
+  // The dominance μ/d² is computed from the subsystem masses and (linearly
+  // extrapolated) barycentres, not from the acceleration field: far-field
+  // damping zeroes the field precisely in the region where the boundary lies.
+  // The comparisons are cross-multiplied so that a vanishing distance needs no
+  // special-casing.
+  auto const squared_distance_to_barycentre = [&](int const s) {
+    Position<Barycentric> const q_in_s =
+        q + ephemeris_->subsystem_conversion(subsystem_, s);
+    return (q_in_s - ephemeris_->subsystem_barycentre(s, t)).Norm²();
+  };
+  Square<Length> const current_distance² =
+      squared_distance_to_barycentre(subsystem_);
+  GravitationalParameter const current_μ =
+      ephemeris_->subsystem_gravitational_parameter(subsystem_);
+  int dominant_subsystem = subsystem_;
+  GravitationalParameter dominant_μ = current_μ;
+  Square<Length> dominant_distance² = current_distance²;
   for (int s = 0; s < number_of_subsystems; ++s) {
     if (s == subsystem_) {
       continue;
     }
-    Length const distance =
-        (q + ephemeris_->inter_subsystem_offset(subsystem_, s).value).Norm();
-    if (distance < nearest_distance) {
-      nearest_distance = distance;
-      nearest_subsystem = s;
+    Square<Length> const distance² = squared_distance_to_barycentre(s);
+    GravitationalParameter const μ =
+        ephemeris_->subsystem_gravitational_parameter(s);
+    if (μ * dominant_distance² > dominant_μ * distance²) {
+      dominant_subsystem = s;
+      dominant_μ = μ;
+      dominant_distance² = distance²;
     }
   }
-  if (nearest_subsystem == subsystem_ ||
-      nearest_distance <= rebase_distance_threshold) {
+  if (dominant_subsystem == subsystem_ ||
+      dominant_μ * current_distance² <=
+          rebase_dominance_margin * current_μ * dominant_distance²) {
     return false;
   }
 
   Displacement<Barycentric> const displacement =
-      ephemeris_->subsystem_conversion(subsystem_, nearest_subsystem);
+      ephemeris_->subsystem_conversion(subsystem_, dominant_subsystem);
   LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
-            << subsystem_ << " to subsystem " << nearest_subsystem;
+            << subsystem_ << " to subsystem " << dominant_subsystem;
   {
     // The reanimator reads the front of `trajectory_` under `lock_`, and the
     // translation rewrites all of its points.
     absl::MutexLock l(&lock_);
     trajectory_.Translate(displacement);
-    subsystem_ = nearest_subsystem;
+    subsystem_ = dominant_subsystem;
   }
   ForAllParts([this](Part& part) { part.set_subsystem(subsystem_); });
   PileUp* pile_up = nullptr;
