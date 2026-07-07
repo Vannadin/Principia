@@ -46,8 +46,10 @@ internal class OnRailsBurner {
     warp_stop_message_latched_ = false;
   }
 
-  public void HandleWarpFrame(IntPtr plugin, Vessel vessel, double Δt) {
-    string vessel_guid = vessel.id.ToString();
+  public void HandleWarpFrame(IntPtr plugin,
+                              Vessel vessel,
+                              string vessel_guid,
+                              double Δt) {
     double throttle = FlightInputHandler.state.mainThrottle;
 
     // The true current mass and centre of mass of the packed vessel.
@@ -75,8 +77,10 @@ internal class OnRailsBurner {
     // Drains are kept per (engine part, propellant): NO_FLOW propellants
     // (solid fuel) can only be drawn from the part that burns them, and the
     // flowing modes reach the same tanks from any engine part anyway.
-    var drains = new List<PropellantDrain>();
-    var drain_rates = new Dictionary<int, double>();  // Resource → units/s.
+    // The containers are fields reused across frames—a warp burn runs this
+    // every frame—so they are cleared rather than reallocated.
+    drains_.Clear();
+    drain_rates_.Clear();
     foreach (Part part in vessel.parts) {
       foreach (PartModule module in part.Modules) {
         if (!(module is ModuleEngines engine) ||
@@ -132,13 +136,13 @@ internal class OnRailsBurner {
         double unit_flow = engine_mass_flow / mixture_density;  // units/s.
         foreach (Propellant propellant in engine.propellants) {
           double rate = unit_flow * propellant.ratio;
-          drains.Add(new PropellantDrain{
+          drains_.Add(new PropellantDrain{
               part = part,
               resource_id = propellant.id,
               rate = rate,
               flow_mode = propellant.GetFlowMode()});
-          drain_rates.TryGetValue(propellant.id, out double total_rate);
-          drain_rates[propellant.id] = total_rate + rate;
+          drain_rates_.TryGetValue(propellant.id, out double total_rate);
+          drain_rates_[propellant.id] = total_rate + rate;
         }
         total_thrust += engine_thrust;
         total_mass_flow += engine_mass_flow;
@@ -163,7 +167,7 @@ internal class OnRailsBurner {
     // amount less than the totals suggest) and stops the warp a frame later.
     double max_duration = double.PositiveInfinity;  // s.
     bool propellant_depleted = false;
-    foreach (var drain_rate in drain_rates) {
+    foreach (var drain_rate in drain_rates_) {
       double rate = drain_rate.Value;
       if (rate <= 0) {
         continue;
@@ -252,7 +256,7 @@ internal class OnRailsBurner {
     // that the error stays bounded by this frame's burn.
     double burn_time = Math.Min(Δt, max_duration);
     bool starved = false;
-    foreach (PropellantDrain drain in drains) {
+    foreach (PropellantDrain drain in drains_) {
       double demand = drain.rate * burn_time;
       if (demand > 0) {
         double obtained = drain.part.RequestResource(drain.resource_id,
@@ -313,6 +317,12 @@ internal class OnRailsBurner {
     public double rate;  // units/s.
     public ResourceFlowMode flow_mode;
   }
+
+  // Reused across frames to avoid per-frame heap allocation during warp;
+  // cleared at the start of `HandleWarpFrame`.
+  private readonly List<PropellantDrain> drains_ = new List<PropellantDrain>();
+  private readonly Dictionary<int, double> drain_rates_ =
+      new Dictionary<int, double>();
 
   private static bool? enabled_;
   private bool warp_stop_message_latched_ = false;

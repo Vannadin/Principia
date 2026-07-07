@@ -31,8 +31,19 @@ public class PrincipiaWarpStatus : VesselModule {
     set {
       engaged_ = value;
       last_asserted_ = UnityEngine.Time.fixedTime;
+      if (value) {
+        last_asserted_any_ = last_asserted_;
+      }
     }
   }
+
+  // Whether any vessel's flag was asserted within the grace period.  The
+  // unmanageability census asks every vessel every frame; when no warp mod
+  // is asserting at all—the common case—this lets the census skip the
+  // per-vessel module scan wholesale.  It decays exactly like the per-vessel
+  // flag: when this is false, every per-vessel flag has decayed too.
+  public static bool any_recently_engaged =>
+      UnityEngine.Time.fixedTime - last_asserted_any_ <= grace_period;
 
   protected override void OnSave(ConfigNode node) {
     base.OnSave(node);
@@ -50,6 +61,7 @@ public class PrincipiaWarpStatus : VesselModule {
 
   private bool engaged_ = false;
   private double last_asserted_;
+  private static double last_asserted_any_ = double.NegativeInfinity;
 }
 
 }  // namespace ksp_plugin_adapter

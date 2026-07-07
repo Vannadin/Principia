@@ -659,7 +659,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     // A vessel flying under an external warp drive is moved by the warp mod
     // for the duration of the cruise; on dropout the flag clears and the
     // vessel is re-adopted from its stock orbit around the destination.
-    if (vessel.FindVesselModuleImplementing<PrincipiaWarpStatus>()?.
+    // The static hint skips the per-vessel module scan when no warp mod is
+    // asserting at all, which is the common case.
+    if (PrincipiaWarpStatus.any_recently_engaged &&
+        vessel.FindVesselModuleImplementing<PrincipiaWarpStatus>()?.
             warpEngaged == true) {
       reasons.Add("vessel is under external warp");
     }
@@ -1732,12 +1735,16 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         // futures spawned below—the catch-up that advances a packed vessel.
         // The burn is one-shot, so this must happen anew each frame.
         if (OnRailsBurner.enabled) {
-          if (has_active_manageable_vessel() &&
-              FlightGlobals.ActiveVessel.packed &&
-              plugin_.HasVessel(FlightGlobals.ActiveVessel.id.ToString())) {
+          Vessel active_vessel = FlightGlobals.ActiveVessel;
+          string active_vessel_guid = active_vessel?.id.ToString();
+          if (active_vessel != null &&
+              has_active_manageable_vessel() &&
+              active_vessel.packed &&
+              plugin_.HasVessel(active_vessel_guid)) {
             on_rails_burner_.HandleWarpFrame(
                 plugin_,
-                FlightGlobals.ActiveVessel,
+                active_vessel,
+                active_vessel_guid,
                 Planetarium.TimeScale * Planetarium.fetch.fixedDeltaTime);
           } else {
             on_rails_burner_.ResetWarpStopMessageLatch();
