@@ -140,6 +140,67 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithoutTargetVessel) {
   }
 }
 
+// WS6-5: a vessel coasting in the void is anchored — its trajectory is near the
+// origin and the real offset lives on the anchor.  Rendering must add the
+// anchor, evaluated at each point's own time, or the vessel plots on top of its
+// home star instead of out in the void.
+TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchor) {
+  auto const vx = 6 * Metre / Second;
+  auto const vy = 5 * Metre / Second;
+  auto const vz = 4 * Metre / Second;
+  Velocity<Barycentric> const v({vx, vy, vz});
+  DiscreteTrajectory<Barycentric> trajectory_to_render;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(v,
+                                  /*Δt=*/1 * Second,
+                                  /*t1=*/t0_,
+                                  /*t2=*/t0_ + 10 * Second),
+      /*to=*/trajectory_to_render);
+
+  RigidMotion<Barycentric, Navigation> const rigid_motion(
+      RigidTransformation<Barycentric, Navigation>::Identity(),
+      Barycentric::nonrotating,
+      Barycentric::unmoving);
+  for (Instant t = t0_; t < t0_ + 10 * Second; t += 1 * Second) {
+    EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(t))
+        .WillOnce(Return(rigid_motion));
+  }
+
+  auto const ax = 1 * Metre / Second;
+  auto const ay = 2 * Metre / Second;
+  auto const az = 3 * Metre / Second;
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = Displacement<Barycentric>({100 * Metre, 200 * Metre,
+                                           300 * Metre}),
+      .velocity = Velocity<Barycentric>({ax, ay, az}),
+      .epoch = t0_};
+
+  auto const rendered_trajectory =
+      renderer_.RenderBarycentricTrajectoryInPlotting(
+          trajectory_to_render.begin(),
+          trajectory_to_render.end(),
+          /*subsystem=*/0,
+          anchor);
+
+  EXPECT_EQ(10, rendered_trajectory.size());
+  int index = 0;
+  for (auto const& [time, degrees_of_freedom] : rendered_trajectory) {
+    EXPECT_EQ(t0_ + index * Second, time);
+    EXPECT_THAT(
+        degrees_of_freedom,
+        Componentwise(
+            AlmostEquals(
+                Navigation::origin +
+                    Displacement<Navigation>(
+                        {(vx + ax) * (time - t0_) + 100 * Metre,
+                         (vy + ay) * (time - t0_) + 200 * Metre,
+                         (vz + az) * (time - t0_) + 300 * Metre}),
+                0),
+            AlmostEquals(Velocity<Navigation>({vx + ax, vy + ay, vz + az}), 0)));
+    ++index;
+  }
+}
+
 TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithTargetVessel) {
   MockEphemeris<Barycentric> ephemeris;
   MockContinuousTrajectory<Barycentric> celestial_trajectory;

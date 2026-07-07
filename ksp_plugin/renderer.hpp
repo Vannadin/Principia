@@ -110,7 +110,9 @@ class Renderer {
       DiscreteTrajectory<Barycentric>::iterator const& end,
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   // Returns a trajectory in the current plotting frame corresponding to the
   // trajectory defined by `begin` and `end`.  If there is a target vessel, its
@@ -119,7 +121,9 @@ class Renderer {
   RenderBarycentricTrajectoryInPlotting(
       DiscreteTrajectory<Barycentric>::iterator const& begin,
       DiscreteTrajectory<Barycentric>::iterator const& end,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   // Returns a trajectory in `World` corresponding to the trajectory defined by
   // `begin` and `end` in the current plotting frame.
@@ -138,7 +142,9 @@ class Renderer {
       DistinguishedPoints<Barycentric>::const_iterator end,
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   std::vector<Node> RenderNodes(
       Instant const& time,

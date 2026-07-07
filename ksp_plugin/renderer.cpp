@@ -81,9 +81,10 @@ Renderer::RenderBarycentricTrajectoryInWorld(
     DiscreteTrajectory<Barycentric>::iterator const& end,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-    int const subsystem) const {
+    int const subsystem,
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
   auto const trajectory_in_plotting_frame =
-      RenderBarycentricTrajectoryInPlotting(begin, end, subsystem);
+      RenderBarycentricTrajectoryInPlotting(begin, end, subsystem, anchor);
   auto trajectory_in_world =
       RenderPlottingTrajectoryInWorld(time,
                                       trajectory_in_plotting_frame.begin(),
@@ -97,7 +98,8 @@ DiscreteTrajectory<Navigation>
 Renderer::RenderBarycentricTrajectoryInPlotting(
     DiscreteTrajectory<Barycentric>::iterator const& begin,
     DiscreteTrajectory<Barycentric>::iterator const& end,
-    int const subsystem) const {
+    int const subsystem,
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
   int const plotting_subsystem = GetPlottingFrame()->subsystem();
   DiscreteTrajectory<Navigation> trajectory;
   for (auto it = begin; it != end; ++it) {
@@ -110,16 +112,23 @@ Renderer::RenderBarycentricTrajectoryInPlotting(
         break;
       }
     }
-    // The conversion is evaluated at each point's own time.
-    DegreesOfFreedom<Barycentric> const plotting_degrees_of_freedom =
-        subsystem == plotting_subsystem
-            ? degrees_of_freedom
-            : DegreesOfFreedom<Barycentric>(
-                  degrees_of_freedom.position() +
-                      SubsystemConversion(subsystem, plotting_subsystem, time),
-                  degrees_of_freedom.velocity() +
-                      SubsystemVelocityConversion(subsystem,
-                                                  plotting_subsystem));
+    // The conversions are evaluated at each point's own time.  A vessel coasting
+    // in the void is anchored, so its near-origin coordinates need the anchor
+    // added to place them at the true position.
+    DegreesOfFreedom<Barycentric> plotting_degrees_of_freedom =
+        degrees_of_freedom;
+    if (subsystem != plotting_subsystem) {
+      plotting_degrees_of_freedom = {
+          plotting_degrees_of_freedom.position() +
+              SubsystemConversion(subsystem, plotting_subsystem, time),
+          plotting_degrees_of_freedom.velocity() +
+              SubsystemVelocityConversion(subsystem, plotting_subsystem)};
+    }
+    if (anchor.has_value()) {
+      plotting_degrees_of_freedom = {
+          plotting_degrees_of_freedom.position() + anchor->OffsetAt(time),
+          plotting_degrees_of_freedom.velocity() + anchor->velocity};
+    }
     trajectory.Append(time,
                       BarycentricToPlotting(time)(plotting_degrees_of_freedom))
         .IgnoreError();
@@ -152,20 +161,27 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
     DistinguishedPoints<Barycentric>::const_iterator const end,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-    int const subsystem) const {
+    int const subsystem,
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
   int const plotting_subsystem = GetPlottingFrame()->subsystem();
   DistinguishedPoints<Navigation> plotting_points;
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
-    // The conversion is evaluated at each point's own time.
-    DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom =
-        subsystem == plotting_subsystem
-            ? degrees_of_freedom
-            : DegreesOfFreedom<Barycentric>(
-                  degrees_of_freedom.position() +
-                      SubsystemConversion(subsystem, plotting_subsystem, t),
-                  degrees_of_freedom.velocity() +
-                      SubsystemVelocityConversion(subsystem,
-                                                  plotting_subsystem));
+    // The conversions are evaluated at each point's own time; an anchored
+    // vessel's near-origin coordinates need the anchor added.
+    DegreesOfFreedom<Barycentric> converted_degrees_of_freedom =
+        degrees_of_freedom;
+    if (subsystem != plotting_subsystem) {
+      converted_degrees_of_freedom = {
+          converted_degrees_of_freedom.position() +
+              SubsystemConversion(subsystem, plotting_subsystem, t),
+          converted_degrees_of_freedom.velocity() +
+              SubsystemVelocityConversion(subsystem, plotting_subsystem)};
+    }
+    if (anchor.has_value()) {
+      converted_degrees_of_freedom = {
+          converted_degrees_of_freedom.position() + anchor->OffsetAt(t),
+          converted_degrees_of_freedom.velocity() + anchor->velocity};
+    }
     auto const plotting_degrees_of_freedom =
         BarycentricToPlotting(t)(converted_degrees_of_freedom);
     plotting_points.emplace(t, plotting_degrees_of_freedom);
@@ -279,6 +295,11 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
             SubsystemVelocityConversion(vessel_subsystem,
                                         plotting_subsystem)};
   }
+  if (auto const& anchor = vessel.anchor(); anchor.has_value()) {
+    barycentric_degrees_of_freedom = {
+        barycentric_degrees_of_freedom.position() + anchor->OffsetAt(back.time),
+        barycentric_degrees_of_freedom.velocity() + anchor->velocity};
+  }
   DegreesOfFreedom<Navigation> const plotting_frame_degrees_of_freedom =
       BarycentricToPlotting(back.time)(barycentric_degrees_of_freedom);
   Rotation<Frenet<Navigation>, Navigation> const
@@ -305,6 +326,11 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
             SubsystemConversion(vessel_subsystem, frame_subsystem, back.time),
         degrees_of_freedom.velocity() +
             SubsystemVelocityConversion(vessel_subsystem, frame_subsystem)};
+  }
+  if (auto const& anchor = vessel.anchor(); anchor.has_value()) {
+    degrees_of_freedom = {
+        degrees_of_freedom.position() + anchor->OffsetAt(back.time),
+        degrees_of_freedom.velocity() + anchor->velocity};
   }
   auto const to_navigation = navigation_frame.ToThisFrameAtTime(back.time);
   auto const from_navigation = to_navigation.orthogonal_map().Inverse();

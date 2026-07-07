@@ -397,7 +397,9 @@ class Plugin {
       int max_points,
       DistinguishedPoints<World>& apoapsides,
       DistinguishedPoints<World>& periapsides,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   // Computes the first collision between the trajectory defined by `begin` and
   // `end` and the celestial with index `celestial_index`.
@@ -411,7 +413,9 @@ class Plugin {
       int max_points,
       std::function<Length(Angle const& latitude,
                            Angle const& longitude)> const& radius,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   // Computes the closest approaches of the trajectory defined by `begin` and
   // `end` with respect to the trajectory of the targetted vessel.
@@ -422,7 +426,9 @@ class Plugin {
       Position<World> const& sun_world_position,
       int max_points,
       DistinguishedPoints<World>& closest_approaches,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   // Computes the nodes of the trajectory defined by `begin` and `end` with
   // respect to plane of the trajectory of the targetted vessel.
@@ -434,7 +440,9 @@ class Plugin {
       int max_points,
       std::vector<Renderer::Node>& ascending,
       std::vector<Renderer::Node>& descending,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   virtual bool HasCelestial(Index index) const;
   virtual Celestial const& GetCelestial(Index index) const;
@@ -549,7 +557,9 @@ class Plugin {
   Velocity<World> VesselVelocity(
       Instant const& time,
       DegreesOfFreedom<Barycentric> const& degrees_of_freedom,
-      int subsystem = 0) const;
+      int subsystem = 0,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt) const;
 
   // The rigid motion that translates positions represented relative to the
   // local origin of subsystem `s1` so that they become represented relative
