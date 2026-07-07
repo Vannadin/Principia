@@ -226,12 +226,21 @@ internal class OnRailsBurner {
       return;
     }
 
+    // The C++ side clears a burn whose direction degenerates to zero (e.g.
+    // prograde at rest, target at contact) without applying any thrust;
+    // mirror that rejection here, so that no propellant is drained for a
+    // frame that cannot burn.
+    Vector3d direction = CommandedDirection(vessel, thrust);
+    if (direction.sqrMagnitude == 0) {
+      warp_stop_message_latched_ = false;
+      return;
+    }
     plugin.VesselSetOnRailsBurn(
         vessel_guid,
         net_thrust,
         net_thrust / total_mass_flow / 9.80665,
         vessel_mass,
-        (XYZ)CommandedDirection(vessel, thrust),
+        (XYZ)direction,
         max_duration);
     warp_stop_message_latched_ = false;
 
