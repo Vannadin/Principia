@@ -656,11 +656,12 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     if (vessel.orbit.pos == Vector3d.zero) {
       reasons.Add("vessel is at the centre of the star");
     }
-    // A vessel flying under NearStars warp is moved by the NearStars cruise
-    // layer for the duration of the cruise; on dropout the flag clears and
-    // the vessel is re-adopted from its stock orbit around the destination.
-    if (NearStarsWarpFlag.IsUnderWarp(vessel)) {
-      reasons.Add("vessel is under NearStars warp");
+    // A vessel flying under an external warp drive is moved by the warp mod
+    // for the duration of the cruise; on dropout the flag clears and the
+    // vessel is re-adopted from its stock orbit around the destination.
+    if (vessel.FindVesselModuleImplementing<PrincipiaWarpStatus>()?.
+            warpEngaged == true) {
+      reasons.Add("vessel is under external warp");
     }
     if (reasons.Count == 0) {
       return null;

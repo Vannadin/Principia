@@ -144,7 +144,6 @@
     <Compile Include="map_node_pool.cs" />
     <Compile Include="marshalers.generated.cs" />
     <Compile Include="migration_monitor.cs" />
-    <Compile Include="nearstars_warp_flag.cs" />
     <Compile Include="on_rails_burner.cs" />
     <Compile Include="ownership_transfer_marshaler.cs" />
     <Compile Include="plotter.cs" />
@@ -162,6 +161,7 @@
     <Compile Include="time_span.cs" />
     <Compile Include="utf8_marshaler.cs" />
     <Compile Include="utf16_marshaler.cs" />
+    <Compile Include="warp_status.cs" />
     <Compile Include="window_renderer.cs" />
   </ItemGroup>
   <ItemGroup>
