@@ -2010,5 +2010,114 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
             drifter2->trajectory().back().degrees_of_freedom.position());
 }
 
+// Inserts two equal stars 4×10¹⁶ m apart (star A at the origin, star B beyond
+// it).  The void midpoint at 2×10¹⁶ m is beyond the far-field-damping threshold
+// (~1.2 ly) of both, so a vessel there anchors.  Shared by the WS6-4 tests.
+void InsertTwoStarVoid(Plugin& plugin) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin.InsertCelestialAbsoluteCartesian(star_a,
+                                            /*parent_index=*/std::nullopt,
+                                            gravity_model,
+                                            initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin.InsertCelestialAbsoluteCartesian(star_b,
+                                            /*parent_index=*/star_a,
+                                            gravity_model,
+                                            initial_state);
+  }
+  plugin.EndInitialization();
+}
+
+// WS6-4: an anchored vessel's prediction must be a force-free coast, not a
+// plunge.  The prognostication is seeded from the near-origin anchored
+// coordinates; without the anchor the integrator reads them as
+// subsystem-relative (on top of the home star at the origin) and the
+// prediction plunges into it.
+TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidPredictionCoasts) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      302, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+  ASSERT_TRUE(drifter->anchor().has_value());
+
+  // Predict synchronously so the read is deterministic.
+  Vessel::MakeSynchronous();
+  plugin->UpdatePrediction({guid_void});
+  Vessel::MakeAsynchronous();
+
+  auto const& from_state = drifter->psychohistory()->back();
+  Instant const horizon = from_state.time + 1800 * Second;
+  Speed const coasting_gain =
+      (drifter->prediction()->EvaluateVelocity(horizon) -
+       from_state.degrees_of_freedom.velocity())
+          .Norm();
+  // Force-free void: the predicted velocity is unchanged over the horizon.  A
+  // plunge (the pre-fix behaviour) would show a huge gain toward the origin.
+  EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia

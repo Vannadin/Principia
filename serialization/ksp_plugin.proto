@@ -172,6 +172,10 @@ message Vessel {
     // The subsystem in whose representation this checkpoint is expressed;
     // absent for subsystem 0.  Added in NearStars.
     optional int32 subsystem = 4;
+    // The anchor further displacing that representation while the vessel coasts
+    // in the force-free inter-subsystem void; absent when unanchored.  Added in
+    // NearStars.
+    optional Ephemeris.Anchor anchor = 5;
   }
   required string guid = 13;
   required string name = 19;

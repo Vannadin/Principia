@@ -359,6 +359,11 @@ class Vessel {
     // The subsystem relative to whose local origin `first_degrees_of_freedom`
     // is represented.
     int subsystem = 0;
+    // The anchor further displacing that representation while the vessel coasts
+    // in the force-free inter-subsystem void; absent when unanchored.  Without
+    // it the integrator would read the near-origin anchored coordinates as
+    // subsystem-relative and plunge into the home star.
+    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
     // The burn applied by the last catch-up of the containing pile up, if
     // any; the prognostication anticipates the burn continuing until its
     // propellant runs out.
@@ -367,11 +372,12 @@ class Vessel {
   friend bool operator!=(PrognosticatorParameters const& left,
                          PrognosticatorParameters const& right);
 
-  // A prognostication, together with the subsystem in whose representation it
-  // is expressed.
+  // A prognostication, together with the subsystem and anchor in whose
+  // representation it is expressed.
   struct Prognostication {
     DiscreteTrajectory<Barycentric> trajectory;
     int subsystem = 0;
+    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
   };
 
   struct ReanimatorParameters {
@@ -510,11 +516,12 @@ class Vessel {
   // Parameter passed to the last call to `RequestReanimation`, if any.
   std::optional<Instant> last_desired_t_min_ ABSL_GUARDED_BY(lock_);
 
-  // A trajectory that has been reanimated, together with the subsystem in
-  // whose representation it is expressed.
+  // A trajectory that has been reanimated, together with the subsystem and
+  // anchor in whose representation it is expressed.
   struct ReanimatedTrajectory {
     DiscreteTrajectory<Barycentric> trajectory;
     int subsystem = 0;
+    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
   };
 
   // The trajectories that have been reanimated are put in this queue by
