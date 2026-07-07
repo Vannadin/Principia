@@ -144,6 +144,7 @@
     <Compile Include="map_node_pool.cs" />
     <Compile Include="marshalers.generated.cs" />
     <Compile Include="migration_monitor.cs" />
+    <Compile Include="on_rails_burner.cs" />
     <Compile Include="ownership_transfer_marshaler.cs" />
     <Compile Include="plotter.cs" />
     <Compile Include="repeated_marshaler.cs" />

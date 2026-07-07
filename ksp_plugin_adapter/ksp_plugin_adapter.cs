@@ -61,7 +61,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       "principia_numerics_blueprint";
   private const string principia_override_version_check_config_name =
       "principia_override_version_check";
-  private const string principia_flags = "principia_flags";
+  internal const string principia_flags = "principia_flags";
   private const string principia_draw_styles_config_name =
       "principia_draw_styles";
 
@@ -92,6 +92,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   private bool must_set_plotting_frame_ = false;
 
   private bool time_is_advancing_;
+
+  // Applies engine thrust to the packed active vessel under warp, as an
+  // on-rails burn consumed by the catch-up.
+  private readonly OnRailsBurner on_rails_burner_ = new OnRailsBurner();
 
   // Used to detect changes of SOI and skip two frames during which we use the
   // EulerSolver.
@@ -1715,6 +1719,23 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
             apocalypse_dialog_.Show();
           }
         }
+        // While the active vessel is packed under warp, its engines produce
+        // no force for the census in `FashionablyLate` to see; harvest them
+        // here as an on-rails burn, consumed and applied by the catch-up
+        // futures spawned below—the catch-up that advances a packed vessel.
+        // The burn is one-shot, so this must happen anew each frame.
+        if (OnRailsBurner.enabled) {
+          if (has_active_manageable_vessel() &&
+              FlightGlobals.ActiveVessel.packed &&
+              plugin_.HasVessel(FlightGlobals.ActiveVessel.id.ToString())) {
+            on_rails_burner_.HandleWarpFrame(
+                plugin_,
+                FlightGlobals.ActiveVessel,
+                Planetarium.TimeScale * Planetarium.fetch.fixedDeltaTime);
+          } else {
+            on_rails_burner_.ResetWarpStopMessageLatch();
+          }
+        }
         foreach (var vessel in FlightGlobals.Vessels) {
           string vessel_guid = vessel.id.ToString();
           if (vessel.packed && plugin_.HasVessel(vessel_guid)) {
@@ -2746,6 +2767,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         Interface.SetFlag(flag.name, flag.value);
       }
     }
+    OnRailsBurner.InvalidateFlagCache();
   }
 
   private void UpdatePlottingFrame(PlottingFrameParameters frame_parameters,
