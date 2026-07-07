@@ -1,4 +1,4 @@
-namespace principia {
+﻿namespace principia {
 namespace ksp_plugin_adapter {
 
 // The warp release channel.  This module is instantiated by KSP on every
