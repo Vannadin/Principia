@@ -96,6 +96,21 @@ internal class OnRailsBurner {
         if (engine_thrust <= 0 || vacuum_specific_impulse <= 0) {
           continue;
         }
+        // The mixture density converts the engine mass flow to per-propellant
+        // unit rates using KSP's ratio bookkeeping; massless resources
+        // (electric charge) drain by ratio without contributing to the
+        // density, as in stock.  An engine whose whole mixture is massless
+        // cannot deplete mass at its stated specific impulse: it is excluded
+        // from the burn rather than granted free, undrained thrust.
+        double mixture_density = 0;  // t per unit.
+        foreach (Propellant propellant in engine.propellants) {
+          mixture_density += propellant.ratio *
+                             PartResourceLibrary.Instance.
+                                 GetDefinition(propellant.id).density;
+        }
+        if (mixture_density <= 0) {
+          continue;
+        }
         // kN / (m/s) = t/s.
         double engine_mass_flow =
             engine_thrust / (vacuum_specific_impulse * engine.g);
@@ -114,27 +129,16 @@ internal class OnRailsBurner {
               (Vector3d)thrust_transform.position - centre_of_mass,
               force);
         }
-        // Convert the engine mass flow to per-propellant unit rates using
-        // KSP's ratio bookkeeping; massless resources (electric charge) drain
-        // by ratio without contributing to the mixture density, as in stock.
-        double mixture_density = 0;  // t per unit.
+        double unit_flow = engine_mass_flow / mixture_density;  // units/s.
         foreach (Propellant propellant in engine.propellants) {
-          mixture_density += propellant.ratio *
-                             PartResourceLibrary.Instance.
-                                 GetDefinition(propellant.id).density;
-        }
-        if (mixture_density > 0) {
-          double unit_flow = engine_mass_flow / mixture_density;  // units/s.
-          foreach (Propellant propellant in engine.propellants) {
-            double rate = unit_flow * propellant.ratio;
-            drains.Add(new PropellantDrain{
-                part = part,
-                resource_id = propellant.id,
-                rate = rate,
-                flow_mode = propellant.GetFlowMode()});
-            drain_rates.TryGetValue(propellant.id, out double total_rate);
-            drain_rates[propellant.id] = total_rate + rate;
-          }
+          double rate = unit_flow * propellant.ratio;
+          drains.Add(new PropellantDrain{
+              part = part,
+              resource_id = propellant.id,
+              rate = rate,
+              flow_mode = propellant.GetFlowMode()});
+          drain_rates.TryGetValue(propellant.id, out double total_rate);
+          drain_rates[propellant.id] = total_rate + rate;
         }
         total_thrust += engine_thrust;
         total_mass_flow += engine_mass_flow;
