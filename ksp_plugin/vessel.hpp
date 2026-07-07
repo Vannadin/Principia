@@ -460,6 +460,12 @@ class Vessel {
   LazilyDeserializedFlightPlan& selected_flight_plan();
   LazilyDeserializedFlightPlan const& selected_flight_plan() const;
 
+  // Translates the rigid motions of the parts (and the pile-up) by the given
+  // affine offset, retagging them with the current anchor.
+  void TranslateParts(Displacement<Barycentric> const& displacement,
+                      Velocity<Barycentric> const& velocity_offset,
+                      Instant const& t);
+
   GUID const guid_;
   std::string name_;
 
@@ -469,12 +475,6 @@ class Vessel {
   // The parent body for the 2-body approximation.
   not_null<Celestial const*> parent_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
-  // Translates the rigid motions of the parts (and the pile-up) by the given
-  // affine offset, retagging them with the current anchor.
-  void TranslateParts(Displacement<Barycentric> const& displacement,
-                      Velocity<Barycentric> const& velocity_offset,
-                      Instant const& t);
-
   int subsystem_ = 0;
   std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
   std::optional<DiscreteTrajectorySegment<Barycentric>::DownsamplingParameters>

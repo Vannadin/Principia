@@ -18,9 +18,9 @@
 #include "ksp_plugin/part_subsets.hpp"  // 🧙 For Subset<Part>.
 #include "ksp_plugin/pile_up.hpp"
 #include "physics/degrees_of_freedom.hpp"
-#include "physics/ephemeris.hpp"
 #include "physics/discrete_trajectory.hpp"
 #include "physics/discrete_trajectory_segment_iterator.hpp"
+#include "physics/ephemeris.hpp"
 #include "physics/rigid_motion.hpp"
 #include "physics/tensors.hpp"
 #include "quantities/named_quantities.hpp"
@@ -42,9 +42,9 @@ using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
 using namespace principia::ksp_plugin::_pile_up;
 using namespace principia::physics::_degrees_of_freedom;
-using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_discrete_trajectory_segment_iterator;
+using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_tensors;
 using namespace principia::quantities::_named_quantities;

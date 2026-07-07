@@ -21,6 +21,7 @@
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
+#include "base/algebra.hpp"
 #include "base/concepts.hpp"
 #include "base/graveyard.hpp"
 #include "base/macros.hpp"  // 🧙 For NAMED.
@@ -30,7 +31,6 @@
 #include "geometry/orthogonal_map.hpp"
 #include "geometry/space_transformations.hpp"
 #include "ksp_plugin/integrators.hpp"
-#include "base/algebra.hpp"
 #include "physics/rigid_motion.hpp"
 #include "quantities/named_quantities.hpp"
 #include "testing_utilities/make_not_null.hpp"

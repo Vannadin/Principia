@@ -651,12 +651,20 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
     // Remove the fork.
     trajectory_.DeleteSegments(psychohistory_);
     if (fixed_instance_ == nullptr) {
+      // Pass an empty vector rather than `{anchor_}` when the pile up is not
+      // anchored, so that the instance takes the anchorless fast path (a
+      // one-element vector holding nullopt would leave `has_anchors` set and
+      // cost a per-pair check on every step); this mirrors what
+      // `FlowWithAdaptiveStep` does with its single-anchor argument.
       fixed_instance_ = ephemeris_->NewInstance(
           {&trajectory_},
           Ephemeris<Barycentric>::NoIntrinsicAccelerations,
           fixed_step_parameters_,
           {subsystem_},
-          {anchor_});
+          anchor_.has_value()
+              ? std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{
+                    anchor_}
+              : std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{});
     }
     CHECK_LT(history_->back().time, t);
     status = ephemeris_->FlowWithFixedStep(t, *fixed_instance_);
