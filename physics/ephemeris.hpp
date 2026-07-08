@@ -142,6 +142,25 @@ class Ephemeris {
         serialization::Ephemeris::Anchor const& message);
   };
 
+  // Bundles the two parameters that together specify how a massless
+  // trajectory's positions are represented: the `subsystem` relative to whose
+  // local origin they are expressed, and the per-vessel `anchor` (if any)
+  // further displacing that representation in the force-free void.  They travel
+  // together — and the constructor requires both — so that a call site naming a
+  // subsystem cannot silently forget the anchor, the omission that made an
+  // anchored vessel's trajectory plunge into its home star.  Use `Stock()` for
+  // the ordinary { subsystem 0, no anchor } case; a `Stock()` at a call site
+  // reads as an intentional anchorless placement rather than a mistake.
+  struct SubsystemPlacement {
+    SubsystemPlacement(int const subsystem, std::optional<Anchor> anchor)
+        : subsystem(subsystem), anchor(std::move(anchor)) {}
+    static SubsystemPlacement Stock() {
+      return SubsystemPlacement(0, std::nullopt);
+    }
+    int subsystem;
+    std::optional<Anchor> anchor;
+  };
+
   class AccuracyParameters final {
    public:
     AccuracyParameters(Length const& fitting_tolerance,
@@ -280,20 +299,18 @@ class Ephemeris {
 
   // Creates an instance suitable for integrating the given `trajectories` with
   // their `intrinsic_accelerations` using a fixed-step integrator parameterized
-  // by `parameters`.  If `subsystems` is nonempty, it must be parallel to
-  // `trajectories` and give the subsystem relative to whose local origin the
-  // positions of each trajectory are represented; empty means subsystem 0 for
-  // all the trajectories.  If `anchors` is nonempty, it must be parallel to
-  // `trajectories` and give, for the trajectories where it is set, the anchor
-  // (relative to their subsystem's origin) of their representation.
+  // by `parameters`.  If `placements` is nonempty, it must be parallel to
+  // `trajectories` and give the `SubsystemPlacement` (subsystem local origin,
+  // plus anchor if set) relative to which the positions of each trajectory are
+  // represented; empty means `SubsystemPlacement::Stock()` for all the
+  // trajectories.
   virtual not_null<
       std::unique_ptr<typename Integrator<NewtonianMotionEquation>::Instance>>
   NewInstance(
       std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
       IntrinsicAccelerations const& intrinsic_accelerations,
       FixedStepParameters const& parameters,
-      std::vector<int> const& subsystems = {},
-      std::vector<std::optional<Anchor>> const& anchors = {});
+      std::vector<SubsystemPlacement> const& placements = {});
 
   // Same as above, but returns an error status if the thread is stopped.
   virtual absl::StatusOr<not_null<
@@ -302,24 +319,22 @@ class Ephemeris {
       std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
       IntrinsicAccelerations const& intrinsic_accelerations,
       FixedStepParameters const& parameters,
-      std::vector<int> const& subsystems = {},
-      std::vector<std::optional<Anchor>> const& anchors = {});
+      std::vector<SubsystemPlacement> const& placements = {});
 
   // Integrates, until exactly `t` (except for timeouts or singularities), the
   // `trajectory` followed by a massless body in the gravitational potential
   // described by `*this`.  If `t > t_max()`, calls `Prolong(t)` beforehand.
   // Prolongs the ephemeris by at most `max_ephemeris_steps`.  Returns OK if and
   // only if `*trajectory` was integrated until `t`.  The positions of the
-  // `trajectory` are represented relative to the local origin of `subsystem`,
-  // further displaced by `anchor` if it is set.
+  // `trajectory` are represented as given by `placement` (relative to the local
+  // origin of its subsystem, further displaced by its anchor if set).
   virtual absl::Status FlowWithAdaptiveStep(
       not_null<DiscreteTrajectory<Frame>*> trajectory,
       IntrinsicAcceleration intrinsic_acceleration,
       Instant const& t,
       AdaptiveStepParameters const& parameters,
       std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps,
-      int subsystem = 0,
-      std::optional<Anchor> const& anchor = std::nullopt)
+      SubsystemPlacement const& placement = SubsystemPlacement::Stock())
       EXCLUDES(lock_);
 
   // Same as above, but uses a generalized integrator.
@@ -329,8 +344,7 @@ class Ephemeris {
       Instant const& t,
       GeneralizedAdaptiveStepParameters const& parameters,
       std::int64_t max_ephemeris_steps = unlimited_max_ephemeris_steps,
-      int subsystem = 0,
-      std::optional<Anchor> const& anchor = std::nullopt)
+      SubsystemPlacement const& placement = SubsystemPlacement::Stock())
       EXCLUDES(lock_);
 
   // Integrates, until at most `t`, the trajectories followed by massless

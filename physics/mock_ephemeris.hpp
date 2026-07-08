@@ -26,6 +26,7 @@ class MockEphemeris : public Ephemeris<Frame> {
   using typename Ephemeris<Frame>::IntrinsicAcceleration;
   using typename Ephemeris<Frame>::IntrinsicAccelerations;
   using typename Ephemeris<Frame>::NewtonianMotionEquation;
+  using typename Ephemeris<Frame>::SubsystemPlacement;
 
   MockEphemeris()
       : Ephemeris<Frame>(
@@ -79,8 +80,7 @@ class MockEphemeris : public Ephemeris<Frame> {
       (std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
        IntrinsicAccelerations const& intrinsic_accelerations,
        FixedStepParameters const& parameters,
-       std::vector<int> const& subsystems,
-       std::vector<std::optional<Anchor>> const& anchors),
+       std::vector<SubsystemPlacement> const& placements),
       (override));
   MOCK_METHOD(absl::Status,
               FlowWithAdaptiveStep,
@@ -89,8 +89,7 @@ class MockEphemeris : public Ephemeris<Frame> {
                Instant const& t,
                AdaptiveStepParameters const& parameters,
                std::int64_t max_ephemeris_steps,
-               int subsystem,
-               std::optional<Anchor> const& anchor),
+               SubsystemPlacement const& placement),
               (override));
   MOCK_METHOD(
       absl::Status,

@@ -282,11 +282,7 @@ absl::Status OrbitAnalyser::FlowWithProgressBar(
       trajectories,
       Ephemeris<Barycentric>::NoIntrinsicAccelerations,
       analysed_trajectory_parameters_,
-      {parameters.subsystem},
-      parameters.anchor.has_value()
-          ? std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{
-                parameters.anchor}
-          : std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{});
+      {{parameters.subsystem, parameters.anchor}});
   RETURN_IF_STOPPED;
 
   constexpr double progress_bar_steps = 0x1p10;

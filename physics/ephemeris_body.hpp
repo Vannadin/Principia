@@ -636,13 +636,11 @@ Ephemeris<Frame>::NewInstance(
     std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
     IntrinsicAccelerations const& intrinsic_accelerations,
     FixedStepParameters const& parameters,
-    std::vector<int> const& subsystems,
-    std::vector<std::optional<Anchor>> const& anchors) {
+    std::vector<SubsystemPlacement> const& placements) {
   return StoppableNewInstance(trajectories,
                               intrinsic_accelerations,
                               parameters,
-                              subsystems,
-                              anchors)
+                              placements)
       .value();
 }
 
@@ -653,21 +651,25 @@ Ephemeris<Frame>::StoppableNewInstance(
     std::vector<not_null<DiscreteTrajectory<Frame>*>> const& trajectories,
     IntrinsicAccelerations const& intrinsic_accelerations,
     FixedStepParameters const& parameters,
-    std::vector<int> const& subsystems,
-    std::vector<std::optional<Anchor>> const& anchors) {
+    std::vector<SubsystemPlacement> const& placements) {
   InitialValueProblem<NewtonianMotionEquation> problem;
 
-  CHECK(subsystems.empty() || subsystems.size() == trajectories.size());
-  for (int const subsystem : subsystems) {
+  CHECK(placements.empty() || placements.size() == trajectories.size());
+  std::vector<int> massless_subsystems(trajectories.size());
+  // Left empty (the anchorless fast path) unless some placement is anchored, in
+  // which case it is grown to full size once, the unset entries staying nullopt.
+  std::vector<std::optional<Anchor>> massless_anchors;
+  for (int i = 0; i < placements.size(); ++i) {
+    int const subsystem = placements[i].subsystem;
     CHECK_GE(subsystem, 0);
     CHECK_LT(subsystem, subsystem_origin_offset_.size());
-  }
-  std::vector<int> massless_subsystems = subsystems;
-  massless_subsystems.resize(trajectories.size());
-  CHECK(anchors.empty() || anchors.size() == trajectories.size());
-  std::vector<std::optional<Anchor>> massless_anchors = anchors;
-  if (!massless_anchors.empty()) {
-    massless_anchors.resize(trajectories.size());
+    massless_subsystems[i] = subsystem;
+    if (placements[i].anchor.has_value()) {
+      if (massless_anchors.empty()) {
+        massless_anchors.resize(trajectories.size());
+      }
+      massless_anchors[i] = placements[i].anchor;
+    }
   }
 
   problem.equation.compute_acceleration =
@@ -731,14 +733,15 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     Instant const& t,
     AdaptiveStepParameters const& parameters,
     std::int64_t const max_ephemeris_steps,
-    int const subsystem,
-    std::optional<Anchor> const& anchor) {
+    SubsystemPlacement const& placement) {
+  int const subsystem = placement.subsystem;
   CHECK_GE(subsystem, 0);
   CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<int> const massless_subsystems(1, subsystem);
   std::vector<std::optional<Anchor>> const massless_anchors =
-      anchor.has_value() ? std::vector<std::optional<Anchor>>(1, anchor)
-                         : std::vector<std::optional<Anchor>>{};
+      placement.anchor.has_value()
+          ? std::vector<std::optional<Anchor>>(1, placement.anchor)
+          : std::vector<std::optional<Anchor>>{};
   auto compute_acceleration = [this,
                                &intrinsic_acceleration,
                                &massless_subsystems,
@@ -775,14 +778,15 @@ absl::Status Ephemeris<Frame>::FlowWithAdaptiveStep(
     Instant const& t,
     GeneralizedAdaptiveStepParameters const& parameters,
     std::int64_t max_ephemeris_steps,
-    int const subsystem,
-    std::optional<Anchor> const& anchor) {
+    SubsystemPlacement const& placement) {
+  int const subsystem = placement.subsystem;
   CHECK_GE(subsystem, 0);
   CHECK_LT(subsystem, subsystem_origin_offset_.size());
   std::vector<int> const massless_subsystems(1, subsystem);
   std::vector<std::optional<Anchor>> const massless_anchors =
-      anchor.has_value() ? std::vector<std::optional<Anchor>>(1, anchor)
-                         : std::vector<std::optional<Anchor>>{};
+      placement.anchor.has_value()
+          ? std::vector<std::optional<Anchor>>(1, placement.anchor)
+          : std::vector<std::optional<Anchor>>{};
   auto compute_acceleration =
       [this, &intrinsic_acceleration, &massless_subsystems, &massless_anchors](
           Instant const& t,

@@ -67,7 +67,8 @@ FlightPlan::FlightPlan(
     Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters,
     Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
         generalized_adaptive_step_parameters,
-    int const subsystem)
+    int const subsystem,
+    std::optional<Ephemeris<Barycentric>::Anchor> anchor)
     : initial_mass_(initial_mass),
       initial_time_(initial_time),
       initial_degrees_of_freedom_(initial_degrees_of_freedom),
@@ -76,7 +77,8 @@ FlightPlan::FlightPlan(
       adaptive_step_parameters_(std::move(adaptive_step_parameters)),
       generalized_adaptive_step_parameters_(
           std::move(generalized_adaptive_step_parameters)),
-      subsystem_(subsystem) {
+      subsystem_(subsystem),
+      anchor_(std::move(anchor)) {
   CHECK(desired_final_time_ >= initial_time_);
   MakeProlongator(desired_final_time_);
 
@@ -100,6 +102,7 @@ FlightPlan::FlightPlan(FlightPlan const& other)
       desired_final_time_(other.desired_final_time_),
       anomalous_segments_(other.anomalous_segments_),
       subsystem_(other.subsystem_),
+      anchor_(other.anchor_),
       manœuvres_(other.manœuvres_),
       analysis_is_enabled_(other.analysis_is_enabled_),
       adaptive_step_parameters_(other.adaptive_step_parameters_),
@@ -373,6 +376,9 @@ void FlightPlan::WriteToMessage(
   if (subsystem_ != 0) {
     message->set_subsystem(subsystem_);
   }
+  if (anchor_.has_value()) {
+    anchor_->WriteToMessage(message->mutable_anchor());
+  }
 }
 
 std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
@@ -407,6 +413,11 @@ std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
           DegreesOfFreedom<Barycentric>::ReadFromMessage(
               message.initial_degrees_of_freedom()));
 
+  std::optional<Ephemeris<Barycentric>::Anchor> anchor;
+  if (message.has_anchor()) {
+    anchor = Ephemeris<Barycentric>::Anchor::ReadFromMessage(message.anchor());
+  }
+
   auto flight_plan = std::make_unique<FlightPlan>(
       Mass::ReadFromMessage(message.initial_mass()),
       initial_time,
@@ -415,7 +426,8 @@ std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
       ephemeris,
       *adaptive_step_parameters,
       *generalized_adaptive_step_parameters,
-      message.subsystem());
+      message.subsystem(),
+      anchor);
 
   for (int i = 0; i < message.manoeuvre_size(); ++i) {
     auto const& manoeuvre = message.manoeuvre(i);
@@ -460,16 +472,34 @@ absl::Status FlightPlan::Rebase(
     Displacement<Barycentric> const& displacement_at_epoch,
     Velocity<Barycentric> const& velocity_offset,
     Instant const& epoch,
-    int const subsystem) {
+    int const subsystem,
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
+  // The subsystem re-expression is supplied by the caller in
+  // `displacement_at_epoch`/`velocity_offset`; add the delta between the old
+  // (`anchor_`) and new (`anchor`) anchors so that an anchored flight plan is
+  // re-expressed consistently.  A nullopt anchor contributes the zero offset.
+  auto const anchor_offset =
+      [&epoch](std::optional<Ephemeris<Barycentric>::Anchor> const& a) {
+        return a.has_value() ? a->OffsetAt(epoch) : Displacement<Barycentric>{};
+      };
+  auto const anchor_velocity =
+      [](std::optional<Ephemeris<Barycentric>::Anchor> const& a) {
+        return a.has_value() ? a->velocity : Velocity<Barycentric>{};
+      };
+  Displacement<Barycentric> const total_displacement =
+      displacement_at_epoch + anchor_offset(anchor_) - anchor_offset(anchor);
+  Velocity<Barycentric> const total_velocity =
+      velocity_offset + anchor_velocity(anchor_) - anchor_velocity(anchor);
   initial_degrees_of_freedom_ = DegreesOfFreedom<Barycentric>(
-      initial_degrees_of_freedom_.position() + displacement_at_epoch +
-          velocity_offset * (initial_time_ - epoch),
-      initial_degrees_of_freedom_.velocity() + velocity_offset);
+      initial_degrees_of_freedom_.position() + total_displacement +
+          total_velocity * (initial_time_ - epoch),
+      initial_degrees_of_freedom_.velocity() + total_velocity);
   subsystem_ = subsystem;
+  anchor_ = anchor;
   // `RecomputeAllSegments` retains the first point of the first coasting
   // segment and flows from it; translate the trajectory so that the
   // recomputation starts from the rebased initial state.
-  trajectory_.Translate(displacement_at_epoch, velocity_offset, epoch);
+  trajectory_.Translate(total_displacement, total_velocity, epoch);
   return RecomputeAllSegments();
 }
 
@@ -519,7 +549,7 @@ absl::Status FlightPlan::BurnSegment(
                              final_time,
                              adaptive_step_parameters_,
                              max_ephemeris_steps,
-                             subsystem_);
+                             {subsystem_, anchor_});
     } else {
       return ephemeris_->FlowWithAdaptiveStep(
                              &trajectory_,
@@ -527,7 +557,7 @@ absl::Status FlightPlan::BurnSegment(
                              final_time,
                              generalized_adaptive_step_parameters_,
                              max_ephemeris_steps,
-                             subsystem_);
+                             {subsystem_, anchor_});
     }
   } else {
     return absl::OkStatus();
@@ -551,7 +581,7 @@ absl::Status FlightPlan::CoastSegment(
                          desired_final_time,
                          adaptive_step_parameters_,
                          max_ephemeris_steps,
-                         subsystem_);
+                         {subsystem_, anchor_});
 }
 
 absl::Status FlightPlan::ComputeSegments(

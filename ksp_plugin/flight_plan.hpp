@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "absl/status/status.h"
@@ -43,7 +44,9 @@ class FlightPlan {
   // `ephemeris`.  The flight plan contains a single coast which, if possible
   // ends at `desired_final_time`.
   // `subsystem` is the subsystem in whose representation
-  // `initial_degrees_of_freedom` (and hence the whole plan) is expressed.
+  // `initial_degrees_of_freedom` (and hence the whole plan) is expressed, and
+  // `anchor` further displaces that representation when the vessel is anchored
+  // in the force-free void; both are sourced from the vessel.
   FlightPlan(Mass const& initial_mass,
              Instant const& initial_time,
              DegreesOfFreedom<Barycentric> const& initial_degrees_of_freedom,
@@ -53,22 +56,27 @@ class FlightPlan {
                  adaptive_step_parameters,
              Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
                  generalized_adaptive_step_parameters,
-             int subsystem = 0);
+             int subsystem = 0,
+             std::optional<Ephemeris<Barycentric>::Anchor> anchor =
+                 std::nullopt);
 
   explicit FlightPlan(FlightPlan const& other);
 
   virtual ~FlightPlan() = default;
 
   // Re-expresses this flight plan relative to the local origin of the given
-  // `subsystem`, by translating its initial degrees of freedom by
+  // `subsystem` and `anchor`, by translating its initial degrees of freedom by
   // `displacement_at_epoch + velocity_offset * (initial_time() - epoch)` in
-  // position and by `velocity_offset` in velocity, and recomputing all the
-  // segments.
+  // position and by `velocity_offset` in velocity (the subsystem re-expression,
+  // supplied by the caller), further translated by the delta between the old
+  // and new anchors, and recomputing all the segments.
   virtual absl::Status Rebase(
       Displacement<Barycentric> const& displacement_at_epoch,
       Velocity<Barycentric> const& velocity_offset,
       Instant const& epoch,
-      int subsystem);
+      int subsystem,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+          std::nullopt);
 
   // Construction parameters.
   virtual Instant initial_time() const;
@@ -290,6 +298,12 @@ class FlightPlan {
   Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
       generalized_adaptive_step_parameters_;
   int subsystem_ = 0;
+  // The anchor further displacing this flight plan's representation while its
+  // vessel coasts in the force-free inter-subsystem void; absent when
+  // unanchored.  Sourced from the vessel like `subsystem_`; without it the
+  // integrator reads the near-origin anchored coordinates as subsystem-relative
+  // and the plan plunges into the home star.
+  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
 };
 
 }  // namespace internal

@@ -348,10 +348,10 @@ TEST_F(VesselTest, PrepareHistory) {
   EXPECT_CALL(ephemeris_, t_max())
       .WillRepeatedly(Return(t0_ + 2 * Second));
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _))
       .Times(AnyNumber());
   vessel_.CreateTrajectoryIfNeeded(t0_ + 1 * Second);
 
@@ -370,10 +370,10 @@ TEST_F(VesselTest, AdvanceTime) {
   EXPECT_CALL(ephemeris_, t_max())
       .WillRepeatedly(Return(t0_ + 2 * Second));
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _))
       .Times(AnyNumber());
   vessel_.DisableDownsampling();
   vessel_.CreateTrajectoryIfNeeded(t0_);
@@ -435,7 +435,7 @@ TEST_F(VesselTest, Prediction) {
       /*t1=*/t0_,
       /*t2=*/t0_ + 2 * Second);
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _))
       .WillRepeatedly(DoAll(
           AppendPointsToDiscreteTrajectory(&expected_vessel_prediction),
           Return(absl::OkStatus())));
@@ -444,7 +444,7 @@ TEST_F(VesselTest, Prediction) {
   // these points.
   EXPECT_CALL(
       ephemeris_,
-      FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+      FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .WillRepeatedly(Return(absl::OkStatus()));
 
   vessel_.CreateTrajectoryIfNeeded(t0_);
@@ -490,7 +490,7 @@ TEST_F(VesselTest, PredictBeyondTheInfinite) {
       /*t1=*/t0_,
       /*t2=*/t0_ + 5.5 * Second);
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 5 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 5 * Second, _, _, _))
       .WillRepeatedly(DoAll(
           AppendPointsToDiscreteTrajectory(&expected_vessel_prediction1),
           Return(absl::OkStatus())));
@@ -502,7 +502,7 @@ TEST_F(VesselTest, PredictBeyondTheInfinite) {
       /*t1=*/t0_ + 5.5 * Second,
       /*t2=*/t0_ + FlightPlan::max_ephemeris_steps_per_frame * Second);
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .WillRepeatedly(DoAll(
           AppendPointsToDiscreteTrajectory(&expected_vessel_prediction2),
           Return(absl::OkStatus())));
@@ -538,13 +538,13 @@ TEST_F(VesselTest, FlightPlan) {
   EXPECT_CALL(ephemeris_, t_max())
       .WillRepeatedly(Return(t0_ + 4 * Second));
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 3 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 3 * Second, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
               Prolong(_, _))
@@ -672,10 +672,10 @@ TEST_F(VesselTest, CheckpointsWithoutDownsampling) {
   EXPECT_CALL(ephemeris_, t_max())
       .WillRepeatedly(Return(t0_ + 30 * Second));
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 30 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 30 * Second, _, _, _))
       .Times(AnyNumber());
 
   vessel_.DisableDownsampling();
@@ -850,10 +850,10 @@ TEST_F(VesselTest, CheckpointsWithDownsampling) {
   EXPECT_CALL(ephemeris_, t_max())
       .WillRepeatedly(Return(t0_ + 30 * Second));
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 30 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 30 * Second, _, _, _))
       .Times(AnyNumber());
 
 
@@ -993,15 +993,15 @@ TEST_F(VesselTest, SerializationSuccess) {
   EXPECT_CALL(ephemeris_, t_max())
       .WillRepeatedly(Return(t0_ + 4 * Second));
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 2 * Second, _, _, _))
       .Times(AnyNumber());
   vessel_.CreateTrajectoryIfNeeded(t0_);
 
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 3 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 3 * Second, _, _, _))
       .WillRepeatedly(Return(absl::OkStatus()));
   EXPECT_CALL(ephemeris_,
               Prolong(_, _))
@@ -1047,10 +1047,10 @@ TEST_F(VesselTest, TailSerialization) {
   EXPECT_CALL(ephemeris_, t_max())
       .WillRepeatedly(Return(t0_ + 30 * Second));
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, InfiniteFuture, _, _, _))
       .Times(AnyNumber());
   EXPECT_CALL(ephemeris_,
-              FlowWithAdaptiveStep(_, _, t0_ + 30 * Second, _, _, _, _))
+              FlowWithAdaptiveStep(_, _, t0_ + 30 * Second, _, _, _))
       .Times(AnyNumber());
   vessel_.CreateTrajectoryIfNeeded(t0_);
 

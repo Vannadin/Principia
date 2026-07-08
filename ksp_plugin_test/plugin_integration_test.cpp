@@ -25,6 +25,7 @@
 #include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
+#include "integrators/embedded_explicit_generalized_runge_kutta_nyström_integrator.hpp"  // NOLINT
 #include "integrators/embedded_explicit_runge_kutta_nyström_integrator.hpp"
 #include "integrators/methods.hpp"
 #include "ksp_plugin/frames.hpp"
@@ -64,6 +65,7 @@ using namespace principia::geometry::_instant;
 using namespace principia::geometry::_permutation;
 using namespace principia::geometry::_rotation;
 using namespace principia::geometry::_space;
+using namespace principia::integrators::_embedded_explicit_generalized_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_methods;
 using namespace principia::ksp_plugin::_frames;
@@ -2117,6 +2119,68 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidPredictionCoasts) {
           .Norm();
   // Force-free void: the predicted velocity is unchanged over the horizon.  A
   // plunge (the pre-fix behaviour) would show a huge gain toward the origin.
+  EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
+}
+
+// R1/WS6-5/6: a flight plan created from an anchored void vessel must coast
+// weightlessly, not plunge.  Its coast segment is flowed from the near-origin
+// anchored coordinates by `FlightPlan::CoastSegment`; the pre-fix code carried
+// `subsystem_` but no anchor (the F1 defect's live sixth recurrence), so the
+// integrator read the coordinates as subsystem-relative and the plan plunged
+// into the home star.  `SubsystemPlacement` now carries the anchor into every
+// flow, so the coast is force-free.
+TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidFlightPlanCoasts) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      302, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+  ASSERT_TRUE(drifter->anchor().has_value());
+
+  drifter->CreateFlightPlan(
+      drifter->trajectory().back().time + 1 * Hour,
+      1 * Kilogram,
+      Ephemeris<Barycentric>::AdaptiveStepParameters(
+          EmbeddedExplicitRungeKuttaNyströmIntegrator<
+              DormandالمكاوىPrince1986RKN434FM,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*max_steps=*/1000,
+          /*length_integration_tolerance=*/1 * Milli(Metre),
+          /*speed_integration_tolerance=*/1 * Milli(Metre) / Second),
+      Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters(
+          EmbeddedExplicitGeneralizedRungeKuttaNyströmIntegrator<
+              Fine1987RKNG34,
+              Ephemeris<Barycentric>::GeneralizedNewtonianMotionEquation>(),
+          /*max_steps=*/1000,
+          /*length_integration_tolerance=*/1 * Milli(Metre),
+          /*speed_integration_tolerance=*/1 * Milli(Metre) / Second));
+  ASSERT_TRUE(drifter->has_flight_plan());
+  auto const& flight_plan = drifter->flight_plan();
+  // No manœuvres: a single coast segment to the desired final time.
+  ASSERT_EQ(1, flight_plan.number_of_segments());
+  auto const coast = flight_plan.GetSegment(0);
+  Speed const coasting_gain =
+      (coast->back().degrees_of_freedom.velocity() -
+       coast->front().degrees_of_freedom.velocity())
+          .Norm();
+  // A plunge would show a huge gain toward the origin.
   EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
 }
 

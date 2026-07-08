@@ -27,6 +27,10 @@ message FlightPlan {
   // The subsystem in whose representation this flight plan is expressed;
   // absent for subsystem 0.  Added in NearStars.
   optional int32 subsystem = 14;
+  // The anchor further displacing that representation when the vessel is
+  // anchored in the force-free void; absent when unanchored.  Added in
+  // NearStars.
+  optional Ephemeris.Anchor anchor = 15;
 
   // Pre-Cardano.
   reserved 4, 5, 6, 7;

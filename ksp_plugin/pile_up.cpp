@@ -651,20 +651,16 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
     // Remove the fork.
     trajectory_.DeleteSegments(psychohistory_);
     if (fixed_instance_ == nullptr) {
-      // Pass an empty vector rather than `{anchor_}` when the pile up is not
-      // anchored, so that the instance takes the anchorless fast path (a
-      // one-element vector holding nullopt would leave `has_anchors` set and
-      // cost a per-pair check on every step); this mirrors what
-      // `FlowWithAdaptiveStep` does with its single-anchor argument.
+      // A single placement carrying `subsystem_` and `anchor_`.  When the pile
+      // up is unanchored (`anchor_` empty) `StoppableNewInstance` materializes
+      // no anchor vector, keeping the anchorless fast path (an anchor vector
+      // holding nullopt would leave `has_anchors` set and cost a per-pair check
+      // on every step).
       fixed_instance_ = ephemeris_->NewInstance(
           {&trajectory_},
           Ephemeris<Barycentric>::NoIntrinsicAccelerations,
           fixed_step_parameters_,
-          {subsystem_},
-          anchor_.has_value()
-              ? std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{
-                    anchor_}
-              : std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{});
+          {{subsystem_, anchor_}});
     }
     CHECK_LT(history_->back().time, t);
     status = ephemeris_->FlowWithFixedStep(t, *fixed_instance_);
@@ -678,8 +674,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           t,
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          subsystem_,
-          anchor_));
+          {subsystem_, anchor_}));
     }
   } else {
     // Destroy the fixed instance, it wouldn't be correct to use it the next
@@ -711,8 +706,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           t,
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          subsystem_,
-          anchor_);
+          {subsystem_, anchor_});
     } else {
       OnRailsBurn const& burn = *on_rails_burn_;
       Variation<Mass> const mass_flow = burn.thrust / burn.specific_impulse;
@@ -746,8 +740,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           std::min(final_time, t),
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          subsystem_,
-          anchor_);
+          {subsystem_, anchor_});
       if (status.ok() && trajectory_.back().time < t) {
         status.Update(ephemeris_->FlowWithAdaptiveStep(
             &trajectory_,
@@ -755,8 +748,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
             t,
             adaptive_step_parameters_,
             Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-            subsystem_,
-          anchor_));
+            {subsystem_, anchor_}));
       }
     }
     psychohistory_ = trajectory_.NewSegment();

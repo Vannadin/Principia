@@ -200,14 +200,14 @@ class InterstellarPrecisionTest : public ::testing::Test {
         t_final,
         adaptive_parameters,
         Ephemeris<ICRS>::unlimited_max_ephemeris_steps,
-        /*subsystem=*/0));
+        Ephemeris<ICRS>::SubsystemPlacement::Stock()));
     EXPECT_OK(ephemeris->FlowWithAdaptiveStep(
         &probe_b,
         Ephemeris<ICRS>::NoIntrinsicAcceleration,
         t_final,
         adaptive_parameters,
         Ephemeris<ICRS>::unlimited_max_ephemeris_steps,
-        /*subsystem=*/remote_subsystem));
+        {remote_subsystem, std::nullopt}));
 
     auto const& star_a = *ephemeris->trajectory(ephemeris->bodies()[0]);
     auto const& star_b = *ephemeris->trajectory(ephemeris->bodies()[2]);
@@ -601,7 +601,7 @@ TEST_F(InterstellarPrecisionTest, FarFieldDampedCoast) {
           /*length_integration_tolerance=*/1 * Metre,
           /*speed_integration_tolerance=*/1e-3 * Metre / Second),
       Ephemeris<ICRS>::unlimited_max_ephemeris_steps,
-      /*subsystem=*/0));
+      Ephemeris<ICRS>::SubsystemPlacement::Stock()));
   auto const& [final_time, final_degrees_of_freedom] = probe.back();
   EXPECT_EQ(final_time, t0 + 10 * JulianYear);
   EXPECT_EQ(final_degrees_of_freedom.velocity(), v0);
@@ -670,8 +670,7 @@ TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
           /*length_integration_tolerance=*/1 * Metre,
           /*speed_integration_tolerance=*/1e-3 * Metre / Second),
       Ephemeris<ICRS>::unlimited_max_ephemeris_steps,
-      /*subsystem=*/0,
-      anchor));
+      {/*subsystem=*/0, anchor}));
   auto const& [final_time, final_degrees_of_freedom] = probe.back();
   EXPECT_EQ(final_time, t0 + 10 * JulianYear);
   EXPECT_EQ(final_degrees_of_freedom.velocity(), ICRS::unmoving);

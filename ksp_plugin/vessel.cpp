@@ -304,7 +304,7 @@ void Vessel::RebaseTo(int const subsystem) {
         optimizable_flight_plan->optimization_driver->Interrupt();
       }
       optimizable_flight_plan->flight_plan
-          ->Rebase(displacement, velocity_offset, t, subsystem_)
+          ->Rebase(displacement, velocity_offset, t, subsystem_, anchor_)
           .IgnoreError();
     }
   }
@@ -603,7 +603,8 @@ void Vessel::ReadFlightPlanFromMessage() {
                           ephemeris_->subsystem_velocity_conversion(
                               flight_plan->subsystem(), subsystem_),
                           flight_plan->initial_time(),
-                          subsystem_).IgnoreError();
+                          subsystem_,
+                          anchor_).IgnoreError();
     }
     selected_flight_plan() = OptimizableFlightPlan{
         .flight_plan = std::move(flight_plan),
@@ -785,7 +786,8 @@ void Vessel::CreateFlightPlan(
           ephemeris_,
           flight_plan_adaptive_step_parameters,
           flight_plan_generalized_adaptive_step_parameters,
-          subsystem_),
+          subsystem_,
+          anchor_),
       .optimization_driver = nullptr});
   selected_flight_plan_index_ = flight_plans_.size() - 1;
 }
@@ -1549,11 +1551,7 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
       {&reanimated_trajectory},
       Ephemeris<Barycentric>::NoIntrinsicAccelerations,
       collapsible_fixed_step_parameters,
-      {checkpoint_subsystem},
-      checkpoint_anchor.has_value()
-          ? std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{
-                checkpoint_anchor}
-          : std::vector<std::optional<Ephemeris<Barycentric>::Anchor>>{});
+      {{checkpoint_subsystem, checkpoint_anchor}});
 
   auto const status = ephemeris_->FlowWithFixedStep(t_final, *fixed_instance);
   RETURN_IF_ERROR(status);
@@ -1619,8 +1617,7 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
         final_time,
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
-        prognosticator_parameters.subsystem,
-        prognosticator_parameters.anchor);
+        {prognosticator_parameters.subsystem, prognosticator_parameters.anchor});
   }
   if (status.ok()) {
     status = ephemeris_->FlowWithAdaptiveStep(
@@ -1629,8 +1626,7 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
         ephemeris_->t_max(),
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
-        prognosticator_parameters.subsystem,
-        prognosticator_parameters.anchor);
+        {prognosticator_parameters.subsystem, prognosticator_parameters.anchor});
   }
   bool const reached_t_max = status.ok();
   if (reached_t_max) {
@@ -1641,8 +1637,7 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
         InfiniteFuture,
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
-        prognosticator_parameters.subsystem,
-        prognosticator_parameters.anchor);
+        {prognosticator_parameters.subsystem, prognosticator_parameters.anchor});
   }
   LOG_IF_EVERY_N(INFO, !status.ok(), 50)
       << "Prognostication from " << prognosticator_parameters.first_time
