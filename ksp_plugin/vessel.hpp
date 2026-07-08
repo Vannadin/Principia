@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <queue>
 #include <string>
@@ -346,6 +347,13 @@ class Vessel {
   static void MakeSynchronous();
 
   static bool disallow_leibniz_conversion_for_testing_;
+
+  // The maximum number of points of a collapsible history that are serialized;
+  // the rest of the history is dropped and reconstructed by reanimation.  A
+  // mutable static (rather than a constant) so that tests can lower it to force
+  // the drop path with a short trajectory instead of the ~20'000 points it
+  // otherwise requires.
+  static std::int64_t max_points_to_serialize_for_testing_;
 
  protected:
   // For mocking.

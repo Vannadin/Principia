@@ -55,9 +55,6 @@ using namespace principia::testing_utilities::_make_not_null;
 
 using namespace std::chrono_literals;
 
-// TODO(phl): Move this to some kind of parameters.
-constexpr std::int64_t max_points_to_serialize = 20'000;
-
 // A vessel is rebased into another subsystem when the gravitational dominance
 // μ/d² of that subsystem exceeds that of its current subsystem by this
 // factor.  The margin makes the boundary hysteretic: switching back requires
@@ -995,7 +992,7 @@ void Vessel::WriteToMessage(not_null<serialization::Vessel*> const message,
   // segment.
   std::int64_t const history_size = backstory_->end() - trajectory_.begin();
   std::int64_t const max_points_to_serialize_present_in_history =
-      std::min(max_points_to_serialize, history_size);
+      std::min(max_points_to_serialize_for_testing_, history_size);
   std::int64_t const serialized_points =
       is_collapsible_ ? max_points_to_serialize_present_in_history
                       : std::max(max_points_to_serialize_present_in_history,
@@ -1937,6 +1934,8 @@ std::atomic_bool Vessel::synchronous_(false);
 #endif
 
 bool Vessel::disallow_leibniz_conversion_for_testing_ = false;
+
+std::int64_t Vessel::max_points_to_serialize_for_testing_ = 20'000;
 
 }  // namespace internal
 }  // namespace _vessel

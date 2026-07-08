@@ -10,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
@@ -2117,6 +2118,131 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidPredictionCoasts) {
   // Force-free void: the predicted velocity is unchanged over the horizon.  A
   // plunge (the pre-fix behaviour) would show a huge gain toward the origin.
   EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
+}
+
+// R2 drop-path golden fixture.  The ">20k-point history can't be cheaply
+// verified" narrative (sessions 8, 11, 18) was a test-seam gap, not a real
+// barrier: `Vessel::max_points_to_serialize_for_testing_` is the only obstacle.
+// Lowered here, a SHORT anchored burn is actually forgotten on save and
+// reconstructed by reanimation — the exact path WS6-4's Checkpoint anchor field
+// serves.  Fail-first character: without that anchor the checkpoint's
+// near-origin anchored coordinates are re-integrated as subsystem-relative (on
+// top of the home star), so the reconstruction plunges and diverges from the
+// actual burn arc by astronomical distances.  With it, the reconstruction
+// matches the actual state to sub-millimetre.  This is the shared harness that
+// would have caught s8's mistaken accept, s11 #2, and WS6-4 fail-first.
+TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredBurnSurvivesDropAndReanimation) {
+  // Force the collapsible-history drop with a handful of points instead of
+  // ~20'000, then restore the production value for the rest of the suite.
+  Vessel::max_points_to_serialize_for_testing_ = 2;
+  absl::Cleanup restore_max_points = [] {
+    Vessel::max_points_to_serialize_for_testing_ = 20'000;
+  };
+
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                             /*loaded=*/false, inserted);
+  // Deep in the void between the two stars, so the vessel anchors.
+  plugin->InsertUnloadedPart(
+      part_id, part_name, vessel_guid,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  ASSERT_TRUE(plugin->GetVessel(vessel_guid)->anchor().has_value());
+
+  Force const thrust = 1 * Newton;
+  SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
+  Variation<Mass> const mass_flow = thrust / specific_impulse;
+  Time const δt = 100 * Second;
+  Mass m = 1 * Kilogram;
+  Instant const t_start;
+  Instant t = t_start;
+  // In the first burn cycle, so it is dropped and must be reanimated.
+  Instant const t_sample = t_start + 2 * δt;
+
+  // Several burn/coast cycles.  Each burn is a non-collapsible arc; clearing it
+  // and coasting transitions the vessel back to collapsible, and that
+  // transition (detected in `FreeVesselsAndPartsAndCollectPileUps`) writes a
+  // checkpoint.  A single checkpoint is fully restored on load, so it is the
+  // *older* checkpoints that reanimation must walk back and reconstruct — hence
+  // several cycles.
+  for (int cycle = 0; cycle < 5; ++cycle) {
+    for (int i = 0; i < 3; ++i) {
+      t += δt;
+      plugin->AdvanceTime(t, 1 * Radian);
+      plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                                 /*loaded=*/false, inserted);
+      plugin->SetVesselOnRailsBurn(vessel_guid, thrust, specific_impulse,
+                                   /*initial_mass=*/m,
+                                   Vector<double, World>({0, 1, 0}),
+                                   /*max_duration=*/1 * Hour);
+      VesselSet collided_vessels;
+      plugin->CatchUpLaggingVessels(collided_vessels);
+      m -= δt * mass_flow;
+    }
+    plugin->ClearVesselOnRailsBurn(vessel_guid);
+    for (int i = 0; i < 2; ++i) {
+      t += δt;
+      plugin->AdvanceTime(t, 1 * Radian);
+      plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                                 /*loaded=*/false, inserted);
+      plugin->PrepareToReportCollisions();
+      plugin->FreeVesselsAndPartsAndCollectPileUps(δt);
+      VesselSet collided_vessels;
+      plugin->CatchUpLaggingVessels(collided_vessels);
+    }
+  }
+
+  // The actual (burn-affected) state at the sample instant.
+  DegreesOfFreedom<Barycentric> const actual =
+      plugin->GetVessel(vessel_guid)->trajectory().EvaluateDegreesOfFreedom(
+          t_sample);
+  EXPECT_THAT(actual.velocity().Norm(), Gt(100 * Metre / Second));
+
+  // Save and reload; the earlier burn cycles must now actually be dropped.
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  plugin = nullptr;
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+  auto const vessel2 = plugin2->GetVessel(vessel_guid);
+  ASSERT_GT(vessel2->trajectory().t_min(), t_sample)
+      << "the drop did not engage — the sample was still serialized, so the "
+         "reconstruction path is not exercised";
+
+  // Reanimate the forgotten past and confirm the sample was reconstructed
+  // through the anchor rather than plunging into the home star.
+  vessel2->AwaitReanimation(t_start, /*quiet=*/true);
+  ASSERT_LE(vessel2->trajectory().t_min(), t_sample);
+  ASSERT_TRUE(vessel2->anchor().has_value());
+  DegreesOfFreedom<Barycentric> const reconstructed =
+      vessel2->trajectory().EvaluateDegreesOfFreedom(t_sample);
+  Length const position_divergence =
+      (reconstructed.position() - actual.position()).Norm();
+  Speed const velocity_divergence =
+      (reconstructed.velocity() - actual.velocity()).Norm();
+  LOG(ERROR) << "Reanimation-vs-actual after a forced drop — position: "
+             << position_divergence << ", velocity: " << velocity_divergence;
+  // Reanimation re-integrates the dropped collapsible coasts, so the match is
+  // metre-scale, not bit-exact (cf. `VesselTest.Reanimator`, which only checks
+  // continuity).  The anchored trajectory is expressed in near-origin local
+  // coordinates (~20 km from the barycentric origin, the anchor carrying the
+  // ~2e16 m void offset separately); WITHOUT the checkpoint anchor the
+  // reconstruction re-integrates those near-origin coordinates as
+  // subsystem-relative, so the home star's field applies at ~20 km and the
+  // reconstruction diverges catastrophically.  These finite bounds are the
+  // discriminator.
+  EXPECT_THAT(position_divergence, Lt(10 * Metre));
+  EXPECT_THAT(velocity_divergence, Lt(0.1 * Metre / Second));
 }
 
 }  // namespace ksp_plugin
