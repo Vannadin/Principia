@@ -2184,6 +2184,80 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidFlightPlanCoasts) {
   EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
 }
 
+// WS6-6 (capstone): two vessels a few metres apart deep in the inter-stellar
+// void each adopt their own anchor.  The anchor is what makes a mm-scale
+// rendezvous representable at all: a vessel's *stored* coordinates stay near
+// its local origin (≈ 0), so the ULP of its own dynamics is sub-micron — mm
+// motions are resolvable — whereas an unanchored void vessel would carry ~2e16 m
+// coordinates whose ULP is ~4 m, quantizing away any metres-scale manœuvre.
+// The anchor also records where each vessel truly is, so the render / map-view /
+// ClosestApproaches placement recovers a *local* rendezvous (the two vessels
+// metres apart), not a ~2e16 m-scale artifact.  (The residual in the relative
+// geometry between two independently-anchored vessels is the ULP of the void
+// distance itself, ~4 m; a sub-mm docking follows once they share one pile-up.)
+TEST_F(PluginIntegrationTestWithoutPlugin, CoAnchoredVoidVesselsKeepLocalPrecision) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  Length const midpoint = 2e16 * Metre;
+
+  bool inserted;
+  GUID const guid_a = "station";
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a, /*loaded=*/false,
+                             inserted);
+  plugin->InsertUnloadedPart(
+      401, "part-a", guid_a,
+      {Displacement<AliceSun>({midpoint, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  GUID const guid_b = "visitor";
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_a, /*loaded=*/false,
+                             inserted);
+  plugin->InsertUnloadedPart(
+      402, "part-b", guid_b,
+      {Displacement<AliceSun>({midpoint + 5 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  not_null<Vessel*> const station = plugin->GetVessel(guid_a);
+  not_null<Vessel*> const visitor = plugin->GetVessel(guid_b);
+  ASSERT_TRUE(station->anchor().has_value());
+  ASSERT_TRUE(visitor->anchor().has_value());
+
+  // Each vessel's stored coordinates stay near its own local origin.  At this
+  // magnitude the ULP is sub-micron, so the vessel's own dynamics resolve mm
+  // motions — the property the anchor exists to provide.  Unanchored, these
+  // would be ~2e16 m (ULP ~4 m).
+  auto const& [t_a, dof_a] = station->trajectory().back();
+  auto const& [t_b, dof_b] = visitor->trajectory().back();
+  EXPECT_THAT((dof_a.position() - Barycentric::origin).Norm(), Lt(1e9 * Metre));
+  EXPECT_THAT((dof_b.position() - Barycentric::origin).Norm(), Lt(1e9 * Metre));
+
+  // The anchor records the true void position: adding it back places each
+  // vessel at the ~2e16 m midpoint (render placement is correct, not collapsed
+  // onto the home star at the origin).
+  Position<Barycentric> const true_a =
+      dof_a.position() + station->anchor()->OffsetAt(t_a);
+  Position<Barycentric> const true_b =
+      dof_b.position() + visitor->anchor()->OffsetAt(t_b);
+  EXPECT_THAT((true_a - Barycentric::origin).Norm(),
+              AllOf(Gt(1e16 * Metre), Lt(3e16 * Metre)));
+  EXPECT_THAT((true_b - Barycentric::origin).Norm(),
+              AllOf(Gt(1e16 * Metre), Lt(3e16 * Metre)));
+
+  // The two anchored vessels are recovered as a *local* rendezvous — metres
+  // apart, not ~2e16 m — so a closest-approach plot sees their true relative
+  // geometry.  The exact separation carries the ULP of the void distance (a few
+  // metres); the point is it is not a void-scale artifact.
+  EXPECT_THAT((true_b - true_a).Norm(), Lt(1 * Kilo(Metre)));
+}
+
 // R2 drop-path golden fixture.  The ">20k-point history can't be cheaply
 // verified" narrative (sessions 8, 11, 18) was a test-seam gap, not a real
 // barrier: `Vessel::max_points_to_serialize_for_testing_` is the only obstacle.
