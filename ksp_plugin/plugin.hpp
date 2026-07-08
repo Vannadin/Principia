@@ -385,8 +385,8 @@ class Plugin {
 
   // Computes the apsides of the trajectory defined by `begin` and `end` with
   // respect to the celestial with index `celestial_index`.  In this function
-  // and the following ones, `subsystem` is the subsystem relative to whose
-  // local origin the positions of `trajectory` are represented.
+  // and the following ones, `placement` gives the subsystem and anchor
+  // relative to which the positions of `trajectory` are represented.
   virtual void ComputeAndRenderApsides(
       Index celestial_index,
       Trajectory<Barycentric> const& trajectory,
@@ -397,9 +397,8 @@ class Plugin {
       int max_points,
       DistinguishedPoints<World>& apoapsides,
       DistinguishedPoints<World>& periapsides,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   // Computes the first collision between the trajectory defined by `begin` and
   // `end` and the celestial with index `celestial_index`.
@@ -413,9 +412,8 @@ class Plugin {
       int max_points,
       std::function<Length(Angle const& latitude,
                            Angle const& longitude)> const& radius,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   // Computes the closest approaches of the trajectory defined by `begin` and
   // `end` with respect to the trajectory of the targetted vessel.
@@ -426,9 +424,8 @@ class Plugin {
       Position<World> const& sun_world_position,
       int max_points,
       DistinguishedPoints<World>& closest_approaches,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   // Computes the nodes of the trajectory defined by `begin` and `end` with
   // respect to plane of the trajectory of the targetted vessel.
@@ -440,9 +437,8 @@ class Plugin {
       int max_points,
       std::vector<Renderer::Node>& ascending,
       std::vector<Renderer::Node>& descending,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   virtual bool HasCelestial(Index index) const;
   virtual Celestial const& GetCelestial(Index index) const;
@@ -552,14 +548,13 @@ class Plugin {
   // whenever `main_body_` or `planetarium_rotation_` changes.
   void UpdatePlanetariumRotation();
 
-  // `subsystem` is the subsystem relative to whose local origin
+  // `placement` gives the subsystem and anchor relative to which
   // `degrees_of_freedom` is represented.
   Velocity<World> VesselVelocity(
       Instant const& time,
       DegreesOfFreedom<Barycentric> const& degrees_of_freedom,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   // The rigid motion that translates positions represented relative to the
   // local origin of subsystem `s1` so that they become represented relative

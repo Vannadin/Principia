@@ -81,10 +81,9 @@ Renderer::RenderBarycentricTrajectoryInWorld(
     DiscreteTrajectory<Barycentric>::iterator const& end,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
   auto const trajectory_in_plotting_frame =
-      RenderBarycentricTrajectoryInPlotting(begin, end, subsystem, anchor);
+      RenderBarycentricTrajectoryInPlotting(begin, end, placement);
   auto trajectory_in_world =
       RenderPlottingTrajectoryInWorld(time,
                                       trajectory_in_plotting_frame.begin(),
@@ -98,8 +97,9 @@ DiscreteTrajectory<Navigation>
 Renderer::RenderBarycentricTrajectoryInPlotting(
     DiscreteTrajectory<Barycentric>::iterator const& begin,
     DiscreteTrajectory<Barycentric>::iterator const& end,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+  int const subsystem = placement.subsystem;
+  auto const& anchor = placement.anchor;
   int const plotting_subsystem = GetPlottingFrame()->subsystem();
   DiscreteTrajectory<Navigation> trajectory;
   for (auto it = begin; it != end; ++it) {
@@ -161,8 +161,9 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
     DistinguishedPoints<Barycentric>::const_iterator const end,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+  int const subsystem = placement.subsystem;
+  auto const& anchor = placement.anchor;
   int const plotting_subsystem = GetPlottingFrame()->subsystem();
   DistinguishedPoints<Navigation> plotting_points;
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {

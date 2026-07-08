@@ -42,8 +42,7 @@ class MockRenderer : public Renderer {
                DiscreteTrajectory<Barycentric>::iterator const& end,
                Position<World> const& sun_world_position,
                (Rotation<Barycentric, AliceSun> const& planetarium_rotation),
-               int subsystem,
-               (std::optional<Ephemeris<Barycentric>::Anchor> const& anchor)),
+               (Ephemeris<Barycentric>::SubsystemPlacement const& placement)),
               (const, override));
 
   MOCK_METHOD((OrthogonalMap<Barycentric, WorldSun>),

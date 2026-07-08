@@ -101,7 +101,7 @@ class Renderer {
   // and others in this class, `sun_world_position` is the current position of
   // the sun in `World` space as returned by `Planetarium.fetch.Sun.position`;
   // it is used to define the relation between `WorldSun` and `World`; and
-  // `subsystem` is the subsystem relative to whose local origin the given
+  // `placement` gives the subsystem and anchor relative to which the given
   // positions are represented.
   virtual DiscreteTrajectory<World>
   RenderBarycentricTrajectoryInWorld(
@@ -110,9 +110,8 @@ class Renderer {
       DiscreteTrajectory<Barycentric>::iterator const& end,
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   // Returns a trajectory in the current plotting frame corresponding to the
   // trajectory defined by `begin` and `end`.  If there is a target vessel, its
@@ -121,9 +120,8 @@ class Renderer {
   RenderBarycentricTrajectoryInPlotting(
       DiscreteTrajectory<Barycentric>::iterator const& begin,
       DiscreteTrajectory<Barycentric>::iterator const& end,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   // Returns a trajectory in `World` corresponding to the trajectory defined by
   // `begin` and `end` in the current plotting frame.
@@ -142,9 +140,8 @@ class Renderer {
       DistinguishedPoints<Barycentric>::const_iterator end,
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-      int subsystem = 0,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   std::vector<Node> RenderNodes(
       Instant const& time,

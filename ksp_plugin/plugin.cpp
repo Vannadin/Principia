@@ -1258,8 +1258,8 @@ void Plugin::ComputeAndRenderApsides(
     int const max_points,
     DistinguishedPoints<World>& apoapsides,
     DistinguishedPoints<World>& periapsides,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+  int const subsystem = placement.subsystem;
   auto const& celestial = *FindOrDie(celestials_, celestial_index);
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
@@ -1284,16 +1284,14 @@ void Plugin::ComputeAndRenderApsides(
                    barycentric_apoapsides.end(),
                    sun_world_position,
                    PlanetariumRotation(),
-                   subsystem,
-                   anchor);
+                   placement);
   periapsides = renderer_->RenderDistinguishedPointsInWorld(
                     current_time_,
                     barycentric_periapsides.begin(),
                     barycentric_periapsides.end(),
                     sun_world_position,
                     PlanetariumRotation(),
-                    subsystem,
-                    anchor);
+                    placement);
 }
 
 std::optional<DistinguishedPoints<World>::value_type>
@@ -1306,8 +1304,8 @@ Plugin::ComputeAndRenderFirstCollision(
     int max_points,
     std::function<Length(Angle const& latitude,
                          Angle const& longitude)> const& radius,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+  int const subsystem = placement.subsystem;
   auto const& celestial = FindOrDie(celestials_, celestial_index);
   auto const& celestial_body = *celestial->body();
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
@@ -1358,8 +1356,7 @@ Plugin::ComputeAndRenderFirstCollision(
               points_to_render.end(),
               sun_world_position,
               PlanetariumRotation(),
-              subsystem,
-              anchor);
+              placement);
       return *rendered_points.begin();
     }
   }
@@ -1375,8 +1372,9 @@ void Plugin::ComputeAndRenderClosestApproaches(
     Position<World> const& sun_world_position,
     int const max_points,
     DistinguishedPoints<World>& closest_approaches,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+  int const subsystem = placement.subsystem;
+  auto const& anchor = placement.anchor;
   CHECK(renderer_->HasTargetVessel());
 
   // Bring the target prediction into the same representation as `trajectory`
@@ -1421,8 +1419,7 @@ void Plugin::ComputeAndRenderClosestApproaches(
           periapsides.end(),
           sun_world_position,
           PlanetariumRotation(),
-          subsystem,
-          anchor);
+          placement);
 }
 
 void Plugin::ComputeAndRenderNodes(
@@ -1433,11 +1430,9 @@ void Plugin::ComputeAndRenderNodes(
     int const max_points,
     std::vector<Renderer::Node>& ascending,
     std::vector<Renderer::Node>& descending,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
   auto const trajectory_in_plotting =
-      renderer_->RenderBarycentricTrajectoryInPlotting(begin, end, subsystem,
-                                                       anchor);
+      renderer_->RenderBarycentricTrajectoryInPlotting(begin, end, placement);
 
   auto const* const cast_plotting_frame = dynamic_cast<
       BodyCentredNonRotatingReferenceFrame<Barycentric, Navigation> const*>(
@@ -1725,14 +1720,14 @@ Velocity<World> Plugin::UnmanageableVesselVelocity(
       current_time_,
       parent_degrees_of_freedom +
           PlanetariumRotation().Inverse()(degrees_of_freedom),
-      parent.subsystem());
+      {parent.subsystem(), std::nullopt});
 }
 
 Velocity<World> Plugin::VesselVelocity(GUID const& vessel_guid) const {
   Vessel const& vessel = *FindOrDie(vessels_, vessel_guid);
   auto const& back = vessel.psychohistory()->back();
   return VesselVelocity(back.time, back.degrees_of_freedom,
-                        vessel.subsystem(), vessel.anchor());
+                        {vessel.subsystem(), vessel.anchor()});
 }
 
 void Plugin::RequestReanimation(Instant const& desired_t_min) const {
@@ -2080,8 +2075,9 @@ RigidMotion<Barycentric, Barycentric> Plugin::SubsystemConversionMotion(
 Velocity<World> Plugin::VesselVelocity(
     Instant const& time,
     DegreesOfFreedom<Barycentric> const& degrees_of_freedom,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+  int const subsystem = placement.subsystem;
+  auto const& anchor = placement.anchor;
   DegreesOfFreedom<Barycentric> converted_degrees_of_freedom =
       degrees_of_freedom;
   if (int const plotting_subsystem =

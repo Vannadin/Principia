@@ -36,16 +36,13 @@ NewExecutor(Plugin const* const plugin,
             XYZ const sun_world_position,
             int const max_points,
             TrajectoryLike const& vessel_trajectory,
-            int const subsystem,
-            std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-                std::nullopt) {
+            Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
   CHECK(plugin != nullptr);
 
   auto task = [celestial_index,
                max_points,
                plugin,
-               subsystem,
-               anchor,
+               placement,
                sun_world_position =
                    FromXYZ<Position<World>>(sun_world_position),
                &vessel_trajectory](
@@ -58,8 +55,7 @@ NewExecutor(Plugin const* const plugin,
                                                   sun_world_position,
                                                   max_points,
                                                   radius,
-                                                  subsystem,
-                                                  anchor);
+                                                  placement);
   };
 
   return make_not_null_unique<
@@ -133,7 +129,7 @@ PushPullExecutor<
                               sun_world_position,
                               max_points,
                               flight_plan.GetAllSegments(),
-                              flight_plan.subsystem())
+                              {flight_plan.subsystem(), std::nullopt})
                       .release());
 }
 
@@ -158,8 +154,7 @@ PushPullExecutor<
                               sun_world_position,
                               max_points,
                               *vessel->prediction(),
-                              vessel->subsystem(),
-                              vessel->anchor())
+                              {vessel->subsystem(), vessel->anchor()})
                       .release());
 }
 

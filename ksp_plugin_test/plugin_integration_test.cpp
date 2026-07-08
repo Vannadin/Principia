@@ -806,7 +806,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
         trajectory.end(),
         World::origin,
         plugin->PlanetariumRotation(),
-        vessel.subsystem());
+        {vessel.subsystem(), vessel.anchor()});
     return (rendered.back().degrees_of_freedom.position() - World::origin)
         .Norm();
   };

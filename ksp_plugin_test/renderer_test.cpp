@@ -179,8 +179,7 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchor) {
       renderer_.RenderBarycentricTrajectoryInPlotting(
           trajectory_to_render.begin(),
           trajectory_to_render.end(),
-          /*subsystem=*/0,
-          anchor);
+          {/*subsystem=*/0, anchor});
 
   EXPECT_EQ(10, rendered_trajectory.size());
   int index = 0;
