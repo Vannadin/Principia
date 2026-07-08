@@ -161,7 +161,7 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        vessel.flight_plan().subsystem());
+        {vessel.flight_plan().subsystem(), std::nullopt});
   }
   return m.Return();
 }
@@ -195,7 +195,7 @@ void __cdecl principia__PlanetariumPlotPrediction(
         vertices[(*vertex_count)++] = vertex;
       },
       vertices_size,
-      vessel->subsystem());
+      {vessel->subsystem(), vessel->anchor()});
   return m.Return();
 }
 
@@ -252,7 +252,7 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        vessel->subsystem());
+        {vessel->subsystem(), vessel->anchor()});
     return m.Return();
   }
 }
@@ -310,7 +310,7 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
         },
         vertices_size,
         &minimal_distance,
-        celestial.subsystem());
+        {celestial.subsystem(), std::nullopt});
     *minimal_distance_from_camera = minimal_distance / Metre;
     return m.Return();
   }
@@ -369,7 +369,7 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
         },
         vertices_size,
         &minimal_distance,
-        celestial.subsystem());
+        {celestial.subsystem(), std::nullopt});
     *minimal_distance_from_camera = minimal_distance / Metre;
     return m.Return();
   }

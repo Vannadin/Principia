@@ -397,6 +397,73 @@ TEST_F(PlanetariumTest, PlotMethod0) {
   }
 }
 
+// WS6-5b: a vessel coasting in the void is anchored — its Barycentric
+// coordinates are near the origin and the real offset lives on the anchor.
+// The map-view plot must add the anchor (evaluated at each point's time), or
+// the vessel plots on top of its home star instead of at its true position.
+TEST_F(PlanetariumTest, PlotMethod4WithAnchor) {
+  DiscreteTrajectory<Barycentric> discrete_trajectory;
+  AppendTrajectoryTimeline(/*from=*/NewCircularTrajectoryTimeline<Barycentric>(
+                                        /*period=*/10 * Second,
+                                        /*r=*/3 * Metre,
+                                        /*Δt=*/1 * Second,
+                                        /*t1=*/t0_,
+                                        /*t2=*/t0_ + 11 * Second),
+                           /*to=*/discrete_trajectory);
+
+  // `plotting_frame_->subsystem()` is the base ReferenceFrame default of 0.
+  ON_CALL(mock_ephemeris_, subsystem_conversion(0, 0, _))
+      .WillByDefault(Return(Displacement<Barycentric>{}));
+  ON_CALL(mock_ephemeris_, subsystem_velocity_conversion(0, 0))
+      .WillByDefault(Return(Velocity<Barycentric>{}));
+
+  Planetarium::Parameters const parameters(
+      /*sphere_radius_multiplier=*/1,
+      /*angular_resolution=*/0 * Degree,
+      /*field_of_view=*/90 * Degree);
+  Planetarium const planetarium(parameters,
+                                perspective_,
+                                &mock_ephemeris_,
+                                &plotting_frame_,
+                                plotting_to_scaled_space_);
+
+  auto const plot =
+      [&planetarium, &discrete_trajectory](
+          Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
+        std::vector<ScaledSpacePoint> points;
+        planetarium.PlotMethod4(
+            discrete_trajectory,
+            discrete_trajectory.front().time,
+            discrete_trajectory.back().time,
+            /*reverse=*/false,
+            [&points](ScaledSpacePoint const& p) { points.push_back(p); },
+            /*max_points=*/std::numeric_limits<int>::max(),
+            /*minimal_distance=*/nullptr,
+            placement);
+        return points;
+      };
+
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = Displacement<Barycentric>({2 * Metre, 0 * Metre, 0 * Metre}),
+      .velocity = Velocity<Barycentric>(),
+      .epoch = t0_};
+
+  auto const without_anchor =
+      plot(Ephemeris<Barycentric>::SubsystemPlacement::Stock());
+  auto const with_anchor = plot({/*subsystem=*/0, anchor});
+
+  // The anchor shifts every plotted point; without the fold the placement would
+  // be ignored and the two plots would be identical.
+  ASSERT_FALSE(without_anchor.empty());
+  bool differs = without_anchor.size() != with_anchor.size();
+  for (int i = 0; !differs && i < without_anchor.size(); ++i) {
+    differs = with_anchor[i].x != without_anchor[i].x ||
+              with_anchor[i].y != without_anchor[i].y ||
+              with_anchor[i].z != without_anchor[i].z;
+  }
+  EXPECT_TRUE(differs);
+}
+
 TEST_F(PlanetariumTest, PlotMethod1) {
   // A quarter of a circular trajectory around the origin, with many small
   // segments.
