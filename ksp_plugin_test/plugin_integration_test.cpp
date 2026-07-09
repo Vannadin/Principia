@@ -1983,7 +1983,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
   EXPECT_THAT(drifter->trajectory().back().degrees_of_freedom.velocity()
                   .Norm(),
               Lt(1e-6 * Metre / Second));
-  EXPECT_THAT(drifter->anchor()->offset.Norm(),
+  EXPECT_THAT(drifter->anchor()->offset.Collapse().Norm(),
               AbsoluteErrorFrom(2e16 * Metre, Lt(1e12 * Metre)));
   EXPECT_THAT(drifter->anchor()->velocity.Norm(),
               AbsoluteErrorFrom(3 * Kilo(Metre) / Second,

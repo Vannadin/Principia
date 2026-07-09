@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "absl/container/flat_hash_map.h"
@@ -127,14 +128,34 @@ class Ephemeris {
   // positions by `offset + velocity * (t - epoch)`.  Used for vessels anchored
   // in the force-free void between stellar subsystems, whose subsystem-relative
   // coordinates would otherwise grow until they quantize rendezvous physics.
+  // The offset lives on the canonical sector lattice, so the offsets of two
+  // anchors difference exactly in their cell part: the relative geometry of
+  // two anchored vessels is accurate to the ULP of the local parts — sub-mm —
+  // not to the ULP of the void distance.
   struct Anchor {
-    Displacement<Frame> offset;
+    SectorDisplacement<Frame> offset;
     Velocity<Frame> velocity;
     Instant epoch;
 
-    // Evaluates `offset + velocity * (t - epoch)`; all consumers must use this
-    // so that the rounding is identical everywhere.
+    // Evaluates `offset + velocity * (t - epoch)`, collapsed to a single
+    // displacement; all consumers must use this so that the rounding is
+    // identical everywhere.  When *two* anchors are involved, use
+    // `Conversion` instead of differencing two collapsed offsets.
     Displacement<Frame> OffsetAt(Instant const& t) const;
+
+    // The affine offset (and velocity) to add to a point expressed under
+    // anchor `from` to re-express it under anchor `to` at time `t`.  A
+    // nullopt anchor is the zero offset, i.e., plain subsystem-relative
+    // coordinates; both anchors are affine in time, so a single translation
+    // at any epoch is exact.  The offsets are differenced before any
+    // collapse — the cells subtract exactly — so for nearby anchors the
+    // result is small and precise where the difference of two `OffsetAt`
+    // results would carry the ULP of the void distance.  Parallels
+    // `Ephemeris::subsystem_conversion` for the anchor degree of freedom.
+    static std::pair<Displacement<Frame>, Velocity<Frame>> Conversion(
+        std::optional<Anchor> const& from,
+        std::optional<Anchor> const& to,
+        Instant const& t);
 
     friend bool operator==(Anchor const& left, Anchor const& right) = default;
 

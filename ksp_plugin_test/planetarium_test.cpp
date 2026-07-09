@@ -53,6 +53,7 @@
 #include "physics/rigid_reference_frame.hpp"
 #include "physics/rotating_body.hpp"
 #include "physics/rotating_pulsating_reference_frame.hpp"
+#include "physics/sector.hpp"
 #include "physics/solar_system.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/quantities.hpp"
@@ -109,6 +110,7 @@ using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_rigid_reference_frame;
 using namespace principia::physics::_rotating_body;
 using namespace principia::physics::_rotating_pulsating_reference_frame;
+using namespace principia::physics::_sector;
 using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
@@ -444,7 +446,8 @@ TEST_F(PlanetariumTest, PlotMethod4WithAnchor) {
       };
 
   Ephemeris<Barycentric>::Anchor const anchor{
-      .offset = Displacement<Barycentric>({2 * Metre, 0 * Metre, 0 * Metre}),
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({2 * Metre, 0 * Metre, 0 * Metre})),
       .velocity = Velocity<Barycentric>(),
       .epoch = t0_};
 

@@ -398,13 +398,39 @@ Displacement<Frame> Ephemeris<Frame>::Anchor::OffsetAt(
     Instant const& t) const {
   // The rounding of the product is far below the anchor's raison d'être; see
   // `inter_subsystem_offset` for the same argument.
-  return offset + velocity * (t - epoch);
+  return offset.Collapse(velocity * (t - epoch));
+}
+
+template<typename Frame>
+std::pair<Displacement<Frame>, Velocity<Frame>>
+Ephemeris<Frame>::Anchor::Conversion(std::optional<Anchor> const& from,
+                                     std::optional<Anchor> const& to,
+                                     Instant const& t) {
+  if (from.has_value() && to.has_value()) {
+    // Difference the sector offsets first — the cells subtract exactly — and
+    // only then collapse, adding the affine terms at their own magnitude.
+    return {(from->offset - to->offset)
+                .Collapse(from->velocity * (t - from->epoch) -
+                          to->velocity * (t - to->epoch)),
+            from->velocity - to->velocity};
+  }
+  auto const offset = [&t](std::optional<Anchor> const& anchor) {
+    return anchor.has_value() ? anchor->OffsetAt(t)
+                              : Displacement<Frame>{};
+  };
+  auto const velocity = [](std::optional<Anchor> const& anchor) {
+    return anchor.has_value() ? anchor->velocity : Velocity<Frame>{};
+  };
+  return {offset(from) - offset(to), velocity(from) - velocity(to)};
 }
 
 template<typename Frame>
 void Ephemeris<Frame>::Anchor::WriteToMessage(
     not_null<serialization::Ephemeris::Anchor*> const message) const {
-  offset.WriteToMessage(message->mutable_offset());
+  // The single-displacement form for pre-sector readers, the exact
+  // double-precision form — which `Split` recovers losslessly — for this one.
+  offset.Collapse().WriteToMessage(message->mutable_offset());
+  offset.ToDoublePrecision().WriteToMessage(message->mutable_sector_offset());
   velocity.WriteToMessage(message->mutable_velocity());
   epoch.WriteToMessage(message->mutable_epoch());
 }
@@ -412,8 +438,17 @@ void Ephemeris<Frame>::Anchor::WriteToMessage(
 template<typename Frame>
 typename Ephemeris<Frame>::Anchor Ephemeris<Frame>::Anchor::ReadFromMessage(
     serialization::Ephemeris::Anchor const& message) {
+  SectorDisplacement<Frame> const offset =
+      message.has_sector_offset()
+          ? SectorDisplacement<Frame>::Split(
+                DoublePrecision<Displacement<Frame>>::ReadFromMessage(
+                    message.sector_offset()))
+          // A pre-sector anchor: adopt the nearest cell, the residual going
+          // into the local part.
+          : SectorDisplacement<Frame>::Split(
+                Displacement<Frame>::ReadFromMessage(message.offset()));
   return Anchor{
-      .offset = Displacement<Frame>::ReadFromMessage(message.offset()),
+      .offset = offset,
       .velocity = Velocity<Frame>::ReadFromMessage(message.velocity()),
       .epoch = Instant::ReadFromMessage(message.epoch())};
 }

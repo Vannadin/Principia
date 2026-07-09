@@ -19,6 +19,7 @@
 #include "physics/mock_ephemeris.hpp"
 #include "physics/mock_rigid_reference_frame.hpp"
 #include "physics/rigid_motion.hpp"
+#include "physics/sector.hpp"
 #include "quantities/si.hpp"
 #include "testing_utilities/almost_equals.hpp"
 #include "testing_utilities/componentwise.hpp"
@@ -46,6 +47,7 @@ using namespace principia::physics::_mock_continuous_trajectory;
 using namespace principia::physics::_mock_ephemeris;
 using namespace principia::physics::_mock_rigid_reference_frame;
 using namespace principia::physics::_rigid_motion;
+using namespace principia::physics::_sector;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_almost_equals;
 using namespace principia::testing_utilities::_componentwise;
@@ -170,8 +172,9 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchor) {
   auto const ay = 2 * Metre / Second;
   auto const az = 3 * Metre / Second;
   Ephemeris<Barycentric>::Anchor const anchor{
-      .offset = Displacement<Barycentric>({100 * Metre, 200 * Metre,
-                                           300 * Metre}),
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({100 * Metre, 200 * Metre,
+                                     300 * Metre})),
       .velocity = Velocity<Barycentric>({ax, ay, az}),
       .epoch = t0_};
 

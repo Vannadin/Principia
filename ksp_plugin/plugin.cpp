@@ -1389,15 +1389,14 @@ void Plugin::ComputeAndRenderClosestApproaches(
   Velocity<Barycentric> target_velocity =
       ephemeris_->subsystem_velocity_conversion(target_vessel.subsystem(),
                                                 subsystem);
-  if (auto const& target_anchor = target_vessel.anchor();
-      target_anchor.has_value()) {
-    target_displacement += target_anchor->OffsetAt(current_time_);
-    target_velocity += target_anchor->velocity;
-  }
-  if (anchor.has_value()) {
-    target_displacement -= anchor->OffsetAt(current_time_);
-    target_velocity -= anchor->velocity;
-  }
+  // The anchors are differenced before any collapse, so two nearby anchored
+  // vessels keep their true relative geometry to the ULP of the anchors'
+  // local parts, not of the void distance.
+  auto const [anchor_displacement, anchor_velocity] =
+      Ephemeris<Barycentric>::Anchor::Conversion(
+          target_vessel.anchor(), anchor, current_time_);
+  target_displacement += anchor_displacement;
+  target_velocity += anchor_velocity;
   TranslatedTrajectory<Barycentric> const target_prediction(
       *target_vessel.prediction(),
       target_displacement,

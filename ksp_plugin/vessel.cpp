@@ -32,6 +32,7 @@
 #include "geometry/space_transformations.hpp"
 #include "ksp_plugin/integrators.hpp"
 #include "physics/rigid_motion.hpp"
+#include "physics/sector.hpp"
 #include "quantities/named_quantities.hpp"
 #include "testing_utilities/make_not_null.hpp"
 
@@ -49,6 +50,7 @@ using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_space_transformations;
 using namespace principia::ksp_plugin::_integrators;
 using namespace principia::physics::_rigid_motion;
+using namespace principia::physics::_sector;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_make_not_null;
@@ -67,24 +69,14 @@ constexpr Length re_anchor_bound = 1e12 * Metre;
 constexpr double rebase_dominance_margin = 3;
 
 // The affine offset to add to a point expressed under anchor `from` to
-// re-express it under anchor `to` at time `t`.  A nullopt anchor is the zero
-// offset, i.e., plain subsystem-relative coordinates; both anchors are affine
-// in time, so a single translation at any epoch is exact.  Parallels
-// `Ephemeris::subsystem_conversion` for the anchor degree of freedom.
+// re-express it under anchor `to` at time `t`.  See
+// `Ephemeris::Anchor::Conversion`, which differences the sector offsets
+// before any collapse.
 std::pair<Displacement<Barycentric>, Velocity<Barycentric>> AnchorConversion(
     std::optional<Ephemeris<Barycentric>::Anchor> const& from,
     std::optional<Ephemeris<Barycentric>::Anchor> const& to,
     Instant const& t) {
-  auto const offset =
-      [&t](std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
-        return anchor.has_value() ? anchor->OffsetAt(t)
-                                  : Displacement<Barycentric>{};
-      };
-  auto const velocity =
-      [](std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
-        return anchor.has_value() ? anchor->velocity : Velocity<Barycentric>{};
-      };
-  return {offset(from) - offset(to), velocity(from) - velocity(to)};
+  return Ephemeris<Barycentric>::Anchor::Conversion(from, to, t);
 }
 
 auto* const where_elephants_go_to_die =
@@ -192,8 +184,15 @@ bool Vessel::RebaseIfNeeded() {
     // while anchored we only watch for the void exit and for coordinate
     // growth (a burn can carry the vessel away from its anchor).
     if (ephemeris_->FarFieldIsZero(q + anchor_->OffsetAt(t), subsystem_, t)) {
+      // Re-anchor when the anchored coordinates grow (a burn carries the
+      // vessel away from its anchor) and also when the affine term grows (a
+      // long coast): keeping both small keeps anchor *differences* — the
+      // relative geometry of two anchored vessels — at the ULP of the local
+      // parts, sub-mm.
       if ((q - Barycentric::origin).Norm²() >
-          re_anchor_bound * re_anchor_bound) {
+              re_anchor_bound * re_anchor_bound ||
+          (anchor_->velocity * (t - anchor_->epoch)).Norm²() >
+              re_anchor_bound * re_anchor_bound) {
         AdoptAnchor();
       }
       return false;
@@ -342,22 +341,37 @@ void Vessel::AdoptAnchor() {
   Displacement<Barycentric> const displacement =
       degrees_of_freedom.position() - Barycentric::origin;
   Velocity<Barycentric> const velocity_offset = degrees_of_freedom.velocity();
-  Ephemeris<Barycentric>::Anchor new_anchor{.offset = displacement,
-                                            .velocity = velocity_offset,
-                                            .epoch = t};
+  Ephemeris<Barycentric>::Anchor new_anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(displacement),
+      .velocity = velocity_offset,
+      .epoch = t};
+  // The exact translation at first adoption; `Split` is exact, so the new
+  // representation collapses back to `displacement` bit for bit.
+  Displacement<Barycentric> translation = -displacement;
   if (anchor_.has_value()) {
     // Re-anchoring: the new anchor is displaced from the subsystem origin by
-    // the old anchor as well as by the anchored coordinates.
-    new_anchor.offset += anchor_->OffsetAt(t);
+    // the old anchor as well as by the anchored coordinates.  The fold works
+    // on the sector parts — the cells carry over exactly, the small terms sum
+    // at their own magnitude — and the affine term is reset to the new epoch.
+    new_anchor.offset = anchor_->offset;
+    new_anchor.offset += anchor_->velocity * (t - anchor_->epoch);
+    new_anchor.offset += displacement;
+    new_anchor.offset.Recenter();
     new_anchor.velocity += anchor_->velocity;
+    // The translation that keeps the represented positions consistent with
+    // the new anchor.  The cells cancel in the difference, so it is computed
+    // small-first: the switch perturbs the represented position by at most
+    // the final rounding — a fraction of a millimetre, once per re-anchor.
+    translation = (anchor_->offset - new_anchor.offset)
+                      .Collapse(anchor_->velocity * (t - anchor_->epoch));
   }
   LOG(INFO) << "Vessel " << ShortDebugString() << " adopts an anchor";
   {
     absl::MutexLock l(&lock_);
-    trajectory_.Translate(-displacement, -velocity_offset, t);
+    trajectory_.Translate(translation, -velocity_offset, t);
     anchor_ = new_anchor;
   }
-  TranslateParts(-displacement, -velocity_offset, t);
+  TranslateParts(translation, -velocity_offset, t);
 }
 
 void Vessel::TranslateParts(Displacement<Barycentric> const& displacement,

@@ -478,18 +478,12 @@ absl::Status FlightPlan::Rebase(
   // `displacement_at_epoch`/`velocity_offset`; add the delta between the old
   // (`anchor_`) and new (`anchor`) anchors so that an anchored flight plan is
   // re-expressed consistently.  A nullopt anchor contributes the zero offset.
-  auto const anchor_offset =
-      [&epoch](std::optional<Ephemeris<Barycentric>::Anchor> const& a) {
-        return a.has_value() ? a->OffsetAt(epoch) : Displacement<Barycentric>{};
-      };
-  auto const anchor_velocity =
-      [](std::optional<Ephemeris<Barycentric>::Anchor> const& a) {
-        return a.has_value() ? a->velocity : Velocity<Barycentric>{};
-      };
+  auto const [anchor_displacement, anchor_velocity] =
+      Ephemeris<Barycentric>::Anchor::Conversion(anchor_, anchor, epoch);
   Displacement<Barycentric> const total_displacement =
-      displacement_at_epoch + anchor_offset(anchor_) - anchor_offset(anchor);
+      displacement_at_epoch + anchor_displacement;
   Velocity<Barycentric> const total_velocity =
-      velocity_offset + anchor_velocity(anchor_) - anchor_velocity(anchor);
+      velocity_offset + anchor_velocity;
   initial_degrees_of_freedom_ = DegreesOfFreedom<Barycentric>(
       initial_degrees_of_freedom_.position() + total_displacement +
           total_velocity * (initial_time_ - epoch),

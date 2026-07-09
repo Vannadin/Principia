@@ -25,6 +25,7 @@
 #include "physics/ephemeris.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/rigid_motion.hpp"
+#include "physics/sector.hpp"
 #include "quantities/astronomy.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
@@ -61,6 +62,7 @@ using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_rigid_motion;
+using namespace principia::physics::_sector;
 using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
@@ -645,7 +647,8 @@ TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
   Displacement<ICRS> const anchored_q₀(
       {1.0e6 * Metre, 0 * Metre, 0 * Metre});
   Ephemeris<ICRS>::Anchor const anchor{
-      .offset = (mid_void - ICRS::origin) - anchored_q₀,
+      .offset = SectorDisplacement<ICRS>::Split(
+          (mid_void - ICRS::origin) - anchored_q₀),
       .velocity = v0,
       .epoch = t0};
 

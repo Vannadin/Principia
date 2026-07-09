@@ -190,6 +190,10 @@ message Ephemeris {
     required Multivector offset = 1;
     required Multivector velocity = 2;
     required Point epoch = 3;
+    // The exact sector decomposition of `offset`, as a lossless
+    // double-precision sum; `offset` is its collapsed single-displacement
+    // form.  Absent in pre-sector saves.
+    optional DoublePrecision sector_offset = 4;
   }
   message Checkpoint {
     required Point time = 1;
