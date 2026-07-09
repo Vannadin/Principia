@@ -2349,6 +2349,82 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
   EXPECT_THAT(max_paired_error, Gt(1 * Metre));
 }
 
+// The affine-term re-anchor: a long anchored coast grows the anchor's
+// v (t - epoch) term; when it crosses the re-anchor bound (lowered here
+// through the test seam so that a minute of coast crosses it) the vessel
+// adopts a fresh anchor, folding the sector parts.  The fold must be
+// continuous: the represented position q + A(t) is preserved across the
+// event, and because the anchored velocity of a force-free coast is zero and
+// the anchors difference exactly on the lattice, the fold perturbation is
+// directly measurable — at sub-mm — as (q2 - q1) + Conversion(A2, A1, t2).
+TEST_F(PluginIntegrationTestWithoutPlugin, LongCoastReAnchorsContinuously) {
+  Vessel::re_anchor_bound_for_testing_ = 1e5 * Metre;
+  absl::Cleanup restore_bound = [] {
+    Vessel::re_anchor_bound_for_testing_ = 1e12 * Metre;
+  };
+
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      421, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({3 * Kilo(Metre) / Second,
+                           0 * Metre / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+  ASSERT_TRUE(drifter->anchor().has_value());
+  auto const anchor_1 = *drifter->anchor();
+  Instant const t1 = drifter->trajectory().back().time;
+  DegreesOfFreedom<Barycentric> const dof1 =
+      drifter->trajectory().back().degrees_of_freedom;
+
+  // A minute of coast at 3 km/s: the affine term reaches 1.8e5 m, crossing
+  // the lowered bound.
+  Instant t = t1;
+  for (int i = 0; i < 6; ++i) {
+    t += 10 * Second;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                               /*loaded=*/false, inserted);
+    plugin->PrepareToReportCollisions();
+    plugin->FreeVesselsAndPartsAndCollectPileUps(10 * Second);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  ASSERT_TRUE(drifter->anchor().has_value());
+  auto const anchor_2 = *drifter->anchor();
+  Instant const t2 = drifter->trajectory().back().time;
+  DegreesOfFreedom<Barycentric> const dof2 =
+      drifter->trajectory().back().degrees_of_freedom;
+
+  // The trigger fired: the anchor was refreshed at a later epoch, and the
+  // fresh affine term is small again.
+  EXPECT_GT(anchor_2.epoch, anchor_1.epoch);
+  EXPECT_THAT((anchor_2.velocity * (t2 - anchor_2.epoch)).Norm(),
+              Lt(1e5 * Metre));
+
+  // Continuity of the represented position across the re-anchor(s); see the
+  // derivation in the test comment.
+  Displacement<Barycentric> const continuity_error =
+      (dof2.position() - dof1.position()) +
+      Ephemeris<Barycentric>::Anchor::Conversion(anchor_2, anchor_1, t2).first;
+  EXPECT_THAT(continuity_error.Norm(), Lt(2 * Milli(Metre)));
+}
+
 // R2 drop-path golden fixture.  The ">20k-point history can't be cheaply
 // verified" narrative (sessions 8, 11, 18) was a test-seam gap, not a real
 // barrier: `Vessel::max_points_to_serialize_for_testing_` is the only obstacle.

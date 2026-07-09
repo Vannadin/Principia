@@ -63,9 +63,6 @@ using namespace std::chrono_literals;
 // the inverse ratio, so a vessel weaving around the balance point does not
 // oscillate between representations, and a transit that merely grazes a
 // subsystem's region does not adopt it.
-// While anchored in the void, a vessel whose coordinates grow beyond this
-// bound (under thrust) re-anchors, keeping the local ULP at ~0.2 mm.
-constexpr Length re_anchor_bound = 1e12 * Metre;
 constexpr double rebase_dominance_margin = 3;
 
 // The affine offset to add to a point expressed under anchor `from` to
@@ -190,9 +187,9 @@ bool Vessel::RebaseIfNeeded() {
       // relative geometry of two anchored vessels — at the ULP of the local
       // parts, sub-mm.
       if ((q - Barycentric::origin).Norm²() >
-              re_anchor_bound * re_anchor_bound ||
+              re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_ ||
           (anchor_->velocity * (t - anchor_->epoch)).Norm²() >
-              re_anchor_bound * re_anchor_bound) {
+              re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_) {
         AdoptAnchor();
       }
       return false;
@@ -1945,6 +1942,11 @@ std::atomic_bool Vessel::synchronous_(false);
 bool Vessel::disallow_leibniz_conversion_for_testing_ = false;
 
 std::int64_t Vessel::max_points_to_serialize_for_testing_ = 20'000;
+
+// While anchored in the void, a vessel whose coordinates grow beyond this
+// bound (under thrust), or whose anchor's affine term grows beyond it (a long
+// coast), re-anchors, keeping the local ULP at ~0.2 mm.
+Length Vessel::re_anchor_bound_for_testing_ = 1e12 * Metre;
 
 }  // namespace internal
 }  // namespace _vessel

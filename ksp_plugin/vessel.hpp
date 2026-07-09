@@ -355,6 +355,12 @@ class Vessel {
   // otherwise requires.
   static std::int64_t max_points_to_serialize_for_testing_;
 
+  // The bound on the anchored coordinates and on the anchor's affine term
+  // beyond which a vessel re-anchors; see `RebaseIfNeeded`.  A mutable static
+  // so that tests can lower it to exercise the re-anchor fold with a short
+  // coast instead of the years it otherwise requires.
+  static Length re_anchor_bound_for_testing_;
+
  protected:
   // For mocking.
   Vessel();

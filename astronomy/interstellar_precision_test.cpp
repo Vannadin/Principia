@@ -667,6 +667,21 @@ TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
   EXPECT_EQ(migrated.velocity, anchor.velocity);
   EXPECT_EQ(migrated.epoch, anchor.epoch);
 
+  // The single-sided conversions — exactly one anchor present, the common
+  // case of an anchored vessel against an unanchored one — collapse the one
+  // anchor, with mirrored signs.
+  {
+    Instant const t1 = t0 + 1 * JulianYear;
+    auto const [from_offset, from_velocity] =
+        Ephemeris<ICRS>::Anchor::Conversion(anchor, std::nullopt, t1);
+    EXPECT_EQ(anchor.OffsetAt(t1), from_offset);
+    EXPECT_EQ(anchor.velocity, from_velocity);
+    auto const [to_offset, to_velocity] =
+        Ephemeris<ICRS>::Anchor::Conversion(std::nullopt, anchor, t1);
+    EXPECT_EQ(-anchor.OffsetAt(t1), to_offset);
+    EXPECT_EQ(-anchor.velocity, to_velocity);
+  }
+
   DiscreteTrajectory<ICRS> probe;
   EXPECT_OK(probe.Append(
       t0,
