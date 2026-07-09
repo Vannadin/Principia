@@ -656,6 +656,17 @@ TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
   anchor.WriteToMessage(&message);
   EXPECT_EQ(anchor, Ephemeris<ICRS>::Anchor::ReadFromMessage(message));
 
+  // A pre-sector message has no `sector_offset`; reading one adopts the
+  // nearest cell, the residual going into the local part of the collapsed
+  // legacy offset.  (A legacy offset had already rounded at the void
+  // magnitude when it was written; that rounding is inherited, not repaired.)
+  message.clear_sector_offset();
+  auto const migrated = Ephemeris<ICRS>::Anchor::ReadFromMessage(message);
+  EXPECT_EQ(migrated.offset,
+            SectorDisplacement<ICRS>::Split(anchor.offset.Collapse()));
+  EXPECT_EQ(migrated.velocity, anchor.velocity);
+  EXPECT_EQ(migrated.epoch, anchor.epoch);
+
   DiscreteTrajectory<ICRS> probe;
   EXPECT_OK(probe.Append(
       t0,

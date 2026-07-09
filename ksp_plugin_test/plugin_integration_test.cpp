@@ -2192,9 +2192,11 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidFlightPlanCoasts) {
 // coordinates whose ULP is ~4 m, quantizing away any metres-scale manœuvre.
 // The anchor also records where each vessel truly is, so the render / map-view /
 // ClosestApproaches placement recovers a *local* rendezvous (the two vessels
-// metres apart), not a ~2e16 m-scale artifact.  (The residual in the relative
-// geometry between two independently-anchored vessels is the ULP of the void
-// distance itself, ~4 m; a sub-mm docking follows once they share one pile-up.)
+// metres apart), not a ~2e16 m-scale artifact.  (With sector anchors the
+// offsets of the two anchors difference exactly; the residual visible below is
+// the quantization of the *absolute* insertion positions at the plugin
+// boundary, which no internal representation can repair.  See
+// `CoMovingVoidVesselsConversionIsExact` for the relative-geometry claim.)
 TEST_F(PluginIntegrationTestWithoutPlugin, CoAnchoredVoidVesselsKeepLocalPrecision) {
   Index const star_a = 0;
   auto plugin =
@@ -2253,9 +2255,98 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CoAnchoredVoidVesselsKeepLocalPrecisi
 
   // The two anchored vessels are recovered as a *local* rendezvous — metres
   // apart, not ~2e16 m — so a closest-approach plot sees their true relative
-  // geometry.  The exact separation carries the ULP of the void distance (a few
-  // metres); the point is it is not a void-scale artifact.
+  // geometry.  The exact separation carries the quantization of the absolute
+  // insertion positions (a few metres); the point is it is not a void-scale
+  // artifact.
   EXPECT_THAT((true_b - true_a).Norm(), Lt(1 * Kilo(Metre)));
+}
+
+// Sector anchors: the offsets of two anchors difference exactly in their cell
+// part, so the relative geometry of two anchored void vessels — read through
+// `Anchor::Conversion` — tracks a slow rendezvous approach to sub-mm.
+// Differencing two *collapsed* offsets instead (the pre-sector
+// representation, and the failure this test is first against) rounds each
+// collapse at the ~4 m ULP of the void distance: the smooth approach is
+// snapped to the void grid, metres away from the true relative geometry.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       ApproachingVoidVesselsConversionIsExact) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  Length const midpoint = 2e16 * Metre;
+  // An interstellar cruise along the void axis; the visitor closes on the
+  // station at half a metre per second.
+  Velocity<AliceSun> const cruise({3 * Kilo(Metre) / Second,
+                                   0 * Metre / Second,
+                                   0 * Metre / Second});
+  Velocity<AliceSun> const approach({-0.5 * Metre / Second,
+                                     0 * Metre / Second,
+                                     0 * Metre / Second});
+
+  bool inserted;
+  GUID const guid_a = "station";
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a, /*loaded=*/false,
+                             inserted);
+  plugin->InsertUnloadedPart(
+      411, "part-a", guid_a,
+      {Displacement<AliceSun>({midpoint, 0 * Metre, 0 * Metre}), cruise});
+  GUID const guid_b = "visitor";
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_a, /*loaded=*/false,
+                             inserted);
+  plugin->InsertUnloadedPart(
+      412, "part-b", guid_b,
+      {Displacement<AliceSun>({midpoint + 5 * Metre, 0 * Metre, 0 * Metre}),
+       cruise + approach});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  not_null<Vessel*> const station = plugin->GetVessel(guid_a);
+  not_null<Vessel*> const visitor = plugin->GetVessel(guid_b);
+  ASSERT_TRUE(station->anchor().has_value());
+  ASSERT_TRUE(visitor->anchor().has_value());
+  Velocity<Barycentric> const relative_velocity =
+      visitor->anchor()->velocity - station->anchor()->velocity;
+
+  Instant const t0 = station->trajectory().back().time;
+  auto const conversion_at = [&](Instant const& t) {
+    return Ephemeris<Barycentric>::Anchor::Conversion(
+        visitor->anchor(), station->anchor(), t).first;
+  };
+  auto const paired_collapse_at = [&](Instant const& t) {
+    return visitor->anchor()->OffsetAt(t) - station->anchor()->OffsetAt(t);
+  };
+
+  Displacement<Barycentric> const conversion₀ = conversion_at(t0);
+  Displacement<Barycentric> const paired₀ = paired_collapse_at(t0);
+  Length max_conversion_error;
+  Length max_paired_error;
+  for (int minute = 30; minute <= 360; minute += 30) {
+    Instant const t = t0 + minute * Minute;
+    // The true change in the anchors' relative placement is the linear
+    // approach.
+    Displacement<Barycentric> const true_change =
+        relative_velocity * (t - t0);
+    max_conversion_error =
+        std::max(max_conversion_error,
+                 (conversion_at(t) - conversion₀ - true_change).Norm());
+    max_paired_error =
+        std::max(max_paired_error,
+                 (paired_collapse_at(t) - paired₀ - true_change).Norm());
+  }
+  LOG(INFO) << "conversion error: " << max_conversion_error
+            << ", paired-collapse error: " << max_paired_error;
+
+  // The conversion differences the cells exactly and the small terms at
+  // their own magnitude: the approach is resolved to sub-mm.
+  EXPECT_THAT(max_conversion_error, Lt(1 * Milli(Metre)));
+  // The pre-sector path snaps the approach to the ~4 m void grid.
+  EXPECT_THAT(max_paired_error, Gt(1 * Metre));
 }
 
 // R2 drop-path golden fixture.  The ">20k-point history can't be cheaply
