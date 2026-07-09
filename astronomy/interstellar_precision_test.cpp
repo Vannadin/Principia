@@ -515,8 +515,7 @@ TEST_F(InterstellarPrecisionTest, Apsides) {
                                        DegreesOfFreedom<ICRS> const& dof2) {
     auto const offset =
         ephemeris->inter_subsystem_offset(/*s1=*/0, /*s2=*/1, t);
-    return (offset.value +
-            (offset.error + (dof1.position() - dof2.position()))).Norm();
+    return offset.Collapse(dof1.position() - dof2.position()).Norm();
   };
   for (auto const& [t, degrees_of_freedom] : periapsides1) {
     EXPECT_THAT(AbsoluteError(to_remote_system.Norm() - orbit_radius,

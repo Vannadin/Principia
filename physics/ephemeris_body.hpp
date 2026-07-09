@@ -73,9 +73,9 @@ inline absl::Status CollisionDetected() {
 // dominates the local one.
 template<typename Frame>
 Displacement<Frame> AddInterSubsystemOffset(
-    DoublePrecision<Displacement<Frame>> const& inter_subsystem_offset,
+    SectorDisplacement<Frame> const& inter_subsystem_offset,
     Displacement<Frame> const& Δq) {
-  return inter_subsystem_offset.value + (inter_subsystem_offset.error + Δq);
+  return inter_subsystem_offset.Collapse(Δq);
 }
 
 template<typename Frame>
@@ -191,8 +191,8 @@ Ephemeris<Frame>::Ephemeris(
     subsystem_origin_offset_.resize(number_of_subsystems);
     for (int s = 0; s < number_of_subsystems; ++s) {
       CHECK(subsystem_anchors[s].has_value()) << "Empty subsystem " << s;
-      subsystem_origin_offset_[s] =
-          TwoDifference(*subsystem_anchors[s], *subsystem_anchors[0]);
+      subsystem_origin_offset_[s] = SectorDisplacement<Frame>::Split(
+          TwoDifference(*subsystem_anchors[s], *subsystem_anchors[0]));
     }
 
     // The barycentric degrees of freedom of each subsystem, which make it
@@ -330,17 +330,18 @@ int Ephemeris<Frame>::number_of_subsystems() const {
 }
 
 template<typename Frame>
-DoublePrecision<Displacement<Frame>>
+SectorDisplacement<Frame>
 Ephemeris<Frame>::inter_subsystem_offset(int const s1,
                                          int const s2,
                                          Instant const& t) const {
-  DoublePrecision<Displacement<Frame>> offset =
+  SectorDisplacement<Frame> offset =
       inter_subsystem_offsets_[s1 * subsystem_origin_offset_.size() + s2];
   if (s1 != s2) {
     // The origins move with the barycentres of their subsystems.  The
     // rounding of this product is far below the residual of the linear
     // extrapolation itself (the curvature of the barycentres under the pull
-    // of the other subsystems), so no double-precision product is needed.
+    // of the other subsystems), so it may be added to the local part in a
+    // single rounding.
     offset += (subsystem_barycentre_[s1].velocity() -
                subsystem_barycentre_[s2].velocity()) *
               (t - subsystem_barycentre_time_);
@@ -351,9 +352,7 @@ Ephemeris<Frame>::inter_subsystem_offset(int const s1,
 template<typename Frame>
 Displacement<Frame> Ephemeris<Frame>::subsystem_conversion(
     int const s1, int const s2, Instant const& t) const {
-  DoublePrecision<Displacement<Frame>> const offset =
-      inter_subsystem_offset(s1, s2, t);
-  return offset.value + offset.error;
+  return inter_subsystem_offset(s1, s2, t).Collapse();
 }
 
 template<typename Frame>
@@ -1193,7 +1192,11 @@ void Ephemeris<Frame>::WriteToMessage(
       message->add_body_subsystem(subsystem_of_body(unowned_body));
     }
     for (auto const& offset : subsystem_origin_offset_) {
-      offset.WriteToMessage(message->add_subsystem_origin_offset());
+      // The double-precision form is exact and `Split` recovers it exactly,
+      // so the sector decomposition round-trips losslessly through the
+      // pre-sector wire format.
+      offset.ToDoublePrecision().WriteToMessage(
+          message->add_subsystem_origin_offset());
     }
     for (auto const& barycentre : subsystem_barycentre_) {
       barycentre.WriteToMessage(message->add_subsystem_barycentre());
@@ -1276,9 +1279,9 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
     CHECK_EQ(message.subsystem_origin_offset_size(),
              ephemeris->subsystem_origin_offset_.size());
     for (int s = 0; s < message.subsystem_origin_offset_size(); ++s) {
-      ephemeris->subsystem_origin_offset_[s] =
+      ephemeris->subsystem_origin_offset_[s] = SectorDisplacement<Frame>::Split(
           DoublePrecision<Displacement<Frame>>::ReadFromMessage(
-              message.subsystem_origin_offset(s));
+              message.subsystem_origin_offset(s)));
     }
     ephemeris->ComputeInterSubsystemOffsets();
     CHECK_EQ(message.subsystem_barycentre_size(),

@@ -29,6 +29,7 @@
 #include "physics/discrete_trajectory.hpp"
 #include "physics/far_field_damping.hpp"
 #include "physics/geopotential.hpp"
+#include "physics/sector.hpp"
 #include "physics/integration_parameters.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/tensors.hpp"
@@ -62,6 +63,7 @@ using namespace principia::physics::_far_field_damping;
 using namespace principia::physics::_geopotential;
 using namespace principia::physics::_integration_parameters;
 using namespace principia::physics::_massive_body;
+using namespace principia::physics::_sector;
 using namespace principia::physics::_tensors;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
@@ -211,8 +213,9 @@ class Ephemeris {
   virtual int number_of_subsystems() const;
 
   // Returns the displacement from the local origin of subsystem `s2` to that
-  // of subsystem `s1`, at time `t`.
-  DoublePrecision<Displacement<Frame>> inter_subsystem_offset(
+  // of subsystem `s1`, at time `t`, as a sector displacement whose cell part
+  // differences exactly against other sector displacements.
+  SectorDisplacement<Frame> inter_subsystem_offset(
       int s1,
       int s2,
       Instant const& t) const;
@@ -793,12 +796,13 @@ class Ephemeris {
   std::vector<int> subsystem_of_body_;
 
   // For each subsystem, the displacement from the local origin of subsystem 0
-  // to its local origin.  Indexed by subsystem; the entry at index 0 is zero.
-  std::vector<DoublePrecision<Displacement<Frame>>> subsystem_origin_offset_;
+  // to its local origin, on the canonical sector lattice.  Indexed by
+  // subsystem; the entry at index 0 is zero.
+  std::vector<SectorDisplacement<Frame>> subsystem_origin_offset_;
 
   // The pairwise differences of the entries of `subsystem_origin_offset_`,
   // precomputed for the gravity kernels; see `inter_subsystem_offset`.
-  std::vector<DoublePrecision<Displacement<Frame>>> inter_subsystem_offsets_;
+  std::vector<SectorDisplacement<Frame>> inter_subsystem_offsets_;
 
   // The total gravitational parameter of the bodies of each subsystem.
   // Indexed by subsystem; empty unless subsystems were given at construction.
