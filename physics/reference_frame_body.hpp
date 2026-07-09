@@ -27,6 +27,18 @@ int ReferenceFrame<InertialFrame, ThisFrame>::subsystem() const {
 }
 
 template<typename InertialFrame, typename ThisFrame>
+std::optional<typename Ephemeris<InertialFrame>::Anchor>
+ReferenceFrame<InertialFrame, ThisFrame>::anchor() const {
+  return std::nullopt;
+}
+
+template<typename InertialFrame, typename ThisFrame>
+typename Ephemeris<InertialFrame>::SubsystemPlacement
+ReferenceFrame<InertialFrame, ThisFrame>::placement() const {
+  return {subsystem(), anchor()};
+}
+
+template<typename InertialFrame, typename ThisFrame>
 SimilarMotion<InertialFrame, ThisFrame>
 ReferenceFrame<InertialFrame, ThisFrame>::ToThisFrameAtTimeSimilarly(
     Instant const& t) const {

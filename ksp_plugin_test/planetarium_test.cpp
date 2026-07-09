@@ -74,6 +74,7 @@ namespace ksp_plugin {
 using ::testing::_;
 using ::testing::AllOf;
 using ::testing::Ge;
+using ::testing::Invoke;
 using ::testing::Le;
 using ::testing::Return;
 using ::testing::ReturnRef;
@@ -413,11 +414,17 @@ TEST_F(PlanetariumTest, PlotMethod4WithAnchor) {
                                         /*t2=*/t0_ + 11 * Second),
                            /*to=*/discrete_trajectory);
 
-  // `plotting_frame_->subsystem()` is the base ReferenceFrame default of 0.
-  ON_CALL(mock_ephemeris_, subsystem_conversion(0, 0, _))
-      .WillByDefault(Return(Displacement<Barycentric>{}));
-  ON_CALL(mock_ephemeris_, subsystem_velocity_conversion(0, 0))
-      .WillByDefault(Return(Velocity<Barycentric>{}));
+  // `plotting_frame_->placement()` is the base ReferenceFrame default of
+  // {0, nullopt}; only the anchors contribute to the conversion here.
+  ON_CALL(mock_ephemeris_, placement_conversion(_, _, _))
+      .WillByDefault(
+          Invoke([](Ephemeris<Barycentric>::SubsystemPlacement const& from,
+                    Ephemeris<Barycentric>::SubsystemPlacement const& to,
+                    Instant const& t) {
+            return Ephemeris<Barycentric>::Anchor::Conversion(from.anchor,
+                                                              to.anchor,
+                                                              t);
+          }));
 
   Planetarium::Parameters const parameters(
       /*sphere_radius_multiplier=*/1,

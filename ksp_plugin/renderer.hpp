@@ -3,6 +3,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "base/not_null.hpp"
@@ -155,13 +156,14 @@ class Renderer {
   virtual SimilarMotion<Barycentric, Navigation> BarycentricToPlotting(
       Instant const& time) const;
 
-  // `subsystem` is the subsystem relative to whose local origin the
-  // `Barycentric` side of the transformation is represented.
+  // `placement` is the placement in whose representation the `Barycentric`
+  // side of the transformation is expressed.
   virtual RigidTransformation<Barycentric, World> BarycentricToWorld(
       Instant const& time,
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-      int subsystem = 0) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   virtual OrthogonalMap<Barycentric, World> BarycentricToWorld(
       Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
@@ -201,13 +203,14 @@ class Renderer {
       Instant const& time,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
 
-  // `subsystem` is the subsystem relative to whose local origin the
-  // `Barycentric` side of the transformation is represented.
+  // `placement` is the placement in whose representation the `Barycentric`
+  // side of the transformation is expressed.
   virtual RigidTransformation<World, Barycentric> WorldToBarycentric(
       Instant const& time,
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-      int subsystem = 0) const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
   virtual OrthogonalMap<World, Barycentric> WorldToBarycentric(
       Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
@@ -251,18 +254,14 @@ class Renderer {
                          Instant const&,
                          DegreesOfFreedom<World> const&)> const& append) const;
 
-  // The displacement to add to a position represented relative to the local
-  // origin of subsystem `s1` so that it becomes represented relative to the
-  // local origin of subsystem `s2` at time `t`.  Zero if no ephemeris was
-  // given at construction.
-  Displacement<Barycentric> SubsystemConversion(int s1,
-                                                int s2,
-                                                Instant const& t) const;
-
-  // The velocity to add to a velocity represented relative to the (moving)
-  // local origin of subsystem `s1` so that it becomes represented relative to
-  // that of subsystem `s2`.  Zero if no ephemeris was given at construction.
-  Velocity<Barycentric> SubsystemVelocityConversion(int s1, int s2) const;
+  // The displacement and velocity to add to degrees of freedom represented
+  // under placement `from` so that they become represented under placement
+  // `to` at time `t`; see `Ephemeris::placement_conversion`.  Without an
+  // ephemeris only the anchors are converted.
+  std::pair<Displacement<Barycentric>, Velocity<Barycentric>>
+  PlacementConversion(Ephemeris<Barycentric>::SubsystemPlacement const& from,
+                      Ephemeris<Barycentric>::SubsystemPlacement const& to,
+                      Instant const& t) const;
 
   not_null<Celestial const*> const sun_;
 

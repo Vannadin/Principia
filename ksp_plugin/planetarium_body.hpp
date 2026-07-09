@@ -161,25 +161,17 @@ void Planetarium::PlotMethod4(
     Length* const minimal_distance,
     Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
   if constexpr (std::is_same_v<Frame, Barycentric>) {
-    int const subsystem = placement.subsystem;
-    int const plotting_subsystem = plotting_frame_->subsystem();
-    // An anchored vessel's coordinates are near its local origin; the anchor
-    // (affine in time, folded here at `last_time` — exact because
-    // `TranslatedTrajectory` is affine with the same epoch) places them at
-    // their true position, so a void vessel plots where it really is rather
-    // than on top of its home star.
-    if (subsystem != plotting_subsystem || placement.anchor.has_value()) {
-      Displacement<Barycentric> offset =
-          ephemeris_->subsystem_conversion(subsystem,
-                                           plotting_subsystem,
-                                           last_time);
-      Velocity<Barycentric> velocity =
-          ephemeris_->subsystem_velocity_conversion(subsystem,
-                                                    plotting_subsystem);
-      if (placement.anchor.has_value()) {
-        offset += placement.anchor->OffsetAt(last_time);
-        velocity += placement.anchor->velocity;
-      }
+    Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
+        plotting_frame_->placement();
+    // The conversion into the plotting frame's own placement (affine in time,
+    // folded here at `last_time` — exact because `TranslatedTrajectory` is
+    // affine with the same epoch) places an anchored void vessel at its true
+    // position, and differences the anchors on the sector lattice against a
+    // target-vessel frame.
+    if (placement.subsystem != frame_placement.subsystem ||
+        placement.anchor != frame_placement.anchor) {
+      auto const [offset, velocity] = ephemeris_->placement_conversion(
+          placement, frame_placement, last_time);
       TranslatedTrajectory<Barycentric> const translated_trajectory(
           trajectory, offset, velocity, last_time);
       PlotMethod4(translated_trajectory,
@@ -189,7 +181,7 @@ void Planetarium::PlotMethod4(
                   add_point,
                   max_points,
                   minimal_distance,
-                  {plotting_subsystem, std::nullopt});
+                  frame_placement);
       return;
     }
   }

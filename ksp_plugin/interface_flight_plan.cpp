@@ -367,18 +367,17 @@ XYZ __cdecl principia__FlightPlanGetManoeuvreInitialPlottedVelocity(
 
   FlightPlan const& flight_plan = GetFlightPlan(*plugin, vessel_guid);
   auto const& [t, dof] = flight_plan.GetSegment(2 * index)->back();
-  DegreesOfFreedom<Barycentric> converted_degrees_of_freedom = dof;
-  if (int const plotting_subsystem =
-          plugin->renderer().GetPlottingFrame()->subsystem();
-      flight_plan.subsystem() != plotting_subsystem) {
-    converted_degrees_of_freedom = {
-        dof.position() +
-            flight_plan.ephemeris().subsystem_conversion(
-                flight_plan.subsystem(), plotting_subsystem, t),
-        dof.velocity() +
-            flight_plan.ephemeris().subsystem_velocity_conversion(
-                flight_plan.subsystem(), plotting_subsystem)};
-  }
+  // Converted into the plotting frame's own placement: an anchored void
+  // flight plan is placed at its true position, and the anchors difference on
+  // the sector lattice against a target-vessel frame.
+  auto const [conversion_displacement, conversion_velocity] =
+      flight_plan.ephemeris().placement_conversion(
+          {flight_plan.subsystem(), flight_plan.anchor()},
+          plugin->renderer().GetPlottingFrame()->placement(),
+          t);
+  DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom = {
+      dof.position() + conversion_displacement,
+      dof.velocity() + conversion_velocity};
   Velocity<Navigation> const v =
       plugin->renderer().BarycentricToPlotting(t)(
           converted_degrees_of_freedom).velocity();

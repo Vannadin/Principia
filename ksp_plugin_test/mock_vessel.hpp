@@ -22,6 +22,11 @@ class MockVessel : public Vessel {
               (not_null<Celestial const*> parent),
               (override));
 
+  MOCK_METHOD((std::optional<Ephemeris<Barycentric>::Anchor> const&),
+              anchor,
+              (),
+              (const, override));
+
   MOCK_METHOD(DiscreteTrajectorySegmentIterator<Barycentric>,
               psychohistory,
               (),

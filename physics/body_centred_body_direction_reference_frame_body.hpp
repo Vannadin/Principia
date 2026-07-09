@@ -36,6 +36,10 @@ BodyCentredBodyDirectionReferenceFrame(
       secondary_(secondary),
       primary_subsystem_(
           [s = ephemeris->subsystem_of_body(primary)]() { return s; }),
+      primary_anchor_(
+          []() -> std::optional<typename Ephemeris<InertialFrame>::Anchor> {
+            return std::nullopt;
+          }),
       compute_gravitational_acceleration_on_primary_(
           [this](Position<InertialFrame> const& /*position*/,
                  Instant const& t) {
@@ -58,13 +62,24 @@ BodyCentredBodyDirectionReferenceFrame(
     not_null<Ephemeris<InertialFrame> const*> const ephemeris,
     std::function<Trajectory<InertialFrame> const&()> primary_trajectory,
     not_null<MassiveBody const*> const secondary,
-    std::function<int()> primary_subsystem)
+    std::function<int()> primary_subsystem,
+    std::function<std::optional<typename Ephemeris<InertialFrame>::Anchor>()>
+        primary_anchor)
     : ephemeris_(ephemeris),
       primary_(nullptr),
       secondary_(secondary),
       primary_subsystem_(primary_subsystem == nullptr
                              ? std::function<int()>([]() { return 0; })
                              : std::move(primary_subsystem)),
+      primary_anchor_(
+          primary_anchor == nullptr
+              ? std::function<
+                    std::optional<typename Ephemeris<InertialFrame>::Anchor>()>(
+                    []() -> std::optional<
+                         typename Ephemeris<InertialFrame>::Anchor> {
+                      return std::nullopt;
+                    })
+              : std::move(primary_anchor)),
       compute_gravitational_acceleration_on_primary_(
           [this](Position<InertialFrame> const& position, Instant const& t) {
             return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(
@@ -116,11 +131,20 @@ int BodyCentredBodyDirectionReferenceFrame<InertialFrame,
 }
 
 template<typename InertialFrame, typename ThisFrame>
+std::optional<typename Ephemeris<InertialFrame>::Anchor>
+BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::anchor()
+    const {
+  return primary_anchor_();
+}
+
+template<typename InertialFrame, typename ThisFrame>
 RigidMotion<InertialFrame, ThisFrame>
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 ToThisFrameAtTime(Instant const& t) const {
-  DegreesOfFreedom<InertialFrame> const primary_degrees_of_freedom =
+  DegreesOfFreedom<InertialFrame> const origin_degrees_of_freedom =
       primary_trajectory_().EvaluateDegreesOfFreedom(t);
+  DegreesOfFreedom<InertialFrame> const primary_degrees_of_freedom =
+      TruePrimaryDegreesOfFreedom(origin_degrees_of_freedom, t);
   DegreesOfFreedom<InertialFrame> const secondary_degrees_of_freedom =
       SecondaryDegreesOfFreedom(t);
 
@@ -133,7 +157,8 @@ ToThisFrameAtTime(Instant const& t) const {
   return ToThisFrame(primary_degrees_of_freedom,
                      secondary_degrees_of_freedom,
                      primary_acceleration,
-                     secondary_acceleration);
+                     secondary_acceleration,
+                     origin_degrees_of_freedom);
 }
 
 template<typename InertialFrame, typename ThisFrame>
@@ -165,8 +190,14 @@ Vector<Acceleration, InertialFrame>
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalAcceleration(Instant const& t,
                           Position<InertialFrame> const& q) const {
+  // `q` is represented in this frame's placement; the field is evaluated at
+  // the true subsystem-relative position.
+  Position<InertialFrame> q_true = q;
+  if (auto const anchor = primary_anchor_(); anchor.has_value()) {
+    q_true += anchor->OffsetAt(t);
+  }
   return ephemeris_->ComputeGravitationalAccelerationOnMasslessBody(
-      q, t, primary_subsystem_());
+      q_true, t, primary_subsystem_());
 }
 
 template<typename InertialFrame, typename ThisFrame>
@@ -174,15 +205,23 @@ SpecificEnergy
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 GravitationalPotential(Instant const& t,
                        Position<InertialFrame> const& q) const {
-  return ephemeris_->ComputeGravitationalPotential(q, t, primary_subsystem_());
+  // See `GravitationalAcceleration` for the anchor handling.
+  Position<InertialFrame> q_true = q;
+  if (auto const anchor = primary_anchor_(); anchor.has_value()) {
+    q_true += anchor->OffsetAt(t);
+  }
+  return ephemeris_->ComputeGravitationalPotential(
+      q_true, t, primary_subsystem_());
 }
 
 template<typename InertialFrame, typename ThisFrame>
 AcceleratedRigidMotion<InertialFrame, ThisFrame>
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 MotionOfThisFrame(Instant const& t) const {
-  DegreesOfFreedom<InertialFrame> const primary_degrees_of_freedom =
+  DegreesOfFreedom<InertialFrame> const origin_degrees_of_freedom =
       primary_trajectory_().EvaluateDegreesOfFreedom(t);
+  DegreesOfFreedom<InertialFrame> const primary_degrees_of_freedom =
+      TruePrimaryDegreesOfFreedom(origin_degrees_of_freedom, t);
   DegreesOfFreedom<InertialFrame> const secondary_degrees_of_freedom =
       SecondaryDegreesOfFreedom(t);
 
@@ -200,7 +239,8 @@ MotionOfThisFrame(Instant const& t) const {
   auto const to_this_frame = ToThisFrame(primary_degrees_of_freedom,
                                          secondary_degrees_of_freedom,
                                          primary_acceleration,
-                                         secondary_acceleration);
+                                         secondary_acceleration,
+                                         origin_degrees_of_freedom);
 
   Displacement<InertialFrame> const r =
       secondary_degrees_of_freedom.position() -
@@ -242,6 +282,20 @@ MotionOfThisFrame(Instant const& t) const {
 template<typename InertialFrame, typename ThisFrame>
 DegreesOfFreedom<InertialFrame>
 BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
+TruePrimaryDegreesOfFreedom(
+    DegreesOfFreedom<InertialFrame> const& primary_degrees_of_freedom,
+    Instant const& t) const {
+  auto const anchor = primary_anchor_();
+  if (!anchor.has_value()) {
+    return primary_degrees_of_freedom;
+  }
+  return {primary_degrees_of_freedom.position() + anchor->OffsetAt(t),
+          primary_degrees_of_freedom.velocity() + anchor->velocity};
+}
+
+template<typename InertialFrame, typename ThisFrame>
+DegreesOfFreedom<InertialFrame>
+BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::
 SecondaryDegreesOfFreedom(Instant const& t) const {
   DegreesOfFreedom<InertialFrame> secondary_degrees_of_freedom =
       secondary_trajectory_->EvaluateDegreesOfFreedom(t);
@@ -262,7 +316,8 @@ BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::ToThisFrame(
     DegreesOfFreedom<InertialFrame> const& primary_degrees_of_freedom,
     DegreesOfFreedom<InertialFrame> const& secondary_degrees_of_freedom,
     Vector<Acceleration, InertialFrame> const& primary_acceleration,
-    Vector<Acceleration, InertialFrame> const& secondary_acceleration) {
+    Vector<Acceleration, InertialFrame> const& secondary_acceleration,
+    DegreesOfFreedom<InertialFrame> const& origin_degrees_of_freedom) {
   Rotation<InertialFrame, ThisFrame> rotation =
       Rotation<InertialFrame, ThisFrame>::Identity();
   AngularVelocity<InertialFrame> angular_velocity;
@@ -273,14 +328,18 @@ BodyCentredBodyDirectionReferenceFrame<InertialFrame, ThisFrame>::ToThisFrame(
                                        rotation,
                                        angular_velocity);
 
+  // The rotation is computed from the true geometry above; the transformation
+  // works in the frame's own (anchored) representation, so that the
+  // degrees of freedom it consumes difference against the primary at the
+  // small local scale.
   RigidTransformation<InertialFrame, ThisFrame> const
-      rigid_transformation(primary_degrees_of_freedom.position(),
+      rigid_transformation(origin_degrees_of_freedom.position(),
                            ThisFrame::origin,
                            rotation.template Forget<OrthogonalMap>());
   return RigidMotion<InertialFrame, ThisFrame>(
              rigid_transformation,
              angular_velocity,
-             primary_degrees_of_freedom.velocity());
+             origin_degrees_of_freedom.velocity());
 }
 
 }  // namespace internal

@@ -2,6 +2,7 @@
 #define PRINCIPIA_PHYSICS_REFERENCE_FRAME_HPP_
 
 #include <memory>
+#include <optional>
 
 #include "base/not_null.hpp"
 #include "geometry/frame.hpp"
@@ -58,6 +59,19 @@ class ReferenceFrame {
   // `InertialFrame` degrees of freedom consumed and produced by this frame are
   // represented.
   virtual int subsystem() const;
+
+  // The anchor further displacing the representation of the `InertialFrame`
+  // degrees of freedom consumed and produced by this frame, on top of the
+  // local origin of `subsystem()`; nullopt for celestial-based frames.  A
+  // target-vessel frame reads its target's anchored prediction directly, so
+  // its degrees of freedom are represented relative to the target's anchor.
+  virtual std::optional<typename Ephemeris<InertialFrame>::Anchor> anchor()
+      const;
+
+  // The placement bundling `subsystem()` and `anchor()`; converting degrees
+  // of freedom into this frame's representation must target the whole
+  // placement, not just the subsystem.
+  typename Ephemeris<InertialFrame>::SubsystemPlacement placement() const;
 
   // At least one of `ToThisFrameAtTimeSimilarly` and
   // `FromThisFrameAtTimeSimilarly` must be overriden in derived classes; the

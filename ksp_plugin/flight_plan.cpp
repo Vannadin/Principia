@@ -153,6 +153,11 @@ int FlightPlan::subsystem() const {
   return subsystem_;
 }
 
+std::optional<Ephemeris<Barycentric>::Anchor> const& FlightPlan::anchor()
+    const {
+  return anchor_;
+}
+
 Ephemeris<Barycentric> const& FlightPlan::ephemeris() const {
   return *ephemeris_;
 }

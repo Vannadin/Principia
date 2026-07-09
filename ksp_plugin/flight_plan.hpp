@@ -85,6 +85,10 @@ class FlightPlan {
   // The subsystem in whose representation this flight plan is expressed.
   virtual int subsystem() const;
 
+  // The anchor further displacing the representation of this flight plan;
+  // absent when the vessel was unanchored at creation or rebase.
+  virtual std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
+
   // The ephemeris used to compute this flight plan.
   virtual Ephemeris<Barycentric> const& ephemeris() const;
 

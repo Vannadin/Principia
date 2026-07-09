@@ -1635,7 +1635,7 @@ std::unique_ptr<FrameField<World, Navball>> Plugin::NavballFrameField(
                             current_time,
                             sun_world_position_,
                             planetarium_rotation,
-                            renderer.GetPlottingFrame()->subsystem())(q))
+                            renderer.GetPlottingFrame()->placement())(q))
                     .Forget<OrthogonalMap>();
 
       // KSP's navball has x west, y up, z south.
@@ -2067,27 +2067,14 @@ Velocity<World> Plugin::VesselVelocity(
     Instant const& time,
     DegreesOfFreedom<Barycentric> const& degrees_of_freedom,
     Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
-  int const subsystem = placement.subsystem;
-  auto const& anchor = placement.anchor;
-  DegreesOfFreedom<Barycentric> converted_degrees_of_freedom =
-      degrees_of_freedom;
-  if (int const plotting_subsystem =
-          renderer_->GetPlottingFrame()->subsystem();
-      subsystem != plotting_subsystem) {
-    converted_degrees_of_freedom = {
-        converted_degrees_of_freedom.position() +
-            ephemeris_->subsystem_conversion(subsystem,
-                                             plotting_subsystem,
-                                             time),
-        converted_degrees_of_freedom.velocity() +
-            ephemeris_->subsystem_velocity_conversion(subsystem,
-                                                      plotting_subsystem)};
-  }
-  if (anchor.has_value()) {
-    converted_degrees_of_freedom = {
-        converted_degrees_of_freedom.position() + anchor->OffsetAt(time),
-        converted_degrees_of_freedom.velocity() + anchor->velocity};
-  }
+  // Converted into the plotting frame's own placement, so that against a
+  // target-vessel frame the anchors difference on the sector lattice.
+  auto const [conversion_displacement, conversion_velocity] =
+      ephemeris_->placement_conversion(
+          placement, renderer_->GetPlottingFrame()->placement(), time);
+  DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom = {
+      degrees_of_freedom.position() + conversion_displacement,
+      degrees_of_freedom.velocity() + conversion_velocity};
   DegreesOfFreedom<Navigation> const plotting_frame_degrees_of_freedom =
       renderer_->BarycentricToPlotting(time)(converted_degrees_of_freedom);
   // Note that in the rotating-pulsating reference frame, this value is given in

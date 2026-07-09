@@ -30,6 +30,7 @@ namespace ksp_plugin {
 
 using ::testing::Ref;
 using ::testing::Return;
+using ::testing::ReturnRef;
 using ::testing::_;
 using namespace principia::base::_not_null;
 using namespace principia::geometry::_grassmann;
@@ -236,6 +237,8 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithTargetVessel) {
       /*to=*/vessel_trajectory);
   EXPECT_CALL(vessel, prediction())
       .WillRepeatedly(Return(vessel_trajectory.segments().begin()));
+  std::optional<Ephemeris<Barycentric>::Anchor> const no_anchor;
+  EXPECT_CALL(vessel, anchor()).WillRepeatedly(ReturnRef(no_anchor));
 
   for (Instant t = t0_ + 3 * Second; t < t0_ + 8 * Second; t += 1 * Second) {
     EXPECT_CALL(celestial_trajectory, EvaluateDegreesOfFreedom(t))
@@ -262,6 +265,88 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithTargetVessel) {
               42 * Metre);
     EXPECT_LT(degrees_of_freedom.velocity().Norm(), 6 * Metre / Second);
     ++index;
+  }
+}
+
+// A void rendezvous rendered in a target-vessel frame: the target frame's
+// representation carries the target's own anchor, and the active vessel is
+// converted into that placement — the anchors difference on the sector
+// lattice, so the plot shows the true local geometry.  Pre-fix (the failure
+// this test is first against) the active anchor was added absolutely while
+// the target frame stayed anchored-local, so the rendered positions were
+// void-scale (~2e16 m) artifacts.
+TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchoredTarget) {
+  MockEphemeris<Barycentric> ephemeris;
+  MockContinuousTrajectory<Barycentric> celestial_trajectory;
+  EXPECT_CALL(ephemeris, trajectory(_))
+      .WillRepeatedly(Return(&celestial_trajectory));
+
+  // The active vessel's trajectory, in its own anchored coordinates.
+  DiscreteTrajectory<Barycentric> trajectory_to_render;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(
+          /*v=*/Velocity<Barycentric>(
+              {6 * Metre / Second, 5 * Metre / Second, 4 * Metre / Second}),
+          /*Δt=*/1 * Second,
+          /*t1=*/t0_,
+          /*t2=*/t0_ + 10 * Second),
+      /*to=*/trajectory_to_render);
+
+  // The target vessel's prediction, in its own anchored coordinates.
+  MockVessel vessel;
+  DiscreteTrajectory<Barycentric> vessel_trajectory;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(
+          DegreesOfFreedom<Barycentric>(
+              Barycentric::origin,
+              Velocity<Barycentric>({1 * Metre / Second,
+                                     2 * Metre / Second,
+                                     3 * Metre / Second})),
+          /*Δt=*/1 * Second,
+          /*t0=*/t0_,
+          /*t1=*/t0_ + 3 * Second,
+          /*t2=*/t0_ + 8 * Second),
+      /*to=*/vessel_trajectory);
+  EXPECT_CALL(vessel, prediction())
+      .WillRepeatedly(Return(vessel_trajectory.segments().begin()));
+
+  // Both vessels are ~2e16 m into the void, eight metres apart.
+  std::optional<Ephemeris<Barycentric>::Anchor> const target_anchor(
+      Ephemeris<Barycentric>::Anchor{
+          .offset = SectorDisplacement<Barycentric>::Split(
+              Displacement<Barycentric>(
+                  {2e16 * Metre, 0 * Metre, 0 * Metre})),
+          .velocity = Velocity<Barycentric>(),
+          .epoch = t0_});
+  Ephemeris<Barycentric>::Anchor const active_anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>(
+              {2e16 * Metre, 8 * Metre, 0 * Metre})),
+      .velocity = Velocity<Barycentric>(),
+      .epoch = t0_};
+  EXPECT_CALL(vessel, anchor()).WillRepeatedly(ReturnRef(target_anchor));
+
+  for (Instant t = t0_ + 3 * Second; t < t0_ + 8 * Second; t += 1 * Second) {
+    EXPECT_CALL(celestial_trajectory, EvaluateDegreesOfFreedom(t))
+        .WillOnce(Return(DegreesOfFreedom<Barycentric>(
+            Barycentric::origin + Displacement<Barycentric>(
+                                      {300 * Metre, 200 * Metre, 100 * Metre}),
+            Barycentric::unmoving)));
+  }
+
+  renderer_.SetTargetVessel(&vessel, &celestial_, &ephemeris);
+  auto const rendered_trajectory =
+      renderer_.RenderBarycentricTrajectoryInPlotting(
+          trajectory_to_render.begin(),
+          trajectory_to_render.end(),
+          {/*subsystem=*/0, active_anchor});
+
+  // The rendered positions are the true local rendezvous geometry — tens of
+  // metres — not the ~2e16 m void distance.
+  EXPECT_EQ(5, rendered_trajectory.size());
+  for (auto const& [time, degrees_of_freedom] : rendered_trajectory) {
+    EXPECT_LT((degrees_of_freedom.position() - Navigation::origin).Norm(),
+              150 * Metre);
   }
 }
 

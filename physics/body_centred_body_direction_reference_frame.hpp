@@ -9,6 +9,7 @@
 #define PRINCIPIA_PHYSICS_BODY_CENTRED_BODY_DIRECTION_REFERENCE_FRAME_HPP_
 
 #include <memory>
+#include <optional>
 
 #include "base/not_null.hpp"
 #include "geometry/grassmann.hpp"
@@ -60,12 +61,18 @@ class BodyCentredBodyDirectionReferenceFrame
 
   // The positions of `primary_trajectory` must be represented relative to the
   // local origin of the subsystem returned by `primary_subsystem`; if the
-  // latter is omitted, subsystem 0 is assumed.
+  // latter is omitted, subsystem 0 is assumed.  If `primary_anchor` is given
+  // and returns an anchor, the positions are further displaced by that anchor
+  // (a target vessel coasting the void): the frame's origin stays in the
+  // anchored representation, but the direction axis and the gravitational
+  // quantities are computed at the primary's true position.
   BodyCentredBodyDirectionReferenceFrame(
       not_null<Ephemeris<InertialFrame> const*> ephemeris,
       std::function<Trajectory<InertialFrame> const&()> primary_trajectory,
       not_null<MassiveBody const*> secondary,
-      std::function<int()> primary_subsystem = nullptr);
+      std::function<int()> primary_subsystem = nullptr,
+      std::function<std::optional<typename Ephemeris<InertialFrame>::Anchor>()>
+          primary_anchor = nullptr);
 
   not_null<MassiveBody const*> primary() const;
   not_null<MassiveBody const*> secondary() const;
@@ -73,6 +80,8 @@ class BodyCentredBodyDirectionReferenceFrame
   Instant t_min() const override;
   Instant t_max() const override;
   int subsystem() const override;
+  std::optional<typename Ephemeris<InertialFrame>::Anchor> anchor()
+      const override;
 
   RigidMotion<InertialFrame, ThisFrame> ToThisFrameAtTime(
       Instant const& t) const override;
@@ -101,22 +110,36 @@ class BodyCentredBodyDirectionReferenceFrame
       Instant const& t) const override;
 
   // Implementation helper that avoids evaluating the degrees of freedom and the
-  // accelerations multiple times.
+  // accelerations multiple times.  The rotation is computed from the (true)
+  // primary and secondary degrees of freedom; the transformation maps
+  // `origin_degrees_of_freedom` — the primary in the frame's own anchored
+  // representation — to the origin of `ThisFrame`.
   static RigidMotion<InertialFrame, ThisFrame> ToThisFrame(
       DegreesOfFreedom<InertialFrame> const& primary_degrees_of_freedom,
       DegreesOfFreedom<InertialFrame> const& secondary_degrees_of_freedom,
       Vector<Acceleration, InertialFrame> const& primary_acceleration,
-      Vector<Acceleration, InertialFrame> const& secondary_acceleration);
+      Vector<Acceleration, InertialFrame> const& secondary_acceleration,
+      DegreesOfFreedom<InertialFrame> const& origin_degrees_of_freedom);
 
   // The degrees of freedom of the secondary, represented relative to the local
   // origin of the subsystem of this frame.
   DegreesOfFreedom<InertialFrame> SecondaryDegreesOfFreedom(
       Instant const& t) const;
 
+  // The true degrees of freedom of the primary at `t`: the anchored
+  // representation read from the trajectory, plus the anchor when there is
+  // one.  Used for the direction axis and the gravitational quantities; the
+  // frame's origin keeps the anchored representation.
+  DegreesOfFreedom<InertialFrame> TruePrimaryDegreesOfFreedom(
+      DegreesOfFreedom<InertialFrame> const& primary_degrees_of_freedom,
+      Instant const& t) const;
+
   not_null<Ephemeris<InertialFrame> const*> const ephemeris_;
   MassiveBody const* const primary_;
   not_null<MassiveBody const*> const secondary_;
   std::function<int()> const primary_subsystem_;
+  std::function<std::optional<typename Ephemeris<InertialFrame>::Anchor>()>
+      const primary_anchor_;
   std::function<Vector<Acceleration, InertialFrame>(
       Position<InertialFrame> const& position,
       Instant const& t)> compute_gravitational_acceleration_on_primary_;
