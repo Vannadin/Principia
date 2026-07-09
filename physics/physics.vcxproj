@@ -67,6 +67,8 @@
     <ClInclude Include="mock_rigid_reference_frame.hpp" />
     <ClInclude Include="rigid_motion.hpp" />
     <ClInclude Include="rigid_motion_body.hpp" />
+    <ClInclude Include="sector.hpp" />
+    <ClInclude Include="sector_body.hpp" />
     <ClInclude Include="ephemeris.hpp" />
     <ClInclude Include="ephemeris_body.hpp" />
     <ClInclude Include="far_field_damping.hpp" />
@@ -127,6 +129,7 @@
     <ClCompile Include="ephemeris_test.cpp" />
     <ClCompile Include="far_field_damping_test.cpp" />
     <ClCompile Include="rigid_reference_frame_test.cpp" />
+    <ClCompile Include="sector_test.cpp" />
     <ClCompile Include="rotating_pulsating_reference_frame_test.cpp" />
     <ClCompile Include="similar_motion_test.cpp" />
     <ClCompile Include="solar_system_test.cpp" />
