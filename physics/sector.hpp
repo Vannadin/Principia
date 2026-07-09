@@ -52,7 +52,8 @@ struct SectorDisplacement final {
 
   // Decomposes `displacement` into the nearest cell and the remainder.  The
   // remainder is exact (Sterbenz), so `Collapse()` returns `displacement` bit
-  // for bit.
+  // for bit.  The decomposition is canonical: each component of the remainder
+  // is in [−sector_side/2, sector_side/2).
   static SectorDisplacement Split(Displacement<Frame> const& displacement);
 
   // Same, but also folds in the `error` component.  Lossless when the exact
@@ -71,12 +72,14 @@ struct SectorDisplacement final {
   Displacement<Frame> Collapse(Displacement<Frame> const& Δq) const;
   Displacement<Frame> Collapse() const;
 
-  // Moves whole cells out of `local` into `cell`, exactly; afterwards each
-  // component of `local` is at most `sector_side / 2` in absolute value.
+  // Moves whole cells out of `local` into `cell`, exactly; afterwards the
+  // decomposition is canonical, each component of `local` in
+  // [−sector_side/2, sector_side/2).
   void Recenter();
 
   // The value `cell · sector_side + local` as an exact double-precision sum;
-  // the round trip through `Split` is lossless.  Used for serialization.
+  // for a canonical decomposition the round trip through `Split` recovers the
+  // cell and the local part exactly.  Used for serialization.
   DoublePrecision<Displacement<Frame>> ToDoublePrecision() const;
 
   SectorDisplacement& operator+=(SectorDisplacement const& right);

@@ -41,6 +41,37 @@ inline SectorIndex operator-(SectorIndex const& left,
   return result;
 }
 
+// Moves a component of `local` sitting exactly at +sector_side/2 — a
+// half-cell tie, which `llround` (half away from zero) leaves on either side
+// depending on the sign — to the equivalent −sector_side/2 of the next cell.
+// Exact.  This makes the decomposition canonical, local ∈ [−s/2, s/2) per
+// component, so that value-equal sector displacements produced by `Split` and
+// `Recenter` compare equal.
+template<typename Frame>
+void CanonicalizeHalfCellTies(SectorIndex& cell, Displacement<Frame>& local) {
+  constexpr Length half_side = sector_side / 2;
+  R3Element<Length> coordinates = local.coordinates();
+  bool tied = false;
+  if (coordinates.x == half_side) {
+    ++cell.x;
+    coordinates.x = -half_side;
+    tied = true;
+  }
+  if (coordinates.y == half_side) {
+    ++cell.y;
+    coordinates.y = -half_side;
+    tied = true;
+  }
+  if (coordinates.z == half_side) {
+    ++cell.z;
+    coordinates.z = -half_side;
+    tied = true;
+  }
+  if (tied) {
+    local = Displacement<Frame>(coordinates);
+  }
+}
+
 template<typename Frame>
 SectorDisplacement<Frame> SectorDisplacement<Frame>::Split(
     Displacement<Frame> const& displacement) {
@@ -53,6 +84,7 @@ SectorDisplacement<Frame> SectorDisplacement<Frame>::Split(
   // (or the cell is zero and the subtrahend vanishes), so the remainder is
   // exact by the Sterbenz lemma.
   result.local = displacement - FromCell(result.cell);
+  CanonicalizeHalfCellTies(result.cell, result.local);
   return result;
 }
 
@@ -96,12 +128,12 @@ void SectorDisplacement<Frame>::Recenter() {
   SectorIndex const excess{std::llround(coordinates.x / sector_side),
                            std::llround(coordinates.y / sector_side),
                            std::llround(coordinates.z / sector_side)};
-  if (excess == SectorIndex{}) {
-    return;
+  if (excess != SectorIndex{}) {
+    cell += excess;
+    // Exact for the same reason as in `Split`.
+    local -= FromCell(excess);
   }
-  cell += excess;
-  // Exact for the same reason as in `Split`.
-  local -= FromCell(excess);
+  CanonicalizeHalfCellTies(cell, local);
 }
 
 template<typename Frame>

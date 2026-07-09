@@ -109,6 +109,36 @@ TEST_F(SectorTest, DoublePrecisionRoundTrip) {
   EXPECT_EQ(sector.local, reread.local);
 }
 
+// Half-cell ties are canonical: a component at exactly ±sector_side/2
+// decomposes as −sector_side/2 of the appropriate cell, in `Split` and
+// `Recenter` alike, so value-equal decompositions compare equal — in
+// particular the double-precision round trip stays representation-lossless
+// at the boundary.
+TEST_F(SectorTest, CanonicalHalfCellTies) {
+  Length const half = sector_side / 2;
+  for (double const cells : {-2.5, -1.5, -0.5, 0.5, 1.5, 2.5}) {
+    Displacement<World> const displacement(
+        {cells * sector_side, 0 * Metre, 0 * Metre});
+    auto const sector = SectorDisplacement<World>::Split(displacement);
+    EXPECT_EQ(-half, sector.local.coordinates().x) << cells;
+    EXPECT_EQ(displacement, sector.Collapse()) << cells;
+    auto const reread =
+        SectorDisplacement<World>::Split(sector.ToDoublePrecision());
+    EXPECT_EQ(sector.cell, reread.cell) << cells;
+    EXPECT_EQ(sector.local, reread.local) << cells;
+  }
+
+  // `Recenter` lands ties on the same canonical side as `Split`.
+  SectorDisplacement<World> sector{
+      .cell = {0, 0, 0},
+      .local = Displacement<World>({-1.5 * sector_side, 0 * Metre, 0 * Metre})};
+  auto const collapsed = sector.Collapse();
+  sector.Recenter();
+  EXPECT_EQ(-1, sector.cell.x);
+  EXPECT_EQ(-half, sector.local.coordinates().x);
+  EXPECT_EQ(collapsed, sector.Collapse());
+}
+
 // `Collapse(Δq)` sums the small terms before the cell displacement, so a
 // millimetre-scale Δq survives the collapse when the cell part vanishes in a
 // difference — the collapse-last discipline of the gravity kernels.
