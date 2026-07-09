@@ -129,7 +129,7 @@ PushPullExecutor<
                               sun_world_position,
                               max_points,
                               flight_plan.GetAllSegments(),
-                              {flight_plan.subsystem(), std::nullopt})
+                              {flight_plan.subsystem(), flight_plan.anchor()})
                       .release());
 }
 

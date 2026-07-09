@@ -1259,15 +1259,17 @@ void Plugin::ComputeAndRenderApsides(
     DistinguishedPoints<World>& apoapsides,
     DistinguishedPoints<World>& periapsides,
     Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
-  int const subsystem = placement.subsystem;
   auto const& celestial = *FindOrDie(celestials_, celestial_index);
+  // Into the query vessel's placement — subsystem and anchor composed on the
+  // sector lattice — so that an anchored void vessel's apsides are computed
+  // at its true relative geometry.
+  auto const [celestial_displacement, celestial_velocity] =
+      ephemeris_->placement_conversion(
+          {celestial.subsystem(), std::nullopt}, placement, current_time_);
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
-      ephemeris_->subsystem_conversion(celestial.subsystem(),
-                                       subsystem,
-                                       current_time_),
-      ephemeris_->subsystem_velocity_conversion(celestial.subsystem(),
-                                                subsystem),
+      celestial_displacement,
+      celestial_velocity,
       current_time_);
   DistinguishedPoints<Barycentric> barycentric_apoapsides;
   DistinguishedPoints<Barycentric> barycentric_periapsides;
@@ -1305,16 +1307,16 @@ Plugin::ComputeAndRenderFirstCollision(
     std::function<Length(Angle const& latitude,
                          Angle const& longitude)> const& radius,
     Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
-  int const subsystem = placement.subsystem;
   auto const& celestial = FindOrDie(celestials_, celestial_index);
   auto const& celestial_body = *celestial->body();
+  // See `ComputeAndRenderApsides` for the placement composition.
+  auto const [celestial_displacement, celestial_velocity] =
+      ephemeris_->placement_conversion(
+          {celestial->subsystem(), std::nullopt}, placement, current_time_);
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial->trajectory(),
-      ephemeris_->subsystem_conversion(celestial->subsystem(),
-                                       subsystem,
-                                       current_time_),
-      ephemeris_->subsystem_velocity_conversion(celestial->subsystem(),
-                                                subsystem),
+      celestial_displacement,
+      celestial_velocity,
       current_time_);
 
   // TODO(phl): We should cache the apsides.

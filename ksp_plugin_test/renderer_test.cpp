@@ -326,12 +326,13 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchoredTarget) {
       .epoch = t0_};
   EXPECT_CALL(vessel, anchor()).WillRepeatedly(ReturnRef(target_anchor));
 
+  Position<Barycentric> const celestial_position =
+      Barycentric::origin +
+      Displacement<Barycentric>({300 * Metre, 200 * Metre, 100 * Metre});
   for (Instant t = t0_ + 3 * Second; t < t0_ + 8 * Second; t += 1 * Second) {
     EXPECT_CALL(celestial_trajectory, EvaluateDegreesOfFreedom(t))
-        .WillOnce(Return(DegreesOfFreedom<Barycentric>(
-            Barycentric::origin + Displacement<Barycentric>(
-                                      {300 * Metre, 200 * Metre, 100 * Metre}),
-            Barycentric::unmoving)));
+        .WillRepeatedly(Return(DegreesOfFreedom<Barycentric>(
+            celestial_position, Barycentric::unmoving)));
   }
 
   renderer_.SetTargetVessel(&vessel, &celestial_, &ephemeris);
@@ -348,6 +349,24 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchoredTarget) {
     EXPECT_LT((degrees_of_freedom.position() - Navigation::origin).Norm(),
               150 * Metre);
   }
+
+  // The frame's direction axis is computed at the target's TRUE position —
+  // deep in the void, the celestial almost exactly in the −x direction — so
+  // the transform maps the true target-to-celestial direction to the frame's
+  // +x axis.  (Pre-fix the axis was computed from the raw near-origin
+  // coordinates, pointing at the celestial from the home star instead.)  The
+  // inputs of the transform are in the frame's anchored representation.
+  Instant const t_check = t0_ + 5 * Second;
+  auto const to_plotting = renderer_.BarycentricToPlotting(t_check);
+  DegreesOfFreedom<Barycentric> const target_dof =
+      vessel_trajectory.EvaluateDegreesOfFreedom(t_check);
+  Position<Barycentric> const celestial_in_frame_representation =
+      celestial_position - target_anchor->OffsetAt(t_check);
+  Displacement<Navigation> const image =
+      to_plotting({celestial_in_frame_representation,
+                   Barycentric::unmoving}).position() -
+      to_plotting(target_dof).position();
+  EXPECT_GT(image.coordinates().x / image.Norm(), 0.999);
 }
 
 TEST_F(RendererTest, RenderPlottingTrajectoryInWorldWithoutTargetVessel) {

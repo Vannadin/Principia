@@ -2418,11 +2418,16 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LongCoastReAnchorsContinuously) {
               Lt(1e5 * Metre));
 
   // Continuity of the represented position across the re-anchor(s); see the
-  // derivation in the test comment.
+  // derivation in the test comment.  The fold error scales with the folded
+  // magnitudes — at the lowered bound they are ~1e5 m, so a correct fold is
+  // exact to well below a micron here; the micron threshold catches formula
+  // and sign errors, while the sub-mm bound of the production-scale fold
+  // (magnitudes ~1e12 m) is established by the rounding analysis in
+  // `AdoptAnchor`, not by this test.
   Displacement<Barycentric> const continuity_error =
       (dof2.position() - dof1.position()) +
       Ephemeris<Barycentric>::Anchor::Conversion(anchor_2, anchor_1, t2).first;
-  EXPECT_THAT(continuity_error.Norm(), Lt(0.5 * Milli(Metre)));
+  EXPECT_THAT(continuity_error.Norm(), Lt(1 * Micro(Metre)));
 }
 
 // R2 drop-path golden fixture.  The ">20k-point history can't be cheaply
