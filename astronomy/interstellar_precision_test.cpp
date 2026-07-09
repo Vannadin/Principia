@@ -696,6 +696,82 @@ TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
               Gt(1 * Metre / Pow<2>(Second)));
 }
 
+// Two vessels homed to DIFFERENT subsystems meet in the void — the canonical
+// inter-star rendezvous.  `placement_conversion` composes the subsystem and
+// anchor terms on the sector lattice, where the void-scale cells cancel
+// exactly, and collapses once at the magnitude of the small result: the slow
+// approach is resolved to sub-mm.  Composing `subsystem_conversion` with a
+// separately collapsed `Anchor::Conversion` — the pre-fix path, and the
+// failure this test is first against — materializes the ~4e16 m inter-star
+// distance in each term, so the approach is snapped to its ~8 m ULP grid.
+TEST_F(InterstellarPrecisionTest, CrossSubsystemPlacementConversion) {
+  Instant const t0;
+  auto const ephemeris = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+
+  // A station homed to subsystem 0 and a visitor homed to subsystem 1, five
+  // metres apart in the void midway between the systems, the visitor closing
+  // at half a metre per second.  Each anchor offset is relative to the local
+  // origin of its own subsystem, so the two offsets differ by the full
+  // inter-star distance.
+  Velocity<ICRS> const cruise({3e4 * Metre / Second,
+                               0 * Metre / Second,
+                               0 * Metre / Second});
+  Velocity<ICRS> const approach({-0.5 * Metre / Second,
+                                 0 * Metre / Second,
+                                 0 * Metre / Second});
+  Ephemeris<ICRS>::Anchor const station_anchor{
+      .offset = SectorDisplacement<ICRS>::Split(
+          Displacement<ICRS>({2e16 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = cruise,
+      .epoch = t0};
+  Ephemeris<ICRS>::Anchor const visitor_anchor{
+      .offset = SectorDisplacement<ICRS>::Split(
+          Displacement<ICRS>({(2e16 + 5 - 4e16) * Metre,
+                              0 * Metre,
+                              0 * Metre})),
+      .velocity = cruise + approach,
+      .epoch = t0};
+  Ephemeris<ICRS>::SubsystemPlacement const station_placement(
+      /*subsystem=*/0, station_anchor);
+  Ephemeris<ICRS>::SubsystemPlacement const visitor_placement(
+      /*subsystem=*/1, visitor_anchor);
+
+  auto const placement_at = [&](Instant const& t) {
+    return ephemeris->placement_conversion(
+        visitor_placement, station_placement, t).first;
+  };
+  auto const pre_fix_at = [&](Instant const& t) {
+    return ephemeris->subsystem_conversion(/*s1=*/1, /*s2=*/0, t) +
+           Ephemeris<ICRS>::Anchor::Conversion(
+               visitor_anchor, station_anchor, t).first;
+  };
+
+  // Co-located placements difference to a small displacement, not to a
+  // void-scale artifact.
+  Displacement<ICRS> const placement₀ = placement_at(t0);
+  EXPECT_THAT(placement₀.Norm(), Lt(1 * Kilo(Metre)));
+
+  Displacement<ICRS> const pre_fix₀ = pre_fix_at(t0);
+  Length max_placement_error;
+  Length max_pre_fix_error;
+  for (int minute = 30; minute <= 360; minute += 30) {
+    Instant const t = t0 + minute * Minute;
+    Displacement<ICRS> const true_change = approach * (t - t0);
+    max_placement_error =
+        std::max(max_placement_error,
+                 (placement_at(t) - placement₀ - true_change).Norm());
+    max_pre_fix_error =
+        std::max(max_pre_fix_error,
+                 (pre_fix_at(t) - pre_fix₀ - true_change).Norm());
+  }
+  // The composed lattice: cells cancel, the collapse happens at the magnitude
+  // of the approach.
+  EXPECT_THAT(max_placement_error, Lt(1 * Milli(Metre)));
+  // The pre-fix composition rounds each term at the ULP of the inter-star
+  // distance.
+  EXPECT_THAT(max_pre_fix_error, Gt(1 * Metre));
+}
+
 // With the far field damped, cross-system pairs of massive bodies are damped
 // too: the backbone of each system evolves as if it were isolated.  This
 // removes a physically meaningless secular drift of each system as a whole

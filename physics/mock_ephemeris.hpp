@@ -53,6 +53,12 @@ class MockEphemeris : public Ephemeris<Frame> {
               subsystem_velocity_conversion,
               (int s1, int s2),
               (const, override));
+  MOCK_METHOD((std::pair<Displacement<Frame>, Velocity<Frame>>),
+              placement_conversion,
+              (typename Ephemeris<Frame>::SubsystemPlacement const& from,
+               typename Ephemeris<Frame>::SubsystemPlacement const& to,
+               Instant const& t),
+              (const, override));
   MOCK_METHOD(GravitationalParameter const&,
               subsystem_gravitational_parameter,
               (int s),

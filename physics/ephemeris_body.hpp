@@ -356,6 +356,34 @@ Displacement<Frame> Ephemeris<Frame>::subsystem_conversion(
 }
 
 template<typename Frame>
+std::pair<Displacement<Frame>, Velocity<Frame>>
+Ephemeris<Frame>::placement_conversion(SubsystemPlacement const& from,
+                                       SubsystemPlacement const& to,
+                                       Instant const& t) const {
+  // Accumulate the subsystem and anchor terms on the sector lattice — the
+  // cells add and subtract exactly — and collapse once, at the magnitude of
+  // the result.
+  SectorDisplacement<Frame> offset;
+  Velocity<Frame> velocity;
+  if (from.subsystem != to.subsystem) {
+    offset = inter_subsystem_offset(from.subsystem, to.subsystem, t);
+    velocity = subsystem_velocity_conversion(from.subsystem, to.subsystem);
+  }
+  Displacement<Frame> affine;
+  if (from.anchor.has_value()) {
+    offset += from.anchor->offset;
+    affine += from.anchor->velocity * (t - from.anchor->epoch);
+    velocity += from.anchor->velocity;
+  }
+  if (to.anchor.has_value()) {
+    offset -= to.anchor->offset;
+    affine -= to.anchor->velocity * (t - to.anchor->epoch);
+    velocity -= to.anchor->velocity;
+  }
+  return {offset.Collapse(affine), velocity};
+}
+
+template<typename Frame>
 Velocity<Frame> Ephemeris<Frame>::subsystem_velocity_conversion(
     int const s1, int const s2) const {
   if (s1 == s2) {

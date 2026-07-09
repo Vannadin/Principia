@@ -249,6 +249,19 @@ class Ephemeris {
                                                    int s2,
                                                    Instant const& t) const;
 
+  // Returns the displacement (and velocity) to add to a degrees of freedom
+  // represented under placement `from` so that it becomes represented under
+  // placement `to` at time `t`.  The subsystem and anchor terms are composed
+  // on the sector lattice and collapsed once, so two co-located placements
+  // difference to a small, precise displacement even when their subsystems
+  // and anchors are void-scale far apart — where composing
+  // `subsystem_conversion` with a separately collapsed anchor difference
+  // would round each term at the ULP of the void distance.
+  virtual std::pair<Displacement<Frame>, Velocity<Frame>> placement_conversion(
+      SubsystemPlacement const& from,
+      SubsystemPlacement const& to,
+      Instant const& t) const;
+
   // Returns the velocity to add to a velocity represented relative to the
   // (moving) local origin of subsystem `s1` so that it becomes represented
   // relative to that of subsystem `s2`.  Zero when `s1 == s2`.

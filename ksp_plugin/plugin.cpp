@@ -1373,8 +1373,6 @@ void Plugin::ComputeAndRenderClosestApproaches(
     int const max_points,
     DistinguishedPoints<World>& closest_approaches,
     Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
-  int const subsystem = placement.subsystem;
-  auto const& anchor = placement.anchor;
   CHECK(renderer_->HasTargetVessel());
 
   // Bring the target prediction into the same representation as `trajectory`
@@ -1382,21 +1380,15 @@ void Plugin::ComputeAndRenderClosestApproaches(
   // the closest-approach difference, so a rendezvous in the void is computed at
   // its true relative geometry rather than from near-origin coordinates.
   Vessel const& target_vessel = renderer_->GetTargetVessel();
-  Displacement<Barycentric> target_displacement =
-      ephemeris_->subsystem_conversion(target_vessel.subsystem(),
-                                       subsystem,
-                                       current_time_);
-  Velocity<Barycentric> target_velocity =
-      ephemeris_->subsystem_velocity_conversion(target_vessel.subsystem(),
-                                                subsystem);
-  // The anchors are differenced before any collapse, so two nearby anchored
-  // vessels keep their true relative geometry to the ULP of the anchors'
-  // local parts, not of the void distance.
-  auto const [anchor_displacement, anchor_velocity] =
-      Ephemeris<Barycentric>::Anchor::Conversion(
-          target_vessel.anchor(), anchor, current_time_);
-  target_displacement += anchor_displacement;
-  target_velocity += anchor_velocity;
+  // The subsystem and anchor terms are composed on the sector lattice and
+  // collapsed once, so two nearby vessels keep their true relative geometry
+  // to the ULP of the local parts, not of the void distance — even when they
+  // are homed to different subsystems.
+  auto const [target_displacement, target_velocity] =
+      ephemeris_->placement_conversion(
+          {target_vessel.subsystem(), target_vessel.anchor()},
+          placement,
+          current_time_);
   TranslatedTrajectory<Barycentric> const target_prediction(
       *target_vessel.prediction(),
       target_displacement,
