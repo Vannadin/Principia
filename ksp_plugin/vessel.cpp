@@ -31,6 +31,7 @@
 #include "geometry/orthogonal_map.hpp"
 #include "geometry/space_transformations.hpp"
 #include "ksp_plugin/integrators.hpp"
+#include "numerics/double_precision.hpp"
 #include "physics/rigid_motion.hpp"
 #include "physics/sector.hpp"
 #include "quantities/named_quantities.hpp"
@@ -49,6 +50,7 @@ using namespace principia::geometry::_barycentre_calculator;
 using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_space_transformations;
 using namespace principia::ksp_plugin::_integrators;
+using namespace principia::numerics::_double_precision;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_sector;
 using namespace principia::quantities::_named_quantities;
@@ -347,20 +349,28 @@ void Vessel::AdoptAnchor() {
   Displacement<Barycentric> translation = -displacement;
   if (anchor_.has_value()) {
     // Re-anchoring: the new anchor is displaced from the subsystem origin by
-    // the old anchor as well as by the anchored coordinates.  The fold works
-    // on the sector parts — the cells carry over exactly, the small terms sum
-    // at their own magnitude — and the affine term is reset to the new epoch.
-    new_anchor.offset = anchor_->offset;
-    new_anchor.offset += anchor_->velocity * (t - anchor_->epoch);
-    new_anchor.offset += displacement;
+    // the old anchor as well as by the anchored coordinates.  The cells carry
+    // over exactly; the small terms — the old local part, the affine term,
+    // and the anchored coordinates — accumulate in double precision, the
+    // value is re-centred (exact) and the residual is folded back at the
+    // magnitude of the re-centred local part.  The affine term is reset to
+    // the new epoch.
+    Displacement<Barycentric> const affine =
+        anchor_->velocity * (t - anchor_->epoch);
+    DoublePrecision<Displacement<Barycentric>> local =
+        TwoSum(anchor_->offset.local, affine);
+    local += displacement;
+    new_anchor.offset = {.cell = anchor_->offset.cell, .local = local.value};
     new_anchor.offset.Recenter();
+    new_anchor.offset += local.error;
     new_anchor.velocity += anchor_->velocity;
     // The translation that keeps the represented positions consistent with
-    // the new anchor.  The cells cancel in the difference, so it is computed
-    // small-first: the switch perturbs the represented position by at most
-    // the final rounding — a fraction of a millimetre, once per re-anchor.
-    translation = (anchor_->offset - new_anchor.offset)
-                      .Collapse(anchor_->velocity * (t - anchor_->epoch));
+    // the new anchor: the cells difference exactly (`Recenter` may have moved
+    // whole cells) and the small terms are summed last.  The translation is a
+    // single displacement, so the switch perturbs the represented position by
+    // its rounding plus the fold residual — a few tenths of a millimetre at
+    // most, the ULP of the re-anchor bound — once per re-anchor.
+    translation = (anchor_->offset - new_anchor.offset).Collapse(affine);
   }
   LOG(INFO) << "Vessel " << ShortDebugString() << " adopts an anchor";
   {

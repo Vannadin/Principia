@@ -2422,7 +2422,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LongCoastReAnchorsContinuously) {
   Displacement<Barycentric> const continuity_error =
       (dof2.position() - dof1.position()) +
       Ephemeris<Barycentric>::Anchor::Conversion(anchor_2, anchor_1, t2).first;
-  EXPECT_THAT(continuity_error.Norm(), Lt(2 * Milli(Metre)));
+  EXPECT_THAT(continuity_error.Norm(), Lt(0.5 * Milli(Metre)));
 }
 
 // R2 drop-path golden fixture.  The ">20k-point history can't be cheaply
