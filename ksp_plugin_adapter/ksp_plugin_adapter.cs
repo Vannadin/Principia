@@ -221,14 +221,14 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
           new Dictionary<Vessel, Vector3d>();
 
   // Vessels created in the scene from a vessel that we manage (a Kerbal going
-  // on EVA), recorded so that, if they pack before we adopt them, they are
-  // inserted from their parent vessel's state plus their scene-relative
-  // offset, rather than from the orbit produced by the stock scene-to-orbit
-  // conversion.  That conversion disagrees with our scene mapping by a few
-  // ticks times the Krakensbane frame velocity; at interstellar orbital
-  // speeds the resulting offset exceeds the unload radius, so the new vessel
-  // packs immediately and the skewed orbit becomes permanent (see also the
-  // discussion of #2590 below).  The dictionary is static because the vessel
+  // on EVA, a vessel undocking or decoupling), recorded so that, if they pack
+  // before we adopt them, they are inserted from their parent vessel's state
+  // plus their scene-relative offset, rather than from the orbit produced by
+  // the stock scene-to-orbit conversion.  That conversion disagrees with our
+  // scene mapping by a few ticks times the Krakensbane frame velocity; at
+  // interstellar orbital speeds the resulting offset exceeds the unload
+  // radius, so the new vessel packs immediately and the skewed orbit becomes
+  // permanent (see also the discussion of #2590 below).  The dictionary is static because the vessel
   // creation may trigger a scene reload that recreates this adapter before
   // the new vessel is adopted; entries are short-lived and self-purging.
   private class CoherentCreation {
@@ -622,6 +622,44 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
              "); recording its scene-relative state for coherent adoption");
   }
 
+  private void OnVesselSplit(Vessel parent, Vessel new_vessel) {
+    if (!PluginRunning() || parent == null || new_vessel == null ||
+        parent == new_vessel || new_vessel.rootPart?.rb == null ||
+        !plugin_.HasVessel(parent.id.ToString())) {
+      return;
+    }
+    // The state is sampled once, here, and never refreshed, for the same
+    // reason as in `OnCrewOnEva`.  Unlike there, the new vessel's parts are
+    // live rigidbodies that were simulated as part of its parent until this
+    // instant, so the relative velocity is meaningful.  The decoupler's
+    // ejection impulse may still be queued rather than applied, in which case
+    // it is missing from the sample; that is metres per second against the
+    // kilometres at stake, and the loaded path re-derives the state anyway
+    // whenever the vessel is in the physics bubble.
+    UnityEngine.Rigidbody root_rb = new_vessel.rootPart.rb;
+    coherent_creations_[new_vessel.id] = new CoherentCreation{
+        parent_id = parent.id,
+        relative_position =
+            ((Vector3d)root_rb.worldCenterOfMass - parent.CoMD).xzy,
+        relative_velocity =
+            ((Vector3d)root_rb.velocity - parent.rb_velocityD).xzy,
+        creation_ut = Planetarium.GetUniversalTime()
+    };
+    Log.Info("Vessel " + new_vessel.vesselName + " (" + new_vessel.id +
+             ") split from " + parent.vesselName + " (" + parent.id +
+             "); recording its scene-relative state for coherent adoption");
+  }
+
+  private bool VesselHasPartsOwnedElsewhere(Vessel vessel) {
+    foreach (ProtoPartSnapshot part in
+             vessel.protoVessel.protoPartSnapshots) {
+      if (plugin_.PartIsKnown(part.flightID)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private void PruneCoherentCreations() {
     if (coherent_creations_.Count == 0) {
       return;
@@ -943,6 +981,8 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     event_void_holder_.Add(GameEvents.onGUIRnDComplexDespawn,
                            () => { in_principia_scene_ = true; });
     GameEvents.onCrewOnEva.Add(OnCrewOnEva);
+    GameEvents.onPartDeCoupleNewVesselComplete.Add(OnVesselSplit);
+    GameEvents.onVesselsUndocking.Add(OnVesselSplit);
 
     // Timing0, -8008 on the script execution order page.
     TimingManager.FixedUpdateAdd(TimingManager.TimingStage.ObscenelyEarly,
@@ -1351,6 +1391,8 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     WindowsDisposal();
     event_void_holder_.RemoveAll();
     GameEvents.onCrewOnEva.Remove(OnCrewOnEva);
+    GameEvents.onPartDeCoupleNewVesselComplete.Remove(OnVesselSplit);
+    GameEvents.onVesselsUndocking.Remove(OnVesselSplit);
     TimingManager.FixedUpdateRemove(TimingManager.TimingStage.ObscenelyEarly,
                                     ObscenelyEarly);
     TimingManager.FixedUpdateRemove(TimingManager.TimingStage.Precalc, Precalc);
@@ -1411,6 +1453,21 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
             Log.Info("Removing vessel " + vessel.vesselName + "(" + vessel.id +
                      ")" + " because " + unmanageability_reasons);
           }
+          continue;
+        }
+
+        if (vessel.packed && !plugin_.HasVessel(vessel_guid) &&
+            VesselHasPartsOwnedElsewhere(vessel)) {
+          // A vessel created by a split (undocking, decoupling) that packed
+          // on the very frame of its creation: its parts are still registered
+          // to the vessel it came from, so inserting it now would fail a
+          // uniqueness check in the plugin.  The parts are freed later in
+          // this fixed-update pass, when `FreeVesselsAndPartsAndCollectPileUps`
+          // runs, since their former vessel no longer enumerates them; the
+          // insertion succeeds on the next frame.
+          Log.Info("Deferring insertion of " + vessel.vesselName + " (" +
+                   vessel_guid + ") because its parts are still owned by " +
+                   "another vessel");
           continue;
         }
 
