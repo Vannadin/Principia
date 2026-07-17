@@ -608,6 +608,10 @@ void Plugin::ApplyPartIntrinsicTorque(
       renderer_->WorldToBarycentric(PlanetariumRotation())(torque));
 }
 
+bool Plugin::PartIsKnown(PartId const part_id) const {
+  return part_id_to_vessel_.contains(part_id);
+}
+
 bool Plugin::PartIsTruthful(PartId const part_id) const {
   if (auto const it = part_id_to_vessel_.find(part_id);
       it == part_id_to_vessel_.end()) {

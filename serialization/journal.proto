@@ -2177,6 +2177,22 @@ message PartGetActualRigidMotion {
   optional Return return = 3;
 }
 
+message PartIsKnown {
+  extend Method {
+    optional PartIsKnown extension = 5221;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin const",
+                                 (is_subject) = true];
+    required fixed32 part_id = 2;
+  }
+  message Return {
+    required bool result = 1;
+  }
+  optional In in = 1;
+  optional Return return = 3;
+}
+
 message PartIsTruthful {
   extend Method {
     optional PartIsTruthful extension = 5166;

@@ -156,6 +156,14 @@ QPRW __cdecl principia__PartGetActualRigidMotion(
        ToXYZ(part_angular_velocity.coordinates() / (Radian / Second))});
 }
 
+bool __cdecl principia__PartIsKnown(
+    Plugin const* const plugin,
+    uint32_t const part_id) {
+  journal::Method<journal::PartIsKnown> m({plugin, part_id});
+  CHECK(plugin != nullptr);
+  return m.Return(plugin->PartIsKnown(part_id));
+}
+
 bool __cdecl principia__PartIsTruthful(
     Plugin const* const plugin,
     uint32_t const part_id) {
