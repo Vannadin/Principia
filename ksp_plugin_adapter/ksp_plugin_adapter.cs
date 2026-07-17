@@ -599,11 +599,16 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         parent == kerbal || !plugin_.HasVessel(parent.id.ToString())) {
       return;
     }
-    // The Kerbal's `CoMD` and `velocityD` are not initialized this early;
-    // approximate its state by its part position and its parent's velocity
-    // (the stock spawn gives it the point velocity of the hatch).  This is
-    // refreshed with proper values at each `WaitedForFixedUpdate` for as long
-    // as both vessels remain in the physics bubble.
+    // The state is sampled once, here, and deliberately never refreshed: this
+    // is the only instant at which the scene relationship is intact.  Until
+    // the new vessel is adopted it does not receive our world corrections, so
+    // its rigidbody drifts away from its parent by the Krakensbane frame
+    // velocity every tick (measured in-game: 2,098 m per tick in low orbit
+    // around a red dwarf 40 ly out) — any later scene-relative sample would
+    // measure the very drift being corrected.  The position is the part
+    // offset and the velocity is zero; the stock spawn gives the Kerbal the
+    // point velocity of the hatch, so both are metre- and metre-per-second-
+    // accurate, three orders of magnitude inside the unload radius.
     coherent_creations_[kerbal.id] = new CoherentCreation{
         parent_id = parent.id,
         relative_position =
@@ -617,48 +622,22 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
              "); recording its scene-relative state for coherent adoption");
   }
 
-  private void RefreshCoherentCreations() {
+  private void PruneCoherentCreations() {
     if (coherent_creations_.Count == 0) {
       return;
     }
     var stale = new List<Guid>();
     foreach (var pair in coherent_creations_) {
       CoherentCreation creation = pair.Value;
-      Vessel new_vessel = FlightGlobals.FindVessel(pair.Key);
-      Vessel parent = FlightGlobals.FindVessel(creation.parent_id);
       // The record deliberately outlives the adoption: an unready Kerbal is
       // repeatedly removed from the plugin and reinserted while it settles,
       // and each reinsertion must be coherent, not just the first one.
-      if (new_vessel == null || parent == null ||
+      if (FlightGlobals.FindVessel(pair.Key) == null ||
+          FlightGlobals.FindVessel(creation.parent_id) == null ||
           Planetarium.GetUniversalTime() - creation.creation_ut >
               coherent_creation_lifetime) {
-        Log.Info("Dropping the coherent creation record of " + pair.Key +
-                 (new_vessel == null    ? " (vessel gone)"
-                  : parent == null      ? " (parent gone)"
-                                        : " (expired)"));
+        Log.Info("Dropping the coherent creation record of " + pair.Key);
         stale.Add(pair.Key);
-        continue;
-      }
-      if (!new_vessel.packed && !parent.packed) {
-        // The Krakensbane frame velocity cancels in the difference, so this is
-        // usable common-mode data regardless of the epoch that the stock
-        // scene-to-orbit conversion will stamp on either vessel.  Note that
-        // the rotating-frame velocity term is dropped; it vanishes in the
-        // orbital regime, which is the only one where these vessels are
-        // manageable.
-        Vector3d relative_position = (new_vessel.CoMD - parent.CoMD).xzy;
-        Vector3d relative_velocity =
-            (new_vessel.velocityD - parent.velocityD).xzy;
-        // In the first frames of its existence the new vessel's `CoMD` and
-        // `velocityD` may not have been computed yet, in which case the
-        // difference is garbage of the order of the Krakensbane frame
-        // velocity; nothing separates from its parent vessel at anything like
-        // these rates, so keep the previous sample instead.
-        if (relative_position.magnitude < 1e4 &&
-            relative_velocity.magnitude < 1e3) {
-          creation.relative_position = relative_position;
-          creation.relative_velocity = relative_velocity;
-        }
       }
     }
     foreach (Guid id in stale) {
@@ -1418,7 +1397,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
           p = (XYZ)(-krakensbane.FrameVel)
       };
 
-      RefreshCoherentCreations();
+      PruneCoherentCreations();
 
       // NOTE(egg): Inserting vessels and parts has to occur in
       // `WaitForFixedUpdate`, since some may be destroyed (by collisions) during
