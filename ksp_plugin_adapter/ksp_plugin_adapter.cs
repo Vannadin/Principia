@@ -626,16 +626,16 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       CoherentCreation creation = pair.Value;
       Vessel new_vessel = FlightGlobals.FindVessel(pair.Key);
       Vessel parent = FlightGlobals.FindVessel(creation.parent_id);
+      // The record deliberately outlives the adoption: an unready Kerbal is
+      // repeatedly removed from the plugin and reinserted while it settles,
+      // and each reinsertion must be coherent, not just the first one.
       if (new_vessel == null || parent == null ||
-          plugin_.HasVessel(pair.Key.ToString()) ||
           Planetarium.GetUniversalTime() - creation.creation_ut >
               coherent_creation_lifetime) {
         Log.Info("Dropping the coherent creation record of " + pair.Key +
                  (new_vessel == null    ? " (vessel gone)"
-                  : plugin_.HasVessel(pair.Key.ToString())
-                        ? " (adopted loaded)"
-                        : parent == null ? " (parent gone)"
-                                         : " (expired)"));
+                  : parent == null      ? " (parent gone)"
+                                        : " (expired)"));
         stale.Add(pair.Key);
         continue;
       }
@@ -1542,7 +1542,6 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                        " m relative to the stock orbit");
               initial_state = coherent_state;
             }
-            coherent_creations_.Remove(vessel.id);
           }
           var parts = vessel.protoVessel.protoPartSnapshots;
           // For reasons that are unclear, the asteroid spawning code sometimes
