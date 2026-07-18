@@ -531,6 +531,10 @@ OrbitalElements::ToClassicalElements(
     std::vector<EquinoctialElements> const& equinoctial_elements) {
   std::vector<ClassicalElements> classical_elements;
   classical_elements.reserve(equinoctial_elements.size());
+  // The unwound longitude of periapsis, and the constant offset making the
+  // mean anomaly of the first element reduced; see below.
+  Angle ϖ_unwound;
+  Angle mean_anomaly_offset;
   for (auto const& equinoctial : equinoctial_elements) {
     RETURN_IF_STOPPED;
     double const tg_iⳆ2 = Sqrt(Pow<2>(equinoctial.p) + Pow<2>(equinoctial.q));
@@ -543,7 +547,24 @@ OrbitalElements::ToClassicalElements(
     double const e = Sqrt(Pow<2>(equinoctial.h) + Pow<2>(equinoctial.k));
     Angle const ϖ = ArcTan(equinoctial.h, equinoctial.k);
     Angle const ω = ϖ - Ω;
-    Angle const M = equinoctial.λ - ϖ;
+    // The mean anomaly must not be unwound from its own previous sample: the
+    // mean elements can legitimately be spaced by more than half a revolution
+    // of M (the integration of `MeanEquinoctialElements` takes large steps
+    // when the trajectory is very regular, e.g., an unperturbed orbit around
+    // an isolated star), and unwinding across such a gap picks the wrong
+    // branch, folding the series and corrupting the fitted periods (they came
+    // out negative).  Instead, derive M from two functions that are
+    // continuous regardless of the sampling: λ, which is an integral by
+    // construction, and ϖ, which varies slowly (it precesses) and therefore
+    // unwinds safely at any spacing.  The offset makes the first sample
+    // reduced, as before.
+    ϖ_unwound = classical_elements.empty() ? ReduceAngle<0.0, 2 * π>(ϖ)
+                                           : UnwindFrom(ϖ_unwound, ϖ);
+    Angle M = equinoctial.λ - ϖ_unwound;
+    if (classical_elements.empty()) {
+      mean_anomaly_offset = ReduceAngle<0.0, 2 * π>(M) - M;
+    }
+    M += mean_anomaly_offset;
     classical_elements.push_back(
         {.time = equinoctial.t,
          .semimajor_axis = equinoctial.a,
@@ -556,9 +577,7 @@ OrbitalElements::ToClassicalElements(
          .argument_of_periapsis = classical_elements.empty()
              ? ReduceAngle<0.0, 2 * π>(ω)
              : UnwindFrom(classical_elements.back().argument_of_periapsis, ω),
-         .mean_anomaly = classical_elements.empty()
-             ? ReduceAngle<0.0, 2 * π>(M)
-             : UnwindFrom(classical_elements.back().mean_anomaly, M),
+         .mean_anomaly = M,
          .periapsis_distance = (1 - e) * equinoctial.a,
          .apoapsis_distance = (1 + e) * equinoctial.a});
   }
