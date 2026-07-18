@@ -2555,6 +2555,140 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredBurnSurvivesDropAndReanimatio
   EXPECT_THAT(velocity_divergence, Lt(0.1 * Metre / Second));
 }
 
+// Rendering a trajectory local to a star 40 light-years out must not quantize
+// its shape: the render transformation used to anchor its origin at the sun,
+// 3.848e17 m away from the plotted geometry, so every vertex was rounded at
+// the ~64 m ULP of that magnitude and the km-scale shape danced by metres as
+// the rounding phase churned — the in-game map-view jitter.  The rotation
+// part of the transformation preserves distances, so the World-space
+// separation of adjacent rendered vertices must reproduce their barycentric
+// separation far below the ULP of the interstellar distance.
+TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRenderShapeIsExact) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  auto const insert_star = [&plugin](Index const index,
+                                     std::optional<Index> const parent_index,
+                                     std::string const& name,
+                                     std::string const& x) {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name                    : ")", name, R"("
+                        gravitational_parameter : "1.19e19 m^3/s^2"
+                        reference_instant       : "JD2451545.0"
+                        mean_radius             : "8.4e7 m"
+                        axis_right_ascension    : "0 deg"
+                        axis_declination        : "90 deg"
+                        reference_angle         : "0 rad"
+                        angular_frequency       : "1 rad/s")"),
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name : ")", name, R"("
+                        x    : ")", x, R"("
+                        y    : "0 m"
+                        z    : "0 m"
+                        vx   : "0 m/s"
+                        vy   : "0 m/s"
+                        vz   : "0 m/s")"),
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(
+        index, parent_index, gravity_model, initial_state);
+  };
+  insert_star(star_a, std::nullopt, "star A", "0 m");
+  insert_star(star_b, star_a, "star B", "3.848e17 m");
+  plugin->EndInitialization();
+  EXPECT_NE(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetCelestial(star_b).subsystem());
+
+  // A vessel in a low orbit around the remote star.
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_b,
+                             /*loaded=*/false, inserted);
+  Length const orbit_radius = 1.5829e9 * Metre;
+  Speed const v_circular =
+      Sqrt(1.19e19 * Pow<3>(Metre) / Pow<2>(Second) / orbit_radius);
+  plugin->InsertUnloadedPart(
+      part_id, part_name, vessel_guid,
+      {Displacement<AliceSun>({orbit_radius, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>(
+           {0 * Metre / Second, v_circular, 0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  // A third of an orbit of coast, so the downsampled trajectory retains a
+  // curved arc of many points.
+  Time const δt = 1200 * Second;
+  Instant t;
+  for (int i = 0; i < 30; ++i) {
+    t += δt;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_b,
+                               /*loaded=*/false, inserted);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  auto const& trajectory = vessel.trajectory();
+  plugin->renderer().SetPlottingFrame(
+      plugin->NewBodyCentredNonRotatingNavigationFrame(star_b));
+  // In game the World origin floats with the active vessel, so the sun's
+  // World position is interstellar-huge and the rendered points land near the
+  // origin, where they are finely representable.  Reproduce that: a first
+  // render anchored at the origin locates the geometry, a second render
+  // shifts the sun so the geometry lands at the origin.  (Without the shift
+  // the OUTPUT coordinates would sit at 4e17 m and quantize at their own ULP
+  // no matter how the transformation computes.)
+  auto const locate = plugin->renderer().RenderBarycentricTrajectoryInWorld(
+      plugin->CurrentTime(),
+      trajectory.begin(),
+      trajectory.end(),
+      World::origin,
+      plugin->PlanetariumRotation(),
+      {vessel.subsystem(), vessel.anchor()});
+  ASSERT_GT(locate.size(), 3);
+  Position<World> const sun_world_position =
+      World::origin -
+      (locate.front().degrees_of_freedom.position() - World::origin);
+  auto const rendered = plugin->renderer().RenderBarycentricTrajectoryInWorld(
+      plugin->CurrentTime(),
+      trajectory.begin(),
+      trajectory.end(),
+      sun_world_position,
+      plugin->PlanetariumRotation(),
+      {vessel.subsystem(), vessel.anchor()});
+  ASSERT_GT(rendered.size(), 3);
+
+  // The rendered shape reproduces the barycentric shape: adjacent-vertex
+  // separations agree to sub-millimetre (the rotation is an isometry), far
+  // below the ~64 m ULP quantization of the pre-fix sun-anchored transform.
+  auto it_rendered = rendered.begin();
+  auto it_barycentric = trajectory.begin();
+  std::optional<Position<World>> previous_rendered;
+  std::optional<Position<Barycentric>> previous_barycentric;
+  Length max_shape_error;
+  for (; it_rendered != rendered.end(); ++it_rendered, ++it_barycentric) {
+    Position<World> const rendered_position =
+        it_rendered->degrees_of_freedom.position();
+    Position<Barycentric> const barycentric_position =
+        it_barycentric->degrees_of_freedom.position();
+    if (previous_rendered.has_value()) {
+      Length const rendered_separation =
+          (rendered_position - *previous_rendered).Norm();
+      Length const barycentric_separation =
+          (barycentric_position - *previous_barycentric).Norm();
+      max_shape_error =
+          std::max(max_shape_error,
+                   Abs(rendered_separation - barycentric_separation));
+    }
+    previous_rendered = rendered_position;
+    previous_barycentric = barycentric_position;
+  }
+  EXPECT_THAT(max_shape_error, Lt(1 * Milli(Metre)));
+}
+
 // The golden mission: one vessel, one continuous timeline, traversing every
 // shipped interstellar regime end-to-end.  From adoption on, a workstream is
 // done only when its own gates are green AND this mission is green; new
