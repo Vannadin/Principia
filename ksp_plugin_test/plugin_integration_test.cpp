@@ -2555,5 +2555,536 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredBurnSurvivesDropAndReanimatio
   EXPECT_THAT(velocity_divergence, Lt(0.1 * Metre / Second));
 }
 
+// The golden mission: one vessel, one continuous timeline, traversing every
+// shipped interstellar regime end-to-end.  From adoption on, a workstream is
+// done only when its own gates are green AND this mission is green; new
+// workstreams extend the mission rather than adding disjoint one-off e2es
+// where possible.  The stages, and the regime each one certifies:
+//   1. launch burn out of a planetary orbit, anticipated by the prediction
+//      (on-rails burn);
+//   2. cruise burn under warp to interstellar speed (on-rails burn);
+//   3. coast into the void: the vessel anchors where the damped far field
+//      vanishes and KEEPS its origin subsystem — dominance is deliberately
+//      suspended while anchored — with per-step continuity throughout;
+//   4. save/load mid-void while anchored: subsystem, anchor, flight plan and
+//      the whole burn history round-trip through serialization;
+//   5. a flight plan created on the anchored vessel coasts force-free, and —
+//      once the void exit rebases the vessel — survives the rebase
+//      (`FlightPlan::Rebase`) and renders consistently around either star;
+//   6. void exit: the anchor is dropped and the vessel rebases into star B's
+//      subsystem, exactly once, in the same step;
+//   7. retro-burn (re-armed after the reload), then a rendezvous and docking
+//      near star B: one pile-up in the destination subsystem.
+// Deliberate descopes vs the adopted mission spec, certified elsewhere:
+//   - WS1 absolute precision vs an independently integrated control is not
+//     asserted here; the coast asserts per-step continuity to 1e-12 relative;
+//   - the rendezvous is an insertion 10 m away, not a closing approach, and
+//     mm-scale co-anchored coherence is structurally unreachable through
+//     absolute-coordinate insertion (void ULP ~metres) — see
+//     `CoAnchoredVoidVesselsKeepLocalPrecision` and
+//     `ApproachingVoidVesselsConversionIsExact` for the mm claims;
+//   - reanimation after an actual history drop is certified by
+//     `AnchoredBurnSurvivesDropAndReanimation`; here the reload is asserted
+//     drop-free and the burn history compared through it.
+// A warp leg is deliberately absent: warp is adapter-side by design (the
+// vessel is released during the cruise), so a headless mission cannot
+// represent it; its acceptance lives in the WS4 handoff.
+TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
+  Index const star_a = 0;
+  Index const planet = 1;
+  Index const star_b = 2;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  auto const insert_body = [&plugin](Index const index,
+                                     std::optional<Index> const parent_index,
+                                     std::string const& name,
+                                     std::string const& gravitational_parameter,
+                                     std::string const& mean_radius,
+                                     std::string const& x,
+                                     std::string const& vy) {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name                    : ")", name, R"("
+                        gravitational_parameter : ")",
+                     gravitational_parameter, R"("
+                        reference_instant       : "JD2451545.0"
+                        mean_radius             : ")", mean_radius, R"("
+                        axis_right_ascension    : "0 deg"
+                        axis_declination        : "90 deg"
+                        reference_angle         : "0 rad"
+                        angular_frequency       : "1 rad/s")"),
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name : ")", name, R"("
+                        x    : ")", x, R"("
+                        y    : "0 m"
+                        z    : "0 m"
+                        vx   : "0 m/s"
+                        vy   : ")", vy, R"("
+                        vz   : "0 m/s")"),
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(
+        index, parent_index, gravity_model, initial_state);
+  };
+  insert_body(star_a, std::nullopt, "star A", "1.3e20 m^3/s^2", "1e6 m",
+              "0 m", "0 m/s");
+  // The planet's vy is its circular-orbit speed √(μ_star / 1e12 m).
+  insert_body(planet, star_a, "planet", "4e14 m^3/s^2", "6.4e6 m",
+              "1e12 m", "11401.754250991378 m/s");
+  insert_body(star_b, star_a, "star B", "1.3e20 m^3/s^2", "1e6 m",
+              "4e16 m", "0 m/s");
+  plugin->EndInitialization();
+
+  // The planet clusters with its star; the destination is its own subsystem.
+  int const subsystem_a = plugin->GetCelestial(star_a).subsystem();
+  int const subsystem_b = plugin->GetCelestial(star_b).subsystem();
+  EXPECT_EQ(subsystem_a, plugin->GetCelestial(planet).subsystem());
+  EXPECT_NE(subsystem_a, subsystem_b);
+
+  // The AliceSun direction of star B, and the World direction that commands a
+  // burn along it.  World and AliceSun differ by the XZY permutation — the
+  // planetarium rotation cancels between the burn conversion and
+  // `FromParent` (cf. `OnRailsBurn`) — so commanding an AliceSun direction
+  // means swapping its y and z coordinates.  Note that AliceSun x̂ is NOT the
+  // direction of star B: the rotation does not cancel against the celestial
+  // insertion, so the star sits rotated in AliceSun coordinates.
+  Vector<double, AliceSun> const to_star_b =
+      Normalize(plugin->CelestialFromParent(star_b).displacement());
+  Vector<double, World> const to_star_b_in_world({to_star_b.coordinates().x,
+                                                  to_star_b.coordinates().z,
+                                                  to_star_b.coordinates().y});
+
+  // A low circular orbit around the planet; vy = √(μ_planet / 7e6 m).
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid, vessel_name, planet,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      part_id, part_name, vessel_guid,
+      {Displacement<AliceSun>({7e6 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           7559.289460184544 * Metre / Second,
+                           0 * Metre / Second})});
+  plugin->GetVessel(vessel_guid)->part(part_id)->set_mass(3 * Kilogram);
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  EXPECT_EQ(subsystem_a, vessel.subsystem());
+  EXPECT_FALSE(vessel.anchor().has_value());
+
+  // ——— Stage 1: launch burn ———
+  SpecificImpulse const specific_impulse = 1e12 * Metre / Second;
+  GravitationalParameter const μ_planet =
+      4e14 * Pow<3>(Metre) / Pow<2>(Second);
+  Mass m = 1000 * Kilogram;
+  Instant t;
+
+  Force const launch_thrust = 3e7 * Newton;
+  Variation<Mass> const launch_mass_flow = launch_thrust / specific_impulse;
+  Time const launch_δt = 100 * Second;
+  Mass const m_before_launch = m;
+  Velocity<AliceSun> const v_leo =
+      plugin->VesselFromParent(planet, vessel_guid).velocity();
+  t += launch_δt;
+  plugin->AdvanceTime(t, 1 * Radian);
+  plugin->InsertOrKeepVessel(vessel_guid, vessel_name, planet,
+                             /*loaded=*/false, inserted);
+  plugin->SetVesselOnRailsBurn(vessel_guid, launch_thrust, specific_impulse,
+                               /*initial_mass=*/m,
+                               to_star_b_in_world,
+                               /*max_duration=*/1 * Hour);
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  m -= launch_δt * launch_mass_flow;
+
+  // Циолковский's Δv along the commanded direction — star B's; the tolerance
+  // leaves room for the planet's gravity over the burn.
+  Speed const launch_Δv = specific_impulse * std::log(m_before_launch / m);
+  auto const post_launch = plugin->VesselFromParent(planet, vessel_guid);
+  Velocity<AliceSun> const launch_Δv_vector = post_launch.velocity() - v_leo;
+  EXPECT_THAT(launch_Δv_vector.Norm(), RelativeErrorFrom(launch_Δv, Lt(2e-3)));
+  EXPECT_THAT(InnerProduct(launch_Δv_vector, to_star_b),
+              RelativeErrorFrom(launch_Δv, Lt(2e-3)));
+  // The orbit was raised to an escape: positive specific orbital energy with
+  // respect to the planet.
+  EXPECT_THAT(0.5 * post_launch.velocity().Norm²() -
+                  μ_planet / post_launch.displacement().Norm(),
+              Gt(SpecificEnergy{}));
+
+  // The prediction anticipates the armed burn: at F/m ≈ 3e4 m/s² the next
+  // half hour gains ~5e7 m/s, far beyond anything gravity could impart.
+  {
+    Vessel::MakeSynchronous();
+    absl::Cleanup const restore_asynchronous = [] {
+      Vessel::MakeAsynchronous();
+    };
+    plugin->UpdatePrediction({vessel_guid});
+    auto const& from_state = vessel.psychohistory()->back();
+    Instant const horizon = from_state.time + 1800 * Second;
+    Speed const predicted_gain =
+        (vessel.prediction()->EvaluateVelocity(horizon) -
+         from_state.degrees_of_freedom.velocity()).Norm();
+    EXPECT_THAT(predicted_gain, Gt(1e6 * Metre / Second));
+  }
+
+  // ——— Stage 2: cruise burn under warp to interstellar speed ———
+  Force const cruise_thrust = 2e11 * Newton;
+  Variation<Mass> const cruise_mass_flow = cruise_thrust / specific_impulse;
+  Time const δt = 1200 * Second;
+  Mass const m_before_cruise = m;
+  Velocity<AliceSun> const v_before_cruise =
+      plugin->VesselFromParent(star_a, vessel_guid).velocity();
+  for (int i = 0; i < 3; ++i) {
+    t += δt;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                               /*loaded=*/false, inserted);
+    plugin->SetVesselOnRailsBurn(vessel_guid, cruise_thrust, specific_impulse,
+                                 /*initial_mass=*/m,
+                                 to_star_b_in_world,
+                                 /*max_duration=*/1 * Hour);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+    m -= δt * cruise_mass_flow;
+  }
+  Speed const cruise_Δv = specific_impulse * std::log(m_before_cruise / m);
+  EXPECT_THAT((plugin->VesselFromParent(star_a, vessel_guid).velocity() -
+               v_before_cruise).Norm(),
+              RelativeErrorFrom(cruise_Δv, Lt(1e-3)));
+  plugin->ClearVesselOnRailsBurn(vessel_guid);
+
+  auto const coast_frame = [&](Plugin& p) {
+    t += δt;
+    p.AdvanceTime(t, 1 * Radian);
+    p.InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                         /*loaded=*/false, inserted);
+    p.PrepareToReportCollisions();
+    p.FreeVesselsAndPartsAndCollectPileUps(δt);
+    VesselSet collided_vessels;
+    p.CatchUpLaggingVessels(collided_vessels);
+  };
+
+  // Named bounds shared below.  A star's far-field outer threshold is
+  // √(μ/floor) = √(1.3e20 / 1e-12) ≈ 1.14e16 m (`far_field_damping_floor`,
+  // plugin.cpp); beyond it from EVERY body the field is exactly zero and an
+  // unloaded vessel anchors.  1.4e16 m adds margin for the discrete steps.
+  Length const void_threshold = 1.4e16 * Metre;
+  // Absolute void coordinates quantize at the plugin boundary at the ULP of
+  // their ~1e16–4e16 m magnitude — metres; 100 m bounds every assertion that
+  // crosses that boundary.
+  Length const void_ulp_tolerance = 100 * Metre;
+
+  // Per-step checks shared by the two coast loops below: continuity of the
+  // motion seen through `VesselFromParent`, and the count of subsystem
+  // changes.  The continuity budget: reads quantize at the void ULP (~4 m)
+  // and each re-anchor folds sub-mm residuals, against a step of
+  // v·δt ≈ 1.5e15 m — 1e-12 relative leaves ~10³ m of headroom while still
+  // catching any metre-scale-per-kilometre representation glitch.
+  int rebases = 0;
+  int previous_subsystem = vessel.subsystem();
+  std::optional<Displacement<AliceSun>> previous_displacement;
+  std::optional<Speed> cruise_speed;
+  auto const step_checks = [&](Plugin const& p, Vessel const& v) {
+    auto const from_parent = p.VesselFromParent(star_a, vessel_guid);
+    if (!cruise_speed.has_value()) {
+      cruise_speed = from_parent.velocity().Norm();
+    }
+    if (previous_displacement.has_value()) {
+      // Continuous at every step: through anchor adoption, re-anchoring, the
+      // reload, and the void-exit drop + rebase alike.
+      EXPECT_THAT((from_parent.displacement() - *previous_displacement).Norm(),
+                  RelativeErrorFrom(*cruise_speed * δt, Lt(1e-12)));
+    }
+    previous_displacement = from_parent.displacement();
+    if (v.subsystem() != previous_subsystem) {
+      previous_subsystem = v.subsystem();
+      ++rebases;
+    }
+  };
+
+  // ——— Stage 3: coast into the void; the anchor is adopted and the origin
+  // subsystem is KEPT (dominance is suspended while anchored) ———
+  Length const mid_void = 1.8e16 * Metre;
+  for (int step = 0;
+       step < 20 &&
+       !(vessel.anchor().has_value() &&
+         plugin->VesselFromParent(star_a, vessel_guid).displacement().Norm() >
+             mid_void);
+       ++step) {
+    coast_frame(*plugin);
+    step_checks(*plugin, vessel);
+    if (previous_displacement->Norm() > void_threshold &&
+        plugin->VesselFromParent(star_b, vessel_guid).displacement().Norm() >
+            void_threshold) {
+      // Beyond the far-field threshold of both stars the coast is force-free:
+      // the vessel must be anchored.
+      EXPECT_TRUE(vessel.anchor().has_value());
+    }
+  }
+  ASSERT_TRUE(vessel.anchor().has_value());
+  EXPECT_EQ(subsystem_a, vessel.subsystem());
+  EXPECT_EQ(0, rebases);
+
+  // ——— Stage 5 (creation): a flight plan on the anchored void vessel.  Its
+  // 3-hour coast crosses the far-field shell toward star B, and the vessel's
+  // later rebase carries it through `FlightPlan::Rebase`. ———
+  Instant const flight_plan_epoch = vessel.psychohistory()->back().time;
+  auto const state_at_plan = plugin->VesselFromParent(star_a, vessel_guid);
+  auto const state_at_plan_from_b =
+      plugin->VesselFromParent(star_b, vessel_guid);
+  plugin->GetVessel(vessel_guid)->CreateFlightPlan(
+      flight_plan_epoch + 3 * Hour,
+      m,
+      Ephemeris<Barycentric>::AdaptiveStepParameters(
+          EmbeddedExplicitRungeKuttaNyströmIntegrator<
+              DormandالمكاوىPrince1986RKN434FM,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*max_steps=*/1000,
+          /*length_integration_tolerance=*/1 * Milli(Metre),
+          /*speed_integration_tolerance=*/1 * Milli(Metre) / Second),
+      Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters(
+          EmbeddedExplicitGeneralizedRungeKuttaNyströmIntegrator<
+              Fine1987RKNG34,
+              Ephemeris<Barycentric>::GeneralizedNewtonianMotionEquation>(),
+          /*max_steps=*/1000,
+          /*length_integration_tolerance=*/1 * Milli(Metre),
+          /*speed_integration_tolerance=*/1 * Milli(Metre) / Second));
+  ASSERT_TRUE(vessel.has_flight_plan());
+  {
+    auto const& flight_plan = plugin->GetVessel(vessel_guid)->flight_plan();
+    ASSERT_EQ(1, flight_plan.number_of_segments());
+    auto const coast = flight_plan.GetSegment(0);
+    // Force-free void: the plan coasts; the damped shell of star B near its
+    // end contributes ≲ 1e-9 m/s.
+    EXPECT_THAT((coast->back().degrees_of_freedom.velocity() -
+                 coast->front().degrees_of_freedom.velocity()).Norm(),
+                Lt(1 * Milli(Metre) / Second));
+  }
+
+  // ——— Stage 4: save/load mid-void, anchored ———
+  // Sample state inside the launch burn, for the history round-trip check.
+  Instant const t_sample = Instant() + 50 * Second;
+  DegreesOfFreedom<Barycentric> const actual_sample =
+      vessel.trajectory().EvaluateDegreesOfFreedom(t_sample);
+
+  auto const anchor_before_save = *vessel.anchor();
+  auto const state_before_save = plugin->VesselFromParent(star_a, vessel_guid);
+
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  plugin = nullptr;
+  // Everything from here on operates on `plugin2`; a stage spliced in below
+  // must keep using it, and keep the mass bookkeeping `m` in sync through any
+  // burn it adds.
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+  auto const& vessel2 = *plugin2->GetVessel(vessel_guid);
+  EXPECT_EQ(subsystem_a, vessel2.subsystem());
+  ASSERT_TRUE(vessel2.anchor().has_value());
+  EXPECT_EQ(anchor_before_save, *vessel2.anchor());
+  EXPECT_TRUE(vessel2.has_flight_plan());
+  EXPECT_THAT(
+      (plugin2->VesselFromParent(star_a, vessel_guid).displacement() -
+       state_before_save.displacement()).Norm(),
+      Lt(void_ulp_tolerance));
+
+  // The burn history round-trips through serialization.  The reload is
+  // asserted drop-free — the drop-and-reanimate path is certified by
+  // `AnchoredBurnSurvivesDropAndReanimation` — and the tolerance covers the
+  // lossy point compression (~the 10 m downsampling tolerance) plus the ULP
+  // of the anchored representation, whose pre-void points sit ~2e16 m from
+  // the local origin (ULP ≈ 4 m).
+  ASSERT_LE(vessel2.trajectory().t_min(), t_sample)
+      << "the reload dropped history; this mission asserts the drop-free "
+         "round-trip";
+  plugin2->GetVessel(vessel_guid)->AwaitReanimation(Instant(), /*quiet=*/true);
+  DegreesOfFreedom<Barycentric> const reloaded_sample =
+      vessel2.trajectory().EvaluateDegreesOfFreedom(t_sample);
+  EXPECT_THAT((reloaded_sample.position() - actual_sample.position()).Norm(),
+              Lt(20 * Metre));
+  EXPECT_THAT((reloaded_sample.velocity() - actual_sample.velocity()).Norm(),
+              Lt(0.1 * Metre / Second));
+
+  // ——— Stage 6: void exit — the anchor is dropped and the vessel rebases
+  // into star B's subsystem, exactly once, in the same step ———
+  for (int step = 0; step < 15 && vessel2.subsystem() != subsystem_b; ++step) {
+    coast_frame(*plugin2);
+    step_checks(*plugin2, vessel2);
+  }
+  ASSERT_EQ(subsystem_b, vessel2.subsystem());
+  EXPECT_EQ(1, rebases);
+  // The anchor went with the void: inside star B's far field the vessel is
+  // unanchored.
+  EXPECT_FALSE(vessel2.anchor().has_value());
+
+  // ——— Stage 5 (checks): the flight plan survived the reload AND the rebase,
+  // still coasts, and renders consistently ———
+  ASSERT_TRUE(vessel2.has_flight_plan());
+  // A reloaded flight plan is held lazily in serialized form, so the rebase
+  // above skipped it; deserializing it now exercises the lazy-rebase path
+  // that re-expresses it in the vessel's current subsystem.
+  plugin2->GetVessel(vessel_guid)->ReadFlightPlanFromMessage();
+  auto const& flight_plan = plugin2->GetVessel(vessel_guid)->flight_plan();
+  EXPECT_EQ(subsystem_b, flight_plan.subsystem());
+  ASSERT_EQ(1, flight_plan.number_of_segments());
+  auto const coast = flight_plan.GetSegment(0);
+  EXPECT_THAT((coast->back().degrees_of_freedom.velocity() -
+               coast->front().degrees_of_freedom.velocity()).Norm(),
+              Lt(1 * Milli(Metre) / Second));
+
+  // The plan's endpoint is where a 3-hour cruise from its creation state
+  // puts it.  Rendered in `World` — whose origin pins the sun, star A — the
+  // endpoint's distance is invariant under the choice of plotting-frame
+  // centre, so the two-frame agreement below is a sanity bound on the
+  // cross-subsystem placement conversion, NOT a map-view check; the genuine
+  // star-B-frame check is the plotting-frame render that follows.
+  Length const expected_distance_from_a =
+      (state_at_plan.displacement() +
+       state_at_plan.velocity() * (3 * Hour)).Norm();
+  Length const expected_distance_from_b =
+      (state_at_plan_from_b.displacement() +
+       state_at_plan_from_b.velocity() * (3 * Hour)).Norm();
+  auto const& all_segments = flight_plan.GetAllSegments();
+  auto const render_distance = [&](Index const centre) {
+    plugin2->renderer().SetPlottingFrame(
+        plugin2->NewBodyCentredNonRotatingNavigationFrame(centre));
+    auto const rendered =
+        plugin2->renderer().RenderBarycentricTrajectoryInWorld(
+            plugin2->CurrentTime(),
+            all_segments.begin(),
+            all_segments.end(),
+            World::origin,
+            plugin2->PlanetariumRotation(),
+            {flight_plan.subsystem(), flight_plan.anchor()});
+    return (rendered.back().degrees_of_freedom.position() - World::origin)
+        .Norm();
+  };
+  Length const rendered_around_a = render_distance(star_a);
+  Length const rendered_around_b = render_distance(star_b);
+  EXPECT_THAT(rendered_around_a,
+              AbsoluteErrorFrom(expected_distance_from_a, Lt(1e6 * Metre)));
+  EXPECT_THAT(rendered_around_b,
+              AbsoluteErrorFrom(rendered_around_a, Lt(void_ulp_tolerance)));
+  {
+    plugin2->renderer().SetPlottingFrame(
+        plugin2->NewBodyCentredNonRotatingNavigationFrame(star_b));
+    auto const rendered =
+        plugin2->renderer().RenderBarycentricTrajectoryInPlotting(
+            all_segments.begin(),
+            all_segments.end(),
+            {flight_plan.subsystem(), flight_plan.anchor()});
+    EXPECT_THAT((rendered.back().degrees_of_freedom.position() -
+                 Navigation::origin).Norm(),
+                AbsoluteErrorFrom(expected_distance_from_b, Lt(1e6 * Metre)));
+  }
+
+  // ——— Stage 7: retro-burn, re-armed after the reload ———
+  Force const retro_thrust = 2e12 * Newton;
+  Variation<Mass> const retro_mass_flow = retro_thrust / specific_impulse;
+  Velocity<AliceSun> const v_before_retro =
+      plugin2->VesselFromParent(star_a, vessel_guid).velocity();
+  Speed const cruise_velocity_along = InnerProduct(v_before_retro, to_star_b);
+  Mass const m_before_retro = m;
+  // The burn duration that exactly exhausts the cruise velocity:
+  // Δv = Isp ln(m₀/m₁), inverted for the propellant time at this mass flow.
+  Time const retro_duration =
+      (m / retro_mass_flow) *
+      (1 - std::exp(-cruise_velocity_along / specific_impulse));
+  t += δt;
+  plugin2->AdvanceTime(t, 1 * Radian);
+  plugin2->InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                              /*loaded=*/false, inserted);
+  plugin2->SetVesselOnRailsBurn(vessel_guid, retro_thrust, specific_impulse,
+                                /*initial_mass=*/m,
+                                -to_star_b_in_world,
+                                /*max_duration=*/retro_duration);
+  {
+    VesselSet collided_vessels;
+    plugin2->CatchUpLaggingVessels(collided_vessels);
+  }
+  m -= retro_duration * retro_mass_flow;
+  Speed const retro_Δv = specific_impulse * std::log(m_before_retro / m);
+  auto const post_retro = plugin2->VesselFromParent(star_a, vessel_guid);
+  EXPECT_THAT((post_retro.velocity() - v_before_retro).Norm(),
+              RelativeErrorFrom(retro_Δv, Lt(1e-3)));
+  // The interstellar cruise is essentially cancelled: what remains is the
+  // burn's 1e-3 modelling tolerance plus ~2e4 m/s of orbital residue.
+  EXPECT_THAT(post_retro.velocity().Norm(), Lt(0.01 * cruise_velocity_along));
+  plugin2->ClearVesselOnRailsBurn(vessel_guid);
+  coast_frame(*plugin2);
+
+  // ——— Stage 7 (continued): rendezvous and docking near star B ———
+  GUID const station_guid = "456-789";
+  PartId const station_part_id = 790;
+  auto const traveller_from_star_b =
+      plugin2->VesselFromParent(star_b, vessel_guid);
+  plugin2->InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                              /*loaded=*/false, inserted);
+  plugin2->InsertOrKeepVessel(station_guid, "station", star_b,
+                              /*loaded=*/false, inserted);
+  plugin2->InsertUnloadedPart(
+      station_part_id, "station part", station_guid,
+      {traveller_from_star_b.displacement() +
+           Displacement<AliceSun>({10 * Metre, 0 * Metre, 0 * Metre}),
+       traveller_from_star_b.velocity()});
+  plugin2->GetVessel(station_guid)->part(station_part_id)->set_mass(
+      1 * Kilogram);
+  plugin2->PrepareToReportCollisions();
+  plugin2->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin2->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const station = plugin2->GetVessel(station_guid);
+  EXPECT_EQ(subsystem_b, station->subsystem());
+  // Inside star B's far field: no anchors here.
+  EXPECT_FALSE(station->anchor().has_value());
+  Displacement<AliceSun> const separation_before_docking =
+      plugin2->VesselFromParent(star_b, station_guid).displacement() -
+      plugin2->VesselFromParent(star_b, vessel_guid).displacement();
+  EXPECT_THAT(separation_before_docking.Norm(), Lt(void_ulp_tolerance));
+
+  // Dock.
+  t += δt;
+  plugin2->AdvanceTime(t, 1 * Radian);
+  plugin2->InsertOrKeepVessel(vessel_guid, vessel_name, star_a,
+                              /*loaded=*/false, inserted);
+  plugin2->InsertOrKeepVessel(station_guid, "station", star_b,
+                              /*loaded=*/false, inserted);
+  plugin2->GetVessel(vessel_guid)->KeepPart(part_id);
+  plugin2->GetVessel(station_guid)->KeepPart(station_part_id);
+  plugin2->PrepareToReportCollisions();
+  plugin2->ReportPartCollision(part_id, station_part_id);
+  plugin2->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin2->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  // One pile-up in the destination subsystem, the local geometry preserved
+  // through the reconciliation: mission complete.
+  auto* const pile_up_traveller =
+      plugin2->GetVessel(vessel_guid)->part(part_id)->containing_pile_up();
+  auto* const pile_up_station =
+      plugin2->GetVessel(station_guid)->part(station_part_id)
+          ->containing_pile_up();
+  ASSERT_NE(nullptr, pile_up_traveller);
+  EXPECT_EQ(pile_up_traveller, pile_up_station);
+  EXPECT_EQ(subsystem_b, pile_up_traveller->subsystem());
+  EXPECT_EQ(subsystem_b, vessel2.subsystem());
+  EXPECT_EQ(subsystem_b, station->subsystem());
+  EXPECT_EQ(1, rebases);
+  Displacement<AliceSun> const separation_after_docking =
+      plugin2->VesselFromParent(star_b, station_guid).displacement() -
+      plugin2->VesselFromParent(star_b, vessel_guid).displacement();
+  EXPECT_THAT((separation_after_docking - separation_before_docking).Norm(),
+              Lt(void_ulp_tolerance));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia
