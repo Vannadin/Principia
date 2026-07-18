@@ -250,10 +250,9 @@ class Satellites {
         [plotting_to_gcrs](Instant const&,
                            Position<Navigation> const& plotted_point) {
           constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
-          return ScaledSpacePoint::FromCoordinates(
-              ((plotting_to_gcrs(plotted_point) - GCRS::origin) *
-               inverse_scale_factor)
-                  .coordinates());
+          return ((plotting_to_gcrs(plotted_point) - GCRS::origin) *
+                  inverse_scale_factor)
+              .coordinates();
         });
   }
 

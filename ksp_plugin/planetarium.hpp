@@ -73,8 +73,8 @@ class Planetarium {
   };
 
   using PlottingToScaledSpaceConversion =
-      std::function<ScaledSpacePoint(Instant const&,
-                                     Position<Navigation> const&)>;
+      std::function<R3Element<double>(Instant const&,
+                                      Position<Navigation> const&)>;
 
   // TODO(phl): All this Navigation is weird.  Should it be named Plotting?
   // In particular Navigation vs. NavigationFrame is a mess.
@@ -153,7 +153,14 @@ class Planetarium {
   // A method similar to PlotMethod4, but which uses the RMS of the apparent
   // distance between the trajectory and line segments.  `placement` gives the
   // subsystem and anchor relative to which the positions of `trajectory` are
-  // represented.
+  // represented.  If `anchor_out` is not null and the ephemeris has multiple
+  // subsystems, the vertices passed to `add_point` are expressed relative to
+  // an anchor near the geometry — the first plotted point — whose scaled-space
+  // coordinates are returned in `anchor_out`; the vertices then quantize at
+  // the float ULP of the geometry's own span instead of that of its distance
+  // to the scaled-space origin, and the caller must translate the drawn mesh
+  // by the anchor.  With a single subsystem the anchor is zero and the
+  // vertices reproduce the absolute rendering bit for bit.
   void PlotMethod4(
       Trajectory<Barycentric> const& trajectory,
       DiscreteTrajectory<Barycentric>::iterator begin,
@@ -163,7 +170,8 @@ class Planetarium {
       std::function<void(ScaledSpacePoint const&)> const& add_point,
       int max_points,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      R3Element<double>* anchor_out = nullptr) const;
 
   // The same method, operating on the `Trajectory` interface for any frame that
   // can be converted to `Navigation`.  `placement` is only meaningful when
@@ -178,7 +186,8 @@ class Planetarium {
       int max_points,
       Length* minimal_distance = nullptr,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      R3Element<double>* anchor_out = nullptr) const;
 
  private:
   // Computes the coordinates of the spheres that represent the `ephemeris_`

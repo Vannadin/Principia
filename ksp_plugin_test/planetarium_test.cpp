@@ -152,9 +152,8 @@ class PlanetariumTest : public ::testing::Test {
         plotting_to_scaled_space_(
             [](Instant const&, Position<Navigation> const& plotted_point) {
               constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
-              return ScaledSpacePoint::FromCoordinates(
-                  ((plotted_point - Navigation::origin) *
-                   inverse_scale_factor).coordinates());
+              return ((plotted_point - Navigation::origin) *
+                      inverse_scale_factor).coordinates();
             }),
         // A body of radius 1 m located at the origin.
         body_(MassiveBody::Parameters(1 * Kilogram),
@@ -293,9 +292,8 @@ class PlanetariumTest : public ::testing::Test {
               plot_time,
               DegreesOfFreedom<Navigation>(plotted_point,
                                            Velocity<Navigation>())));
-          return ScaledSpacePoint::FromCoordinates(
-              ((plotted_point - Navigation::origin) * inverse_scale_factor)
-                  .coordinates());
+          return ((plotted_point - Navigation::origin) * inverse_scale_factor)
+              .coordinates();
         };
 
     Planetarium const planetarium(planetarium_parameters,

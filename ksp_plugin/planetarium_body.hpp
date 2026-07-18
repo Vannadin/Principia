@@ -92,7 +92,8 @@ void Planetarium::PlotMethod3(
       initial_degrees_of_freedom.velocity();
   Time Δt = final_time - previous_time;
 
-  add_point(plotting_to_scaled_space_(previous_time, previous_position));
+  add_point(ScaledSpacePoint::FromCoordinates(
+      plotting_to_scaled_space_(previous_time, previous_position)));
   int points_added = 1;
 
   Instant t;
@@ -136,7 +137,8 @@ void Planetarium::PlotMethod3(
     previous_position = position;
     previous_velocity = degrees_of_freedom->velocity();
 
-    add_point(plotting_to_scaled_space_(t, position));
+    add_point(ScaledSpacePoint::FromCoordinates(
+        plotting_to_scaled_space_(t, position)));
     ++points_added;
 
     if (minimal_distance != nullptr) {
@@ -159,7 +161,11 @@ void Planetarium::PlotMethod4(
     std::function<void(ScaledSpacePoint const&)> const& add_point,
     int const max_points,
     Length* const minimal_distance,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    R3Element<double>* const anchor_out) const {
+  if (anchor_out != nullptr) {
+    *anchor_out = R3Element<double>{};
+  }
   if constexpr (std::is_same_v<Frame, Barycentric>) {
     Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
         plotting_frame_->placement();
@@ -181,7 +187,8 @@ void Planetarium::PlotMethod4(
                   add_point,
                   max_points,
                   minimal_distance,
-                  frame_placement);
+                  frame_placement,
+                  anchor_out);
       return;
     }
   }
@@ -207,7 +214,18 @@ void Planetarium::PlotMethod4(
 
   Time Δt = final_time - previous_time;
 
-  add_point(plotting_to_scaled_space_(previous_time, previous_position));
+  // Anchoring the vertices at the first plotted point bounds their float
+  // rounding by the ULP of the geometry's span; subtracting a zero anchor
+  // leaves them bit-identical to the absolute rendering.
+  R3Element<double> const initial_scaled_space_point =
+      plotting_to_scaled_space_(previous_time, previous_position);
+  R3Element<double> anchor{};
+  if (anchor_out != nullptr && ephemeris_->number_of_subsystems() > 1) {
+    anchor = initial_scaled_space_point;
+    *anchor_out = anchor;
+  }
+  add_point(
+      ScaledSpacePoint::FromCoordinates(initial_scaled_space_point - anchor));
   int points_added = 1;
 
   Instant t;
@@ -294,7 +312,8 @@ void Planetarium::PlotMethod4(
     previous_position = position;
     previous_projected_velocity = projected_velocity;
 
-    add_point(plotting_to_scaled_space_(t, position));
+    add_point(ScaledSpacePoint::FromCoordinates(
+        plotting_to_scaled_space_(t, position) - anchor));
     ++points_added;
 
     if (minimal_distance != nullptr) {

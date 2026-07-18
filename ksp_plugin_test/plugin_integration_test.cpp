@@ -19,9 +19,14 @@
 #include "base/not_null.hpp"
 #include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
+#include "geometry/orthogonal_map.hpp"
 #include "geometry/permutation.hpp"
+#include "geometry/perspective.hpp"
+#include "geometry/r3_element.hpp"
 #include "geometry/rotation.hpp"
+#include "geometry/signature.hpp"
 #include "geometry/space.hpp"
+#include "geometry/space_transformations.hpp"
 #include "gmock/gmock.h"
 #include "google/protobuf/text_format.h"
 #include "gtest/gtest.h"
@@ -30,6 +35,7 @@
 #include "integrators/methods.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/identification.hpp"
+#include "ksp_plugin/planetarium.hpp"
 #include "numerics/elementary_functions.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/ephemeris.hpp"
@@ -62,14 +68,20 @@ using namespace principia::astronomy::_time_scales;
 using namespace principia::base::_not_null;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
+using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_permutation;
+using namespace principia::geometry::_perspective;
+using namespace principia::geometry::_r3_element;
 using namespace principia::geometry::_rotation;
+using namespace principia::geometry::_signature;
 using namespace principia::geometry::_space;
+using namespace principia::geometry::_space_transformations;
 using namespace principia::integrators::_embedded_explicit_generalized_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_methods;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
+using namespace principia::ksp_plugin::_planetarium;
 using namespace principia::ksp_plugin::_plugin;
 using namespace principia::ksp_plugin::_vessel;
 using namespace principia::numerics::_elementary_functions;
@@ -2689,6 +2701,272 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRenderShapeIsExact) {
   EXPECT_THAT(max_shape_error, Lt(1 * Milli(Metre)));
 }
 
+// The float32 vertex buffer quantizes each plotted vertex at the ULP of its
+// distance to the scaled-space origin — which the game moves around (stock
+// and KSPCF recentre it at the camera focus, not at the plotted geometry): at
+// a star focus the absolute vertices of a 1.58e9 m orbit quantized at ~190 m
+// real and the drawn line churned frame to frame; with the origin left at
+// interstellar magnitude they quantized at ~2.5e10 m and the line shattered.
+// Anchored plotting must instead bound every vertex's error by the ULP of its
+// distance to the plotted geometry itself, wherever the origin is.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       PlotMethod4AnchorsVerticesNearTheGeometry) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  auto const insert_star = [&plugin](Index const index,
+                                     std::optional<Index> const parent_index,
+                                     std::string const& name,
+                                     std::string const& x) {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name                    : ")", name, R"("
+                        gravitational_parameter : "1.19e19 m^3/s^2"
+                        reference_instant       : "JD2451545.0"
+                        mean_radius             : "8.4e7 m"
+                        axis_right_ascension    : "0 deg"
+                        axis_declination        : "90 deg"
+                        reference_angle         : "0 rad"
+                        angular_frequency       : "1 rad/s")"),
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name : ")", name, R"("
+                        x    : ")", x, R"("
+                        y    : "0 m"
+                        z    : "0 m"
+                        vx   : "0 m/s"
+                        vy   : "0 m/s"
+                        vz   : "0 m/s")"),
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(
+        index, parent_index, gravity_model, initial_state);
+  };
+  insert_star(star_a, std::nullopt, "star A", "0 m");
+  insert_star(star_b, star_a, "star B", "3.848e17 m");
+  plugin->EndInitialization();
+
+  // A vessel in a low orbit around the remote star.
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_b,
+                             /*loaded=*/false, inserted);
+  Length const orbit_radius = 1.5829e9 * Metre;
+  Speed const v_circular =
+      Sqrt(1.19e19 * Pow<3>(Metre) / Pow<2>(Second) / orbit_radius);
+  plugin->InsertUnloadedPart(
+      part_id, part_name, vessel_guid,
+      {Displacement<AliceSun>({orbit_radius, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>(
+           {0 * Metre / Second, v_circular, 0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  // A third of an orbit of coast, so the downsampled trajectory retains a
+  // curved arc of many points.
+  Time const δt = 1200 * Second;
+  Instant t;
+  for (int i = 0; i < 30; ++i) {
+    t += δt;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star_b,
+                               /*loaded=*/false, inserted);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  auto const& trajectory = vessel.trajectory();
+  plugin->renderer().SetPlottingFrame(
+      plugin->NewBodyCentredNonRotatingNavigationFrame(star_b));
+
+  // The scaled-space origins whose choice must not affect the vertex error:
+  // recentred at the star focus, recentred at the vessel, and left at the sun
+  // of a system 3.848e17 m away (no recentring).
+  Position<Navigation> const origins[] = {
+      Navigation::origin,
+      Navigation::origin +
+          Displacement<Navigation>({orbit_radius, 0 * Metre, 0 * Metre}),
+      Navigation::origin -
+          Displacement<Navigation>(
+              {3.848e17 * Metre, 0 * Metre, 0 * Metre})};
+  for (Position<Navigation> const& scaled_space_origin : origins) {
+    std::vector<R3Element<double>> reference;
+    auto const planetarium = plugin->NewPlanetarium(
+        Planetarium::Parameters(/*sphere_radius_multiplier=*/1.0,
+                                /*angular_resolution=*/0.001 * Radian,
+                                /*field_of_view=*/1 * Radian),
+        Perspective<Navigation, Camera>(
+            RigidTransformation<Navigation, Camera>(
+                Navigation::origin,
+                Camera::origin,
+                Signature<Navigation, Camera>::CentralInversion()
+                    .Forget<OrthogonalMap>()).Forget<Similarity>(),
+            /*focal=*/1 * Metre),
+        [&reference, scaled_space_origin](
+            Instant const&, Position<Navigation> const& plotted_point) {
+          constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+          auto const coordinates =
+              ((plotted_point - scaled_space_origin) * inverse_scale_factor)
+                  .coordinates();
+          reference.push_back(coordinates);
+          return coordinates;
+        });
+    std::vector<ScaledSpacePoint> vertices;
+    R3Element<double> anchor;
+    planetarium->PlotMethod4(
+        trajectory,
+        trajectory.begin(),
+        trajectory.end(),
+        InfiniteFuture,
+        /*reverse=*/false,
+        [&vertices](ScaledSpacePoint const& vertex) {
+          vertices.push_back(vertex);
+        },
+        /*max_points=*/10'000,
+        {vessel.subsystem(), vessel.anchor()},
+        &anchor);
+    ASSERT_GT(vertices.size(), 3);
+    ASSERT_EQ(reference.size(), vertices.size());
+
+    // The guarantees, asserted as the adapter consumes them.
+    // SHAPE: the float vertex buffer alone reproduces the geometry relative
+    // to the anchor at the float ULP of each vertex's distance from it,
+    // irrespective of where the scaled-space origin is; 6000 is the scale
+    // factor.
+    for (int i = 0; i < vertices.size(); ++i) {
+      R3Element<double> const vertex(vertices[i].x,
+                                     vertices[i].y,
+                                     vertices[i].z);
+      double const shape_error_in_metres =
+          (vertex - (reference[i] - anchor)).Norm() * 6000;
+      double const distance_from_geometry_in_metres =
+          (reference[i] - reference.front()).Norm() * 6000;
+      EXPECT_LE(shape_error_in_metres,
+                1e-3 + 1.5e-7 * distance_from_geometry_in_metres)
+          << "origin at " << scaled_space_origin << ", vertex " << i;
+    }
+    // PLACEMENT: the adapter translates the mesh by the float-cast anchor,
+    // one rounding common to every vertex — it rigidly shifts the mesh by at
+    // most the ULP of the anchor's own magnitude (zero once the game
+    // recentres the origin near the geometry, which keeps the anchor small)
+    // and cannot affect the shape asserted above.
+    R3Element<double> const float_anchor(static_cast<float>(anchor.x),
+                                         static_cast<float>(anchor.y),
+                                         static_cast<float>(anchor.z));
+    EXPECT_LE((float_anchor - anchor).Norm() * 6000,
+              1e-3 + 1.5e-7 * anchor.Norm() * 6000)
+        << "origin at " << scaled_space_origin;
+  }
+}
+
+// With a single subsystem the anchor must be exactly zero and the vertices
+// bit-identical to the absolute rendering: a stock installation renders
+// unchanged.
+TEST_F(PluginIntegrationTestWithoutPlugin, PlotMethod4StockVerticesUnchanged) {
+  Index const star = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  serialization::GravityModel::Body gravity_model;
+  CHECK(google::protobuf::TextFormat::ParseFromString(
+      R"(name                    : "star"
+         gravitational_parameter : "1.19e19 m^3/s^2"
+         reference_instant       : "JD2451545.0"
+         mean_radius             : "8.4e7 m"
+         axis_right_ascension    : "0 deg"
+         axis_declination        : "90 deg"
+         reference_angle         : "0 rad"
+         angular_frequency       : "1 rad/s")",
+      &gravity_model));
+  serialization::InitialState::Cartesian::Body initial_state;
+  CHECK(google::protobuf::TextFormat::ParseFromString(
+      R"(name : "star"
+         x    : "0 m"
+         y    : "0 m"
+         z    : "0 m"
+         vx   : "0 m/s"
+         vy   : "0 m/s"
+         vz   : "0 m/s")",
+      &initial_state));
+  plugin->InsertCelestialAbsoluteCartesian(
+      star, std::nullopt, gravity_model, initial_state);
+  plugin->EndInitialization();
+
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star,
+                             /*loaded=*/false, inserted);
+  Length const orbit_radius = 1.5829e9 * Metre;
+  Speed const v_circular =
+      Sqrt(1.19e19 * Pow<3>(Metre) / Pow<2>(Second) / orbit_radius);
+  plugin->InsertUnloadedPart(
+      part_id, part_name, vessel_guid,
+      {Displacement<AliceSun>({orbit_radius, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>(
+           {0 * Metre / Second, v_circular, 0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  Time const δt = 1200 * Second;
+  Instant t;
+  for (int i = 0; i < 30; ++i) {
+    t += δt;
+    plugin->AdvanceTime(t, 1 * Radian);
+    plugin->InsertOrKeepVessel(vessel_guid, vessel_name, star,
+                               /*loaded=*/false, inserted);
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  auto const& vessel = *plugin->GetVessel(vessel_guid);
+  auto const& trajectory = vessel.trajectory();
+  plugin->renderer().SetPlottingFrame(
+      plugin->NewBodyCentredNonRotatingNavigationFrame(star));
+  std::vector<R3Element<double>> reference;
+  auto const planetarium = plugin->NewPlanetarium(
+      Planetarium::Parameters(/*sphere_radius_multiplier=*/1.0,
+                              /*angular_resolution=*/0.001 * Radian,
+                              /*field_of_view=*/1 * Radian),
+      Perspective<Navigation, Camera>(
+          RigidTransformation<Navigation, Camera>(
+              Navigation::origin,
+              Camera::origin,
+              Signature<Navigation, Camera>::CentralInversion()
+                  .Forget<OrthogonalMap>()).Forget<Similarity>(),
+          /*focal=*/1 * Metre),
+      [&reference](Instant const&,
+                   Position<Navigation> const& plotted_point) {
+        constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+        auto const coordinates =
+            ((plotted_point - Navigation::origin) * inverse_scale_factor)
+                .coordinates();
+        reference.push_back(coordinates);
+        return coordinates;
+      });
+  std::vector<ScaledSpacePoint> vertices;
+  R3Element<double> anchor(1, 1, 1);
+  planetarium->PlotMethod4(
+      trajectory,
+      trajectory.begin(),
+      trajectory.end(),
+      InfiniteFuture,
+      /*reverse=*/false,
+      [&vertices](ScaledSpacePoint const& vertex) {
+        vertices.push_back(vertex);
+      },
+      /*max_points=*/10'000,
+      {vessel.subsystem(), vessel.anchor()},
+      &anchor);
+  ASSERT_GT(vertices.size(), 3);
+  ASSERT_EQ(reference.size(), vertices.size());
+  EXPECT_EQ(anchor.x, 0);
+  EXPECT_EQ(anchor.y, 0);
+  EXPECT_EQ(anchor.z, 0);
+  for (int i = 0; i < vertices.size(); ++i) {
+    EXPECT_EQ(vertices[i].x, static_cast<float>(reference[i].x)) << i;
+    EXPECT_EQ(vertices[i].y, static_cast<float>(reference[i].y)) << i;
+    EXPECT_EQ(vertices[i].z, static_cast<float>(reference[i].z)) << i;
+  }
+}
+
 // The golden mission: one vessel, one continuous timeline, traversing every
 // shipped interstellar regime end-to-end.  From adoption on, a workstream is
 // done only when its own gates are green AND this mission is green; new
@@ -3115,6 +3393,74 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
     EXPECT_THAT((rendered.back().degrees_of_freedom.position() -
                  Navigation::origin).Norm(),
                 AbsoluteErrorFrom(expected_distance_from_b, Lt(1e6 * Metre)));
+  }
+
+  // The map-view vertex path over the same anchored void flight plan: the
+  // plotted float vertices are anchored at the first plotted point, so they
+  // carry the ULP of the geometry's own span rather than that of its
+  // distance to the scaled-space origin (the lattice-anchored-rendering
+  // render check of this mission).
+  {
+    std::vector<R3Element<double>> reference;
+    auto const planetarium = plugin2->NewPlanetarium(
+        Planetarium::Parameters(/*sphere_radius_multiplier=*/1.0,
+                                /*angular_resolution=*/0.001 * Radian,
+                                /*field_of_view=*/1 * Radian),
+        Perspective<Navigation, Camera>(
+            RigidTransformation<Navigation, Camera>(
+                Navigation::origin,
+                Camera::origin,
+                Signature<Navigation, Camera>::CentralInversion()
+                    .Forget<OrthogonalMap>()).Forget<Similarity>(),
+            /*focal=*/1 * Metre),
+        [&reference](Instant const&,
+                     Position<Navigation> const& plotted_point) {
+          constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+          auto const coordinates =
+              ((plotted_point - Navigation::origin) * inverse_scale_factor)
+                  .coordinates();
+          reference.push_back(coordinates);
+          return coordinates;
+        });
+    std::vector<ScaledSpacePoint> vertices;
+    R3Element<double> anchor;
+    planetarium->PlotMethod4(
+        all_segments,
+        all_segments.begin(),
+        all_segments.end(),
+        InfiniteFuture,
+        /*reverse=*/false,
+        [&vertices](ScaledSpacePoint const& vertex) {
+          vertices.push_back(vertex);
+        },
+        /*max_points=*/10'000,
+        {flight_plan.subsystem(), flight_plan.anchor()},
+        &anchor);
+    // Seen from a star-B-centred camera the void-distant plan subtends a tiny
+    // angle, so the adaptive sampling emits only the two endpoints — which
+    // suffice here: the far endpoint carries the whole void span.
+    ASSERT_GE(vertices.size(), 2);
+    ASSERT_EQ(reference.size(), vertices.size());
+    // The anchor is the first plotted point, exactly.
+    EXPECT_EQ(anchor.x, reference.front().x);
+    EXPECT_EQ(anchor.y, reference.front().y);
+    EXPECT_EQ(anchor.z, reference.front().z);
+    // SHAPE: the float vertex buffer alone reproduces the plan's geometry
+    // relative to the anchor at the float ULP of each vertex's distance from
+    // it; the adapter's float-cast of the anchor is a single common-mode
+    // translation which cannot affect it.
+    for (int i = 0; i < vertices.size(); ++i) {
+      R3Element<double> const vertex(vertices[i].x,
+                                     vertices[i].y,
+                                     vertices[i].z);
+      double const shape_error_in_metres =
+          (vertex - (reference[i] - anchor)).Norm() * 6000;
+      double const distance_from_geometry_in_metres =
+          (reference[i] - reference.front()).Norm() * 6000;
+      EXPECT_LE(shape_error_in_metres,
+                1e-3 + 1.5e-7 * distance_from_geometry_in_metres)
+          << "vertex " << i;
+    }
   }
 
   // ——— Stage 7: retro-burn, re-armed after the reload ———

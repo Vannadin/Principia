@@ -2283,6 +2283,7 @@ message PlanetariumPlotCelestialFutureTrajectory {
   message Out {
     required double minimal_distance_from_camera = 1;
     required int32 vertex_count = 2;
+    required XYZ anchor = 3;
   }
   optional In in = 1;
   optional Out out = 2;
@@ -2306,6 +2307,7 @@ message PlanetariumPlotCelestialPastTrajectory {
   message Out {
     required double minimal_distance_from_camera = 1;
     required int32 vertex_count = 2;
+    required XYZ anchor = 3;
   }
   optional In in = 1;
   optional Out out = 2;
@@ -2327,6 +2329,7 @@ message PlanetariumPlotEquipotential {
   }
   message Out {
     required int32 vertex_count = 1;
+    required XYZ anchor = 2;
   }
   optional In in = 1;
   optional Out out = 2;
@@ -2350,6 +2353,7 @@ message PlanetariumPlotFlightPlanSegment {
   }
   message Out {
     required int32 vertex_count = 1;
+    required XYZ anchor = 2;
   }
   optional In in = 1;
   optional Out out = 2;
@@ -2372,6 +2376,7 @@ message PlanetariumPlotPrediction {
   }
   message Out {
     required int32 vertex_count = 1;
+    required XYZ anchor = 2;
   }
   optional In in = 1;
   optional Out out = 2;
@@ -2395,6 +2400,7 @@ message PlanetariumPlotPsychohistory {
   }
   message Out {
     required int32 vertex_count = 1;
+    required XYZ anchor = 2;
   }
   optional In in = 1;
   optional Out out = 2;

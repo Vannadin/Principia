@@ -43,8 +43,9 @@ class Plotter {
           i,
           VertexBuffer.data,
           VertexBuffer.size,
-          out int vertex_count);
-      DrawLineMesh(equipotential_meshes_[i], vertex_count, colour,
+          out int vertex_count,
+          out XYZ anchor);
+      DrawLineMesh(equipotential_meshes_[i], vertex_count, anchor, colour,
                    GLLines.Style.Solid);
     }
   }
@@ -73,9 +74,11 @@ class Plotter {
             prediction_t_max,
             VertexBuffer.data,
             VertexBuffer.size,
-            out int vertex_count);
+            out int vertex_count,
+            out XYZ anchor);
         DrawLineMesh(ref psychohistory_mesh_,
                      vertex_count,
+                     anchor,
                      adapter_.history_colour,
                      adapter_.history_style);
       }
@@ -85,9 +88,11 @@ class Plotter {
                                               prediction_t_max,
                                               VertexBuffer.data,
                                               VertexBuffer.size,
-                                              out int vertex_count);
+                                              out int vertex_count,
+                                              out XYZ anchor);
         DrawLineMesh(ref prediction_mesh_,
                      vertex_count,
+                     anchor,
                      adapter_.prediction_colour,
                      adapter_.prediction_style);
       }
@@ -113,10 +118,12 @@ class Plotter {
               flight_plan_t_max,
               VertexBuffer.data,
               VertexBuffer.size,
-              out int vertex_count);
+              out int vertex_count,
+              out XYZ anchor);
           // No need for dynamic initialization, that was done above.
           DrawLineMesh(flight_plan_segment_meshes_[i],
                        vertex_count,
+                       anchor,
                        colour,
                        is_burn
                            ? adapter_.burn_style
@@ -140,9 +147,11 @@ class Plotter {
             t_max: null,
             VertexBuffer.data,
             VertexBuffer.size,
-            out int vertex_count);
+            out int vertex_count,
+            out XYZ anchor);
         DrawLineMesh(ref target_psychohistory_mesh_,
                      vertex_count,
+                     anchor,
                      adapter_.target_history_colour,
                      adapter_.target_history_style);
       }
@@ -153,9 +162,11 @@ class Plotter {
             t_max: null,
             VertexBuffer.data,
             VertexBuffer.size,
-            out int vertex_count);
+            out int vertex_count,
+            out XYZ anchor);
         DrawLineMesh(ref target_prediction_mesh_,
                      vertex_count,
+                     anchor,
                      adapter_.target_prediction_colour,
                      adapter_.target_prediction_style);
       }
@@ -197,11 +208,13 @@ class Plotter {
             VertexBuffer.data,
             VertexBuffer.size,
             out double min_past_distance,
-            out int vertex_count);
+            out int vertex_count,
+            out XYZ anchor);
         min_distance_from_camera =
             Math.Min(min_distance_from_camera, min_past_distance);
         DrawLineMesh(ref trajectories.past,
                      vertex_count,
+                     anchor,
                      colour,
                      GLLines.Style.Faded);
       }
@@ -214,11 +227,13 @@ class Plotter {
             VertexBuffer.data,
             VertexBuffer.size,
             out double min_future_distance,
-            out int vertex_count);
+            out int vertex_count,
+            out XYZ anchor);
         min_distance_from_camera =
             Math.Min(min_distance_from_camera, min_future_distance);
         DrawLineMesh(ref trajectories.future,
                      vertex_count,
+                     anchor,
                      colour,
                      GLLines.Style.Solid);
       }
@@ -239,6 +254,7 @@ class Plotter {
 
   private void DrawLineMesh(ref UnityEngine.Mesh mesh,
                             int vertex_count,
+                            XYZ anchor,
                             UnityEngine.Color colour,
                             GLLines.Style style) {
     // Construct the mesh on the first call because Unity doesn't want us to do
@@ -246,11 +262,12 @@ class Plotter {
     if (mesh == null) {
       mesh = MakeDynamicMesh();
     }
-    DrawLineMesh(mesh, vertex_count, colour, style);
+    DrawLineMesh(mesh, vertex_count, anchor, colour, style);
   }
 
   private void DrawLineMesh(UnityEngine.Mesh mesh,
                             int vertex_count,
+                            XYZ anchor,
                             UnityEngine.Color colour,
                             GLLines.Style style) {
     if (vertex_count > VertexBuffer.size) {
@@ -294,12 +311,15 @@ class Plotter {
                         : UnityEngine.MeshTopology.LineStrip,
                     submesh: 0);
     mesh.RecalculateBounds();
+    // The vertices are relative to the anchor, whose single float rounding
+    // here is common-mode over the mesh; drawing at the anchor reassembles
+    // their scaled-space positions.
     // If the lines are drawn in layer 31 (Vectors), which sounds more
     // appropriate, they vanish when zoomed out.  Layer 9 works; pay no
     // attention to its name.
     UnityEngine.Graphics.DrawMesh(
         mesh,
-        UnityEngine.Vector3.zero,
+        (UnityEngine.Vector3)anchor,
         UnityEngine.Quaternion.identity,
         GLLines.line_material,
         (int)PrincipiaPluginAdapter.UnityLayers.Atmosphere,

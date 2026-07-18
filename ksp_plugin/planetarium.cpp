@@ -295,7 +295,11 @@ void Planetarium::PlotMethod4(
     bool const reverse,
     std::function<void(ScaledSpacePoint const&)> const& add_point,
     int max_points,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    R3Element<double>* const anchor_out) const {
+  if (anchor_out != nullptr) {
+    *anchor_out = R3Element<double>{};
+  }
   if (begin == end) {
     return;
   }
@@ -304,7 +308,7 @@ void Planetarium::PlotMethod4(
   auto const last_time =
       std::min({last->time, plotting_frame_->t_max(), t_max});
   PlotMethod4(trajectory, begin_time, last_time, reverse, add_point,
-              max_points, /*minimal_distance=*/nullptr, placement);
+              max_points, /*minimal_distance=*/nullptr, placement, anchor_out);
 }
 
 std::vector<Sphere<Navigation>> Planetarium::ComputePlottableSpheres(

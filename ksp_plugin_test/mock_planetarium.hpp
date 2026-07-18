@@ -36,9 +36,8 @@ class MockPlanetarium : public Planetarium {
             make_not_null<NavigationFrame const*>(),
             [](Instant const&, Position<Navigation> const& plotted_point) {
               constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
-              return ScaledSpacePoint::FromCoordinates(
-                  ((plotted_point - Navigation::origin) *
-                   inverse_scale_factor).coordinates());
+              return ((plotted_point - Navigation::origin) *
+                      inverse_scale_factor).coordinates();
             }) {}
 };
 

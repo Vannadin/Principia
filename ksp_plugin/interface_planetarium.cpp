@@ -10,6 +10,7 @@
 #include "geometry/grassmann.hpp"
 #include "geometry/orthogonal_map.hpp"
 #include "geometry/perspective.hpp"
+#include "geometry/r3_element.hpp"
 #include "geometry/rotation.hpp"
 #include "geometry/space_transformations.hpp"
 #include "journal/method.hpp"
@@ -18,6 +19,7 @@
 #include "ksp_plugin/planetarium.hpp"
 #include "ksp_plugin/renderer.hpp"
 #include "physics/discrete_trajectory.hpp"
+#include "physics/ephemeris.hpp"
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
 
@@ -28,6 +30,7 @@ using namespace principia::geometry::_affine_map;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_perspective;
+using namespace principia::geometry::_r3_element;
 using namespace principia::geometry::_rotation;
 using namespace principia::geometry::_space_transformations;
 using namespace principia::journal::_method;
@@ -35,6 +38,7 @@ using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_planetarium;
 using namespace principia::ksp_plugin::_renderer;
 using namespace principia::physics::_discrete_trajectory;
+using namespace principia::physics::_ephemeris;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
 
@@ -103,9 +107,8 @@ Planetarium* __cdecl principia__PlanetariumCreate(
        inverse_scale_factor = inverse_scale_factor * (1 / Metre)](
           Instant const&,
           Position<Navigation> const& plotted_point) {
-        return ScaledSpacePoint::FromCoordinates(
-            ((plotting_to_world(plotted_point) - scaled_space_origin) *
-             inverse_scale_factor).coordinates());
+        return ((plotting_to_world(plotted_point) - scaled_space_origin) *
+                inverse_scale_factor).coordinates();
       };
   return m.Return(
       plugin->NewPlanetarium(
@@ -133,13 +136,15 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
     double const* const t_max,
     ScaledSpacePoint* const vertices,
     int const vertices_size,
-    int* const vertex_count) {
+    int* const vertex_count,
+    XYZ* const anchor) {
   journal::Method<journal::PlanetariumPlotFlightPlanSegment> m(
       {planetarium, plugin, vessel_guid, index, t_max, vertices, vertices_size},
-      {vertex_count});
+      {vertex_count, anchor});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  R3Element<double> anchor_coordinates;
 
   Vessel const& vessel = *plugin->GetVessel(vessel_guid);
   CHECK(vessel.has_flight_plan()) << vessel_guid;
@@ -161,8 +166,10 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        {vessel.flight_plan().subsystem(), std::nullopt});
+        {vessel.flight_plan().subsystem(), std::nullopt},
+        &anchor_coordinates);
   }
+  *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
 }
 
@@ -175,13 +182,15 @@ void __cdecl principia__PlanetariumPlotPrediction(
     double const* const t_max,
     ScaledSpacePoint* const vertices,
     int const vertices_size,
-    int* const vertex_count) {
+    int* const vertex_count,
+    XYZ* const anchor) {
   journal::Method<journal::PlanetariumPlotPrediction> m(
       {planetarium, plugin, vessel_guid, t_max, vertices, vertices_size},
-      {vertex_count});
+      {vertex_count, anchor});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  R3Element<double> anchor_coordinates;
 
   auto const vessel = plugin->GetVessel(vessel_guid);
   auto const prediction = vessel->prediction();
@@ -195,7 +204,9 @@ void __cdecl principia__PlanetariumPlotPrediction(
         vertices[(*vertex_count)++] = vertex;
       },
       vertices_size,
-      {vessel->subsystem(), vessel->anchor()});
+      {vessel->subsystem(), vessel->anchor()},
+      &anchor_coordinates);
+  *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
 }
 
@@ -211,7 +222,8 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
     double const* const t_max,
     ScaledSpacePoint* const vertices,
     int const vertices_size,
-    int* const vertex_count) {
+    int* const vertex_count,
+    XYZ* const anchor) {
   journal::Method<journal::PlanetariumPlotPsychohistory> m(
       {planetarium,
        plugin,
@@ -220,14 +232,16 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
        t_max,
        vertices,
        vertices_size},
-      {vertex_count});
+      {vertex_count, anchor});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  R3Element<double> anchor_coordinates;
 
   // Do not plot the psychohistory when there is a target vessel as it is
   // misleading.
   if (plugin->renderer().HasTargetVessel()) {
+    *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   } else {
     auto const vessel = plugin->GetVessel(vessel_guid);
@@ -252,7 +266,9 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        {vessel->subsystem(), vessel->anchor()});
+        {vessel->subsystem(), vessel->anchor()},
+        &anchor_coordinates);
+    *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   }
 }
@@ -269,7 +285,8 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
     ScaledSpacePoint* const vertices,
     int const vertices_size,
     double* const minimal_distance_from_camera,
-    int* const vertex_count) {
+    int* const vertex_count,
+    XYZ* const anchor) {
   journal::Method<journal::PlanetariumPlotCelestialPastTrajectory> m(
       {planetarium,
        plugin,
@@ -277,14 +294,16 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
        max_history_length,
        vertices,
        vertices_size},
-      {minimal_distance_from_camera, vertex_count});
+      {minimal_distance_from_camera, vertex_count, anchor});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  R3Element<double> anchor_coordinates;
 
   // Do not plot the past when there is a target vessel as it is misleading.
   if (plugin->renderer().HasTargetVessel()) {
     *minimal_distance_from_camera = std::numeric_limits<double>::infinity();
+    *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   } else {
     auto const& celestial = plugin->GetCelestial(celestial_index);
@@ -310,8 +329,10 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
         },
         vertices_size,
         &minimal_distance,
-        {celestial.subsystem(), std::nullopt});
+        {celestial.subsystem(), std::nullopt},
+        &anchor_coordinates);
     *minimal_distance_from_camera = minimal_distance / Metre;
+    *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   }
 }
@@ -328,7 +349,8 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
     ScaledSpacePoint* const vertices,
     int const vertices_size,
     double* const minimal_distance_from_camera,
-    int* const vertex_count) {
+    int* const vertex_count,
+    XYZ* const anchor) {
   journal::Method<journal::PlanetariumPlotCelestialFutureTrajectory> m(
       {planetarium,
        plugin,
@@ -336,15 +358,17 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
        vessel_guid,
        vertices,
        vertices_size},
-      {minimal_distance_from_camera, vertex_count});
+      {minimal_distance_from_camera, vertex_count, anchor});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  R3Element<double> anchor_coordinates;
 
   // Do not plot the past when there is a target vessel as it is misleading.
   // TODO(egg): This is the future, not the past!
   if (plugin->renderer().HasTargetVessel()) {
     *minimal_distance_from_camera = std::numeric_limits<double>::infinity();
+    *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   } else {
     auto const& vessel = *plugin->GetVessel(vessel_guid);
@@ -369,8 +393,10 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
         },
         vertices_size,
         &minimal_distance,
-        {celestial.subsystem(), std::nullopt});
+        {celestial.subsystem(), std::nullopt},
+        &anchor_coordinates);
     *minimal_distance_from_camera = minimal_distance / Metre;
+    *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   }
 }
@@ -383,13 +409,15 @@ void __cdecl principia__PlanetariumPlotEquipotential(
     int const index,
     ScaledSpacePoint* const vertices,
     int const vertices_size,
-    int* const vertex_count) {
+    int* const vertex_count,
+    XYZ* const anchor) {
   journal::Method<journal::PlanetariumPlotEquipotential> m(
       {planetarium, plugin, index, vertices, vertices_size},
-      {vertex_count});
+      {vertex_count, anchor});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  R3Element<double> anchor_coordinates;
 
   auto const& equipotentials =
       *ABSL_DIE_IF_NULL(plugin->geometric_potential_plotter().equipotentials());
@@ -406,7 +434,11 @@ void __cdecl principia__PlanetariumPlotEquipotential(
       [vertices, vertex_count](ScaledSpacePoint const& vertex) {
         vertices[(*vertex_count)++] = vertex;
       },
-      vertices_size);
+      vertices_size,
+      /*minimal_distance=*/nullptr,
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      &anchor_coordinates);
+  *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
 }
 
