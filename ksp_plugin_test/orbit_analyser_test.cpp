@@ -304,5 +304,135 @@ TEST_F(OrbitAnalyserTest, InterstellarStarOrbit) {
               AllOf(Gt(0.99 * keplerian_period), Lt(1.01 * keplerian_period)));
 }
 
+// An anchored vessel cruising through the force-free void between the stars:
+// its degrees of freedom are relative to its private anchor origin, near
+// zero.  The primary selection must restore the true position through the
+// anchor: the cruise is hyperbolic with respect to both stars, so there is no
+// primary at all.  Without the anchor the near-origin coordinates read as a
+// position a few thousand kilometres from the home star, bound to it in a
+// seconds-scale orbit: the analysis then reports the home star as the primary
+// and a radial distance deep below the collision threshold — a phantom
+// collision with a star forty light-years away.
+TEST_F(OrbitAnalyserTest, AnchoredVoidCruiserHasNoPrimary) {
+  Instant const t0;
+  GravitationalParameter const μ_home =
+      1.1723328e18 * si::Unit<GravitationalParameter>;
+  GravitationalParameter const μ_star =
+      1.1917577113616e19 * si::Unit<GravitationalParameter>;
+  auto const ephemeris = MakeInterstellarEphemeris(
+      t0,
+      μ_home,
+      μ_star,
+      Displacement<Barycentric>({3.848e17 * Metre, 0 * Metre, 0 * Metre}));
+
+  // Mid-void, cruising toward the remote star at 10 km/s; the anchor carries
+  // the void offset and the cruise velocity, the anchored coordinates are
+  // small.
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({1e17 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = Velocity<Barycentric>(
+          {1e4 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second}),
+      .epoch = t0};
+  DegreesOfFreedom<Barycentric> const first_degrees_of_freedom{
+      Barycentric::origin +
+          Displacement<Barycentric>({1e6 * Metre, 0 * Metre, 0 * Metre}),
+      Velocity<Barycentric>(
+          {10 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second})};
+
+  EXPECT_OK(ephemeris->Prolong(t0 + 1 * Second));
+  OrbitAnalyser analyser(ephemeris.get(), DefaultHistoryParameters());
+  analyser.RequestAnalysis(
+      {.first_time = t0,
+       .first_degrees_of_freedom = first_degrees_of_freedom,
+       .subsystem = 0,
+       .anchor = anchor,
+       .mission_duration = 1 * Day});
+  for (int i = 0; i < 6000 && analyser.analysis() == nullptr; ++i) {
+    absl::SleepFor(absl::Milliseconds(10));
+    analyser.RefreshAnalysis();
+  }
+  ASSERT_THAT(analyser.analysis(), ::testing::NotNull())
+      << "the analysis never completed";
+
+  // Unbound in the void: no primary, no elements — and in particular no
+  // phantom collision with the home star.
+  EXPECT_THAT(analyser.analysis()->primary(), IsNull());
+  EXPECT_FALSE(analyser.analysis()->elements().has_value());
+  EXPECT_FALSE(analyser.analysis()->first_collision().has_value());
+}
+
+// A vessel orbiting the remote star while still held in an anchored
+// representation (subsystem 0 + an anchor spanning the interstellar gap).
+// This exercises the anchored path END TO END: the primary selection must
+// restore the anchor to find the remote star, and the conversion of the
+// analysed trajectory to the primary-centred frame must compose the anchor
+// with the inter-subsystem offset — the elements of the orbit must come out
+// as if the vessel had been represented locally.
+TEST_F(OrbitAnalyserTest, AnchoredOrbitAtRemoteStar) {
+  Instant const t0;
+  GravitationalParameter const μ_home =
+      1.1723328e18 * si::Unit<GravitationalParameter>;
+  GravitationalParameter const μ_star =
+      1.1917577113616e19 * si::Unit<GravitationalParameter>;
+  Displacement<Barycentric> const to_star(
+      {3.848e17 * Metre, 0 * Metre, 0 * Metre});
+  auto const ephemeris =
+      MakeInterstellarEphemeris(t0, μ_home, μ_star, to_star);
+  Velocity<Barycentric> const star_velocity(
+      {0 * Metre / Second,
+       Sqrt(μ_home / to_star.Norm()),
+       0 * Metre / Second});
+
+  // A tight near-circular orbit around the remote star, entirely carried by
+  // the anchor: the anchored coordinates hold only the orbital motion.  The
+  // small eccentricity and inclination keep ϖ and Ω well-defined (the exact
+  // circular equatorial orbit is doubly degenerate and its fitted periods are
+  // meaningless regardless of representation).
+  Length const orbit_radius = 2e8 * Metre;
+  Speed const v_circular = Sqrt(μ_star / orbit_radius);
+  Angle const inclination = 0.034 * Degree;
+  Time const keplerian_period =
+      2 * π * Sqrt(Pow<3>(orbit_radius) / μ_star);
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          to_star +
+          Displacement<Barycentric>({orbit_radius, 0 * Metre, 0 * Metre})),
+      .velocity = star_velocity,
+      .epoch = t0};
+  DegreesOfFreedom<Barycentric> const first_degrees_of_freedom{
+      Barycentric::origin,
+      Velocity<Barycentric>({0 * Metre / Second,
+                             v_circular * (1 + 2.7e-5) * Cos(inclination),
+                             v_circular * (1 + 2.7e-5) * Sin(inclination)})};
+
+  EXPECT_OK(ephemeris->Prolong(t0 + 1 * Second));
+  OrbitAnalyser analyser(ephemeris.get(), DefaultHistoryParameters());
+  analyser.RequestAnalysis(
+      {.first_time = t0,
+       .first_degrees_of_freedom = first_degrees_of_freedom,
+       .subsystem = 0,
+       .anchor = anchor,
+       .mission_duration = 2 * keplerian_period});
+  for (int i = 0; i < 6000 && analyser.analysis() == nullptr; ++i) {
+    absl::SleepFor(absl::Milliseconds(10));
+    analyser.RefreshAnalysis();
+  }
+  ASSERT_THAT(analyser.analysis(), ::testing::NotNull())
+      << "the analysis never completed";
+
+  ASSERT_THAT(analyser.analysis()->primary(), ::testing::NotNull());
+  EXPECT_EQ("remote star", analyser.analysis()->primary()->name());
+  auto const& elements = analyser.analysis()->elements();
+  ASSERT_TRUE(elements.has_value());
+  EXPECT_THAT(elements->mean_semimajor_axis_interval().midpoint(),
+              IsNear(200.0_(1) * Mega(Metre)));
+  EXPECT_THAT(elements->anomalistic_period(),
+              AllOf(Gt(0.99 * keplerian_period), Lt(1.01 * keplerian_period)));
+  EXPECT_THAT(elements->nodal_period(),
+              AllOf(Gt(0.99 * keplerian_period), Lt(1.01 * keplerian_period)));
+  EXPECT_FALSE(analyser.analysis()->first_collision().has_value());
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia

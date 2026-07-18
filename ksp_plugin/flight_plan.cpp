@@ -350,6 +350,7 @@ void FlightPlan::EnableAnalysis(bool const enabled) {
               {.first_time = first_time,
                .first_degrees_of_freedom = first_degrees_of_freedom,
                .subsystem = subsystem_,
+               .anchor = anchor_,
                .mission_duration = coast->back().time - first_time,
                .extended_mission_duration = desired_final_time_ - first_time});
         }
@@ -624,6 +625,7 @@ absl::Status FlightPlan::ComputeSegments(
             {.first_time = first_time,
              .first_degrees_of_freedom = first_degrees_of_freedom,
              .subsystem = subsystem_,
+             .anchor = anchor_,
              .mission_duration = coast->back().time - first_time,
              .extended_mission_duration = desired_final_time_ - first_time});
       }
@@ -662,6 +664,7 @@ absl::Status FlightPlan::ComputeSegments(
           {.first_time = first_time,
            .first_degrees_of_freedom = first_degrees_of_freedom,
            .subsystem = subsystem_,
+           .anchor = anchor_,
            .mission_duration = desired_final_time_ - first_time});
     }
     absl::Status const status = CoastSegment(desired_final_time_,

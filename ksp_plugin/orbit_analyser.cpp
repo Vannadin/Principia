@@ -160,16 +160,19 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
 
     BodyCentredNonRotatingReferenceFrame<Barycentric, PrimaryCentred> const
         primary_centred(ephemeris_, primary);
+    // The conversion from the analysed representation — subsystem and, for an
+    // anchored vessel, anchor — to the primary's; both terms are affine in
+    // time, so they compose into the epoch/velocity pair below.
+    auto const [conversion_at_epoch, velocity_conversion] =
+        ephemeris_->placement_conversion(
+            {parameters.subsystem, parameters.anchor},
+            {primary_centred.subsystem(), std::nullopt},
+            parameters.first_time);
     auto const status_or_primary_centred_trajectory =
         ToPrimaryCentred(primary_centred,
                          trajectory,
-                         ephemeris_->subsystem_conversion(
-                             parameters.subsystem,
-                             primary_centred.subsystem(),
-                             parameters.first_time),
-                         ephemeris_->subsystem_velocity_conversion(
-                             parameters.subsystem,
-                             primary_centred.subsystem()),
+                         conversion_at_epoch,
+                         velocity_conversion,
                          parameters.first_time);
     RETURN_IF_ERROR(status_or_primary_centred_trajectory);
     auto const& primary_centred_trajectory =
@@ -235,10 +238,22 @@ absl::Status OrbitAnalyser::FindBodyWithSmallestOsculatingPeriod(
     Time& smallest_osculating_period) {
   primary = nullptr;
   smallest_osculating_period = Infinity<Time>;
+  // An anchored vessel's degrees of freedom are relative to its private
+  // origin; restore the true subsystem-relative state, as the flows do, lest
+  // the near-origin anchored coordinates be mistaken for a position at the
+  // home star and the primary be selected there.
+  DegreesOfFreedom<Barycentric> first_degrees_of_freedom =
+      parameters.first_degrees_of_freedom;
+  if (parameters.anchor.has_value()) {
+    first_degrees_of_freedom = {
+        first_degrees_of_freedom.position() +
+            parameters.anchor->OffsetAt(parameters.first_time),
+        first_degrees_of_freedom.velocity() + parameters.anchor->velocity};
+  }
   for (auto const body : ephemeris_->bodies()) {
     RETURN_IF_STOPPED;
     RelativeDegreesOfFreedom<Barycentric> relative_degrees_of_freedom =
-        parameters.first_degrees_of_freedom -
+        first_degrees_of_freedom -
         ephemeris_->trajectory(body)->EvaluateDegreesOfFreedom(
             parameters.first_time);
     if (int const body_subsystem = ephemeris_->subsystem_of_body(body);
