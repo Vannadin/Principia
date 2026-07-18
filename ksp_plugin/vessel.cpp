@@ -168,16 +168,38 @@ int Vessel::subsystem() const {
   return subsystem_;
 }
 
+namespace {
+
+// The present state of a vessel: the end of its psychohistory when the
+// history has been prepared, the end of its trajectory otherwise — never the
+// end of a prediction, which extends the trajectory into the future.
+DiscreteTrajectory<Barycentric>::value_type const& PresentState(
+    DiscreteTrajectory<Barycentric> const& trajectory,
+    DiscreteTrajectorySegmentIterator<Barycentric> const& psychohistory) {
+  if (psychohistory != trajectory.segments().end() &&
+      !psychohistory->empty()) {
+    return psychohistory->back();
+  }
+  return trajectory.back();
+}
+
+}  // namespace
+
 bool Vessel::RebaseIfNeeded() {
   int const number_of_subsystems = ephemeris_->number_of_subsystems();
   if (number_of_subsystems < 2 || trajectory_.empty()) {
     return false;
   }
-  // A copy, not a reference: the translation below rebuilds the timeline that
+  // The decision point is the present state — NOT `trajectory_.back()`: when
+  // a prediction exists it extends the trajectory far into the future, and
+  // deciding the anchor or the rebase at the predicted endpoint mis-places
+  // both (e.g. a vessel deep in the void whose prediction ends inside a
+  // star's field would never anchor).
+  // Copies, not references: the translations below rebuild the timeline that
   // `back()` points into.
-  Instant const t = trajectory_.back().time;
+  Instant const t = PresentState(trajectory_, psychohistory_).time;
   Position<Barycentric> q =
-      trajectory_.back().degrees_of_freedom.position();
+      PresentState(trajectory_, psychohistory_).degrees_of_freedom.position();
   if (anchor_.has_value()) {
     // The dominance geometry below assumes subsystem-relative coordinates:
     // while anchored we only watch for the void exit and for coordinate
@@ -197,7 +219,7 @@ bool Vessel::RebaseIfNeeded() {
       return false;
     }
     DropAnchor();
-    q = trajectory_.back().degrees_of_freedom.position();
+    q = PresentState(trajectory_, psychohistory_).degrees_of_freedom.position();
   } else if (ephemeris_->FarFieldIsZero(q, subsystem_, t)) {
     AdoptAnchor();
     return true;
@@ -333,10 +355,14 @@ void Vessel::AdoptAnchor() {
   if (trajectory_.empty()) {
     return;
   }
+  // The anchor is seeded from the present state, not `trajectory_.back()`:
+  // with a prediction present the latter is a future state whose velocity
+  // (under a predicted burn) can disagree with the present motion, inflating
+  // the anchored coordinates.
   // Value copies: the translations rebuild the timeline.
-  Instant const t = trajectory_.back().time;
+  Instant const t = PresentState(trajectory_, psychohistory_).time;
   DegreesOfFreedom<Barycentric> const degrees_of_freedom =
-      trajectory_.back().degrees_of_freedom;
+      PresentState(trajectory_, psychohistory_).degrees_of_freedom;
   Displacement<Barycentric> const displacement =
       degrees_of_freedom.position() - Barycentric::origin;
   Velocity<Barycentric> const velocity_offset = degrees_of_freedom.velocity();
