@@ -396,6 +396,15 @@ QP __cdecl principia__CelestialFromParent(Plugin const* const plugin,
   return m.Return(ToQP(plugin->CelestialFromParent(celestial_index)));
 }
 
+// Returns the index of the gravitational subsystem the celestial with the
+// given index belongs to.
+int __cdecl principia__CelestialGetSubsystem(Plugin const* const plugin,
+                                             int const celestial_index) {
+  journal::Method<journal::CelestialGetSubsystem> m({plugin, celestial_index});
+  CHECK(plugin != nullptr);
+  return m.Return(plugin->GetCelestial(celestial_index).subsystem());
+}
+
 double __cdecl principia__CelestialInitialRotationInDegrees(
     Plugin const* const plugin,
     int const celestial_index) {

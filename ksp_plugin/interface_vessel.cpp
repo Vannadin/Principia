@@ -70,6 +70,38 @@ OrbitAnalysis* __cdecl principia__VesselGetAnalysis(
   return m.Return(analysis);
 }
 
+// Returns the placement under which the vessel's trajectory is represented:
+// the subsystem relative to whose local origin its coordinates are expressed,
+// and, if the vessel coasts anchored in the inter-subsystem void, the sector
+// cell and intra-cell offset of its anchor (zero when unanchored).  The cell
+// indices are integers exactly representable as doubles.
+void __cdecl principia__VesselGetPlacement(Plugin const* const plugin,
+                                           char const* const vessel_guid,
+                                           int* const subsystem,
+                                           bool* const has_anchor,
+                                           XYZ* const anchor_cell,
+                                           XYZ* const anchor_local) {
+  journal::Method<journal::VesselGetPlacement> m(
+      {plugin, vessel_guid},
+      {subsystem, has_anchor, anchor_cell, anchor_local});
+  CHECK(plugin != nullptr);
+  Vessel const& vessel = *plugin->GetVessel(vessel_guid);
+  *subsystem = vessel.subsystem();
+  auto const& anchor = vessel.anchor();
+  *has_anchor = anchor.has_value();
+  if (anchor.has_value()) {
+    auto const& cell = anchor->offset.cell;
+    *anchor_cell = XYZ{static_cast<double>(cell.x),
+                       static_cast<double>(cell.y),
+                       static_cast<double>(cell.z)};
+    *anchor_local = ToXYZ(anchor->offset.local.coordinates() / Metre);
+  } else {
+    *anchor_cell = XYZ{0, 0, 0};
+    *anchor_local = XYZ{0, 0, 0};
+  }
+  return m.Return();
+}
+
 AdaptiveStepParameters __cdecl
 principia__VesselGetPredictionAdaptiveStepParameters(
     Plugin const* const plugin,

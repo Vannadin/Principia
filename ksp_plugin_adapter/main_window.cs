@@ -81,6 +81,12 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
     if (show_logging_settings_value != null) {
       show_logging_settings_ = Convert.ToBoolean(show_logging_settings_value);
     }
+    string show_coordinate_origin_value =
+        node.GetAtMostOneValue("show_coordinate_origin");
+    if (show_coordinate_origin_value != null) {
+      show_coordinate_origin_ =
+          Convert.ToBoolean(show_coordinate_origin_value);
+    }
 
     string history_length_value = node.GetAtMostOneValue("history_length");
     if (history_length_value != null) {
@@ -145,6 +151,9 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
                   createIfNotFound : true);
     node.SetValue("show_logging_settings",
                   show_logging_settings_,
+                  createIfNotFound : true);
+    node.SetValue("show_coordinate_origin",
+                  show_coordinate_origin_,
                   createIfNotFound : true);
 
     node.SetValue("history_length", history_length, createIfNotFound : true);
@@ -306,8 +315,89 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
           name   : L10N.CacheFormat("#Principia_MainWindow_LoggingSettings"),
           show   : ref show_logging_settings_,
           render : RenderLoggingSettings);
+      if (adapter_.PluginRunning()) {
+        RenderToggleableSection(name   : "Coordinate origin",
+                                show   : ref show_coordinate_origin_,
+                                render : RenderCoordinateOrigin);
+      }
     }
     UnityEngine.GUI.DragWindow();
+  }
+
+  // Displays the placement under which the active vessel is represented: the
+  // subsystem (named by its lowest-index celestial, in practice its star) or,
+  // in the void, the anchor's sector-lattice cell; and the recent placement
+  // transitions observed while this section was open.
+  private void RenderCoordinateOrigin() {
+    Vessel active_vessel = FlightGlobals.ActiveVessel;
+    string vessel_guid = active_vessel?.id.ToString();
+    if (vessel_guid == null || !plugin.HasVessel(vessel_guid)) {
+      UnityEngine.GUILayout.Label("No managed active vessel.");
+      return;
+    }
+    plugin.VesselGetPlacement(vessel_guid,
+                              out int subsystem,
+                              out bool has_anchor,
+                              out XYZ anchor_cell,
+                              out XYZ anchor_local);
+    string subsystem_name = SubsystemName(subsystem);
+    UnityEngine.GUILayout.Label(
+        has_anchor
+            ? $"Regime: void, anchored (subsystem #{subsystem}: " +
+              $"{subsystem_name} kept for the handoff)"
+            : $"Regime: subsystem #{subsystem}: {subsystem_name}");
+    if (has_anchor) {
+      UnityEngine.GUILayout.Label(
+          $"Anchor sector cell: [{anchor_cell.x:F0}, {anchor_cell.y:F0}, " +
+          $"{anchor_cell.z:F0}]  (cell side 2^40 m)");
+      double local_metres = Math.Sqrt(
+          anchor_local.x * anchor_local.x +
+          anchor_local.y * anchor_local.y +
+          anchor_local.z * anchor_local.z);
+      UnityEngine.GUILayout.Label(
+          $"Anchor in-cell offset: {local_metres:E3} m");
+    }
+    string state = has_anchor
+        ? $"anchored [{anchor_cell.x:F0}, {anchor_cell.y:F0}, " +
+          $"{anchor_cell.z:F0}] in #{subsystem}"
+        : $"in #{subsystem} ({subsystem_name})";
+    if (last_placement_state_ != null && last_placement_state_ != state) {
+      placement_events_.Add(
+          $"[UT {Planetarium.GetUniversalTime():F0}] " +
+          $"{last_placement_state_} → {state}");
+      if (placement_events_.Count > 4) {
+        placement_events_.RemoveAt(0);
+      }
+    }
+    last_placement_state_ = state;
+    if (placement_events_.Count > 0) {
+      UnityEngine.GUILayout.Label("Recent transitions:");
+      foreach (string placement_event in placement_events_) {
+        UnityEngine.GUILayout.Label(placement_event,
+                                    style : Style.Info(
+                                        UnityEngine.GUI.skin.label));
+      }
+    }
+  }
+
+  // Names a subsystem by its lowest-index celestial: subsystem 0 is the home
+  // system (named by the stock sun), and each added star heads its own
+  // subsystem.  The map is rebuilt when the plugin is.
+  private string SubsystemName(int subsystem) {
+    if (plugin != subsystem_names_plugin_) {
+      subsystem_names_.Clear();
+      foreach (CelestialBody body in FlightGlobals.Bodies) {
+        int body_subsystem =
+            plugin.CelestialGetSubsystem(body.flightGlobalsIndex);
+        if (!subsystem_names_.ContainsKey(body_subsystem)) {
+          subsystem_names_[body_subsystem] = body.name;
+        }
+      }
+      subsystem_names_plugin_ = plugin;
+    }
+    return subsystem_names_.TryGetValue(subsystem, out string name)
+        ? name
+        : "unknown";
   }
 
   private void RenderKSPFeatures() {
@@ -621,6 +711,13 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
 
   private bool show_ksp_features_ = false;
   private bool show_logging_settings_ = false;
+  private bool show_coordinate_origin_ = false;
+
+  private string last_placement_state_ = null;
+  private readonly List<string> placement_events_ = new List<string>();
+  private readonly Dictionary<int, string> subsystem_names_ =
+      new Dictionary<int, string>();
+  private IntPtr subsystem_names_plugin_ = IntPtr.Zero;
 
   private bool show_selection_ui_ = false;
 

@@ -293,7 +293,7 @@ message OrbitAnalysis {
 }
 
 message Method {
-  extensions 5000 to 5999;  // Last used: 5218.
+  extensions 5000 to 5999;  // Last used: 5223.
 }
 
 message ActivatePlayer {
@@ -383,6 +383,22 @@ message CelestialFromParent {
   }
   message Return {
     required QP result = 1;
+  }
+  optional In in = 1;
+  optional Return return = 3;
+}
+
+message CelestialGetSubsystem {
+  extend Method {
+    optional CelestialGetSubsystem extension = 5223;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin const",
+                                 (is_subject) = true];
+    required int32 celestial_index = 2;
+  }
+  message Return {
+    required int32 result = 1;
   }
   optional In in = 1;
   optional Return return = 3;
@@ -2837,6 +2853,25 @@ message VesselGetAnalysis {
   }
   optional In in = 1;
   optional Return return = 3;
+}
+
+message VesselGetPlacement {
+  extend Method {
+    optional VesselGetPlacement extension = 5222;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin const",
+                                 (is_subject) = true];
+    required string vessel_guid = 2;
+  }
+  message Out {
+    required int32 subsystem = 1;
+    required bool has_anchor = 2;
+    required XYZ anchor_cell = 3;
+    required XYZ anchor_local = 4;
+  }
+  optional In in = 1;
+  optional Out out = 2;
 }
 
 message VesselGetPredictionAdaptiveStepParameters {
