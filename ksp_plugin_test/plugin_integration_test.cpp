@@ -2253,6 +2253,198 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
               Lt(1e-3 * Metre / Second));
 }
 
+// A staging separation in the deep void: the new vessel receiving the
+// separated parts inherits the anchor, and the collision-merged pile-up
+// re-expresses under one shared anchor instead of dropping to absolutes.
+// Without either, the separating pieces round through a ~2×10¹⁶ m absolute
+// whose ~4 m ULP scatters them into each other — the in-game fling.
+TEST_F(PluginIntegrationTestWithoutPlugin, VoidStagingKeepsAnchors) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  // An anchored two-part vessel deep in the void, cruising at 3 km/s.
+  bool inserted;
+  GUID const guid = "stack";
+  plugin->InsertOrKeepVessel(guid, "stack", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      500, "stack scaffold", guid,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const stack = plugin->GetVessel(guid);
+  ASSERT_TRUE(stack->anchor().has_value());
+  plugin->AdvanceTime(plugin->CurrentTime() + 60 * Second, 1 * Radian);
+
+  // The vessel loads with two parts 2 m apart.
+  plugin->InsertOrKeepVessel(guid, "stack", star_a, /*loaded=*/true, inserted);
+  Mass const mass = 1000 * Kilogram;
+  DegreesOfFreedom<World> const main_body_degrees_of_freedom =
+      plugin->CelestialWorldDegreesOfFreedom(
+          star_a, 500,
+          plugin->BarycentricToWorld(/*reference_part_is_unmoving=*/true, 500,
+                                     /*main_body_centre=*/std::nullopt),
+          plugin->CurrentTime());
+  Displacement<World> const stage_offset({2 * Metre, 0 * Metre, 0 * Metre});
+  auto const part_motion = [](Position<World> const& position) {
+    return RigidMotion<EccentricPart, World>(
+        RigidTransformation<EccentricPart, World>(
+            EccentricPart::origin,
+            position,
+            OrthogonalMap<EccentricPart, World>::Identity()),
+        World::nonrotating,
+        World::unmoving);
+  };
+  plugin->InsertOrKeepLoadedPart(
+      501, "upper stage", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin), 20 * Milli(Second));
+  plugin->InsertOrKeepLoadedPart(
+      502, "booster", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin + stage_offset), 20 * Milli(Second));
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(501, 502);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  ASSERT_TRUE(stack->anchor().has_value());
+  auto const stack_anchor = *stack->anchor();
+  // Captured for the bit-identity assertion at the end: the fix keeps the
+  // anchor VERBATIM through the whole staging choreography, whereas a
+  // drop/re-adopt cycle would mint a new anchor with a new epoch.
+  auto const original_anchor = stack_anchor;
+  auto const part_q = [](not_null<Vessel*> const vessel, PartId const id) {
+    return vessel->part(id)->rigid_motion()(
+        {RigidPart::origin, RigidPart::unmoving}).position();
+  };
+  // Diagnostic bisection point (a): the loaded stack's parts are 2 m apart in
+  // the anchored representation.
+  EXPECT_THAT(((part_q(stack, 502) - part_q(stack, 501)).Norm()),
+              AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
+      << "(a) after load-phase catch-up";
+
+  // Staging happens on the next frame — the game advances the clock before
+  // reporting the scene, and the loaded bookkeeping stamps part states one
+  // tick in the past.  The booster becomes a fresh loaded vessel, still
+  // touching the stack (the separation contact is reported as a collision,
+  // merging the pile-ups for this tick).
+  plugin->AdvanceTime(plugin->CurrentTime() + 20 * Milli(Second), 1 * Radian);
+  GUID const booster_guid = "booster";
+  plugin->InsertOrKeepVessel(guid, "stack", star_a, /*loaded=*/true, inserted);
+  plugin->InsertOrKeepVessel(booster_guid, "booster", star_a,
+                             /*loaded=*/true, inserted);
+  plugin->InsertOrKeepLoadedPart(
+      501, "upper stage", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin), 20 * Milli(Second));
+  plugin->InsertOrKeepLoadedPart(
+      502, "booster", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      booster_guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin + stage_offset), 20 * Milli(Second));
+  not_null<Vessel*> const booster = plugin->GetVessel(booster_guid);
+  // The fresh vessel inherited the anchor at the part transfer.
+  ASSERT_TRUE(booster->anchor().has_value());
+  EXPECT_EQ(stack_anchor, *booster->anchor());
+  // Diagnostic bisection point (b): the transfer preserved the geometry.
+  EXPECT_THAT(((part_q(booster, 502) - part_q(stack, 501)).Norm()),
+              AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
+      << "(b) after the transfer, before the merge";
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(501, 502);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  // Diagnostic bisection point (c): the merge preserved the geometry.
+  EXPECT_THAT(((part_q(booster, 502) - part_q(stack, 501)).Norm()),
+              AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
+      << "(c) after the merge, before catch-up";
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  // Diagnostic bisection point (d): catch-up preserved the geometry.
+  EXPECT_THAT(((part_q(booster, 502) - part_q(stack, 501)).Norm()),
+              AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
+      << "(d) after catch-up";
+
+  // The in-game fling was a drop/adopt cycle over SEVERAL frames of
+  // persistent separation contact; play three more such frames.
+  for (int frame = 0; frame < 3; ++frame) {
+    plugin->AdvanceTime(plugin->CurrentTime() + 20 * Milli(Second),
+                        1 * Radian);
+    plugin->InsertOrKeepVessel(guid, "stack", star_a,
+                               /*loaded=*/true, inserted);
+    plugin->InsertOrKeepVessel(booster_guid, "booster", star_a,
+                               /*loaded=*/true, inserted);
+    plugin->InsertOrKeepLoadedPart(
+        501, "upper stage", mass, EccentricPart::origin,
+        MakeWaterSphereInertiaTensor(mass),
+        /*is_solid_rocket_motor=*/false,
+        guid, star_a, main_body_degrees_of_freedom,
+        part_motion(World::origin), 20 * Milli(Second));
+    plugin->InsertOrKeepLoadedPart(
+        502, "booster", mass, EccentricPart::origin,
+        MakeWaterSphereInertiaTensor(mass),
+        /*is_solid_rocket_motor=*/false,
+        booster_guid, star_a, main_body_degrees_of_freedom,
+        part_motion(World::origin + stage_offset), 20 * Milli(Second));
+    plugin->PrepareToReportCollisions();
+    plugin->ReportPartCollision(501, 502);
+    plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+    ASSERT_TRUE(stack->anchor().has_value()) << "frame " << frame;
+    ASSERT_TRUE(booster->anchor().has_value()) << "frame " << frame;
+    EXPECT_EQ(*stack->anchor(), *booster->anchor()) << "frame " << frame;
+  }
+
+  // The collision-merged subset kept a single shared anchor rather than
+  // dropping to absolutes — indeed the anchor is BIT-IDENTICAL to the one
+  // adopted before staging: no drop/re-adopt cycle happened at all.
+  ASSERT_TRUE(stack->anchor().has_value());
+  ASSERT_TRUE(booster->anchor().has_value());
+  EXPECT_EQ(*stack->anchor(), *booster->anchor());
+  EXPECT_EQ(original_anchor, *stack->anchor());
+  EXPECT_EQ(original_anchor, *booster->anchor());
+
+  // The separation geometry survives to sub-mm: the pieces are 2 m apart,
+  // not scattered by the ~4 m ULP of the void absolute.
+  auto const barycentric_to_world = plugin->BarycentricToWorld(
+      /*reference_part_is_unmoving=*/true, 501, /*main_body_centre=*/
+      std::nullopt);
+  DegreesOfFreedom<World> const upper_degrees_of_freedom =
+      plugin->GetPartActualMotion(501, 501, barycentric_to_world)(
+          {EccentricPart::origin, EccentricPart::unmoving});
+  DegreesOfFreedom<World> const booster_degrees_of_freedom =
+      plugin->GetPartActualMotion(502, 501, barycentric_to_world)(
+          {EccentricPart::origin, EccentricPart::unmoving});
+  EXPECT_THAT(((booster_degrees_of_freedom.position() -
+                upper_degrees_of_freedom.position()) -
+               stage_offset).Norm(),
+              Lt(1 * Milli(Metre)));
+  EXPECT_THAT((booster_degrees_of_freedom.velocity() -
+               upper_degrees_of_freedom.velocity()).Norm(),
+              Lt(1e-3 * Metre / Second));
+}
+
 // WS6-4: an anchored vessel's prediction must be a force-free coast, not a
 // plunge.  The prognostication is seeded from the near-origin anchored
 // coordinates; without the anchor the integrator reads them as

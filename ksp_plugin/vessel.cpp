@@ -407,6 +407,33 @@ void Vessel::AdoptAnchor() {
   TranslateParts(translation, -velocity_offset, t);
 }
 
+void Vessel::ReanchorTo(
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
+  if (anchor_ == anchor || trajectory_.empty()) {
+    return;
+  }
+  // Value copies: the translations rebuild the timeline.
+  Instant const t = trajectory_.back().time;
+  auto const [displacement, velocity_offset] =
+      Ephemeris<Barycentric>::Anchor::Conversion(anchor_, anchor, t);
+  LOG(INFO) << "Vessel " << ShortDebugString() << " re-anchors";
+  {
+    absl::MutexLock l(&lock_);
+    trajectory_.Translate(displacement, velocity_offset, t);
+    anchor_ = anchor;
+  }
+  TranslateParts(displacement, velocity_offset, t);
+}
+
+bool Vessel::TryInheritAnchor(
+    Ephemeris<Barycentric>::Anchor const& anchor) {
+  if (!trajectory_.empty() || !parts_.empty() || anchor_.has_value()) {
+    return false;
+  }
+  anchor_ = anchor;
+  return true;
+}
+
 void Vessel::TranslateParts(Displacement<Barycentric> const& displacement,
                             Velocity<Barycentric> const& velocity_offset,
                             Instant const& t) {
