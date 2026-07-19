@@ -446,6 +446,7 @@ QP __cdecl principia__CelestialWorldDegreesOfFreedom(Plugin const* const plugin,
   return m.Return(ToQP(
       plugin->CelestialWorldDegreesOfFreedom(
           index,
+          origin.reference_part_id,
           plugin->BarycentricToWorld(
               origin.reference_part_is_unmoving,
               origin.reference_part_id,

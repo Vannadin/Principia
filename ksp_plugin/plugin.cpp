@@ -455,9 +455,9 @@ void Plugin::InsertOrKeepVessel(GUID const& vessel_guid,
   }
   if (loaded) {
     loaded_vessels_.insert(vessel);
-    // The loaded physics paths represent everything relative to the subsystem
-    // origin: a loaded vessel never carries an anchor.
-    vessel->DropAnchor();
+    // The loaded physics paths are placement-aware — `BarycentricToWorld` and
+    // its consumers convert between placements — so a vessel keeps its void
+    // anchor across the load transition and its loaded state stays small.
   }
   LOG_IF(INFO, inserted) << "Inserted " << (loaded ? "loaded" : "unloaded")
                          << " vessel " << vessel->ShortDebugString();
@@ -514,13 +514,23 @@ void Plugin::InsertOrKeepLoadedPart(
   BodyCentredNonRotatingReferenceFrame<Barycentric, MainBodyCentred> const
       main_body_frame{ephemeris_.get(),
                       FindOrDie(celestials_, main_body_index)->body()};
+  OrthogonalMap<World, MainBodyCentred> const world_to_main_body_centred_map =
+      main_body_frame.ToThisFrameAtTime(previous_time).orthogonal_map() *
+      Δplanetarium_rotation.Inverse() *
+      renderer_->WorldToBarycentric(PlanetariumRotation());
+  // The transformation is anchored numerically on the World origin, near
+  // which the loaded parts live: anchoring it on the main body would
+  // difference each part against the main-body position, quantizing the scene
+  // layout at the ULP of the main-body distance — void-scale for a loaded
+  // vessel in the deep void.  This way the main-body distance is rounded
+  // once, common to every part of the scene.
   RigidMotion<World, MainBodyCentred> const world_to_main_body_centred{
       RigidTransformation<World, MainBodyCentred>{
-          main_body_degrees_of_freedom.position(),
-          MainBodyCentred::origin,
-          main_body_frame.ToThisFrameAtTime(previous_time).orthogonal_map() *
-              Δplanetarium_rotation.Inverse() *
-              renderer_->WorldToBarycentric(PlanetariumRotation())},
+          World::origin,
+          MainBodyCentred::origin +
+              world_to_main_body_centred_map(
+                  World::origin - main_body_degrees_of_freedom.position()),
+          world_to_main_body_centred_map},
       (renderer_->BarycentricToWorld(PlanetariumRotation()) *
           Δplanetarium_rotation)(-angular_velocity_of_world_),
       main_body_degrees_of_freedom.velocity()};
@@ -528,10 +538,11 @@ void Plugin::InsertOrKeepLoadedPart(
       main_body_frame.FromThisFrameAtTime(previous_time) *
       world_to_main_body_centred;
   if (int const main_body_subsystem = main_body_frame.subsystem();
-      main_body_subsystem != vessel->subsystem()) {
+      main_body_subsystem != vessel->subsystem() ||
+      vessel->anchor().has_value()) {
     world_to_barycentric_motion =
-        SubsystemConversionMotion(main_body_subsystem,
-                                  vessel->subsystem(),
+        PlacementConversionMotion({main_body_subsystem, std::nullopt},
+                                  {vessel->subsystem(), vessel->anchor()},
                                   previous_time) *
         world_to_barycentric_motion;
   }
@@ -543,16 +554,19 @@ void Plugin::InsertOrKeepLoadedPart(
     if (vessel == current_vessel) {
     } else {
       int const previous_subsystem = current_vessel->subsystem();
+      std::optional<Ephemeris<Barycentric>::Anchor> const previous_anchor =
+          current_vessel->anchor();
       associated_vessel = vessel;
       vessel->AddPart(current_vessel->ExtractPart(part_id));
-      if (previous_subsystem != vessel->subsystem()) {
-        // The part's rigid motion is expressed relative to the origin of its
-        // previous vessel's subsystem; `AddPart` retagged the part, so keep
-        // the representation consistent with the tag.
+      if (previous_subsystem != vessel->subsystem() ||
+          previous_anchor != vessel->anchor()) {
+        // The part's rigid motion is expressed in its previous vessel's
+        // placement; `AddPart` retagged the part, so keep the representation
+        // consistent with the tag.
         not_null<Part*> const transferred_part = vessel->part(part_id);
         transferred_part->set_rigid_motion(
-            SubsystemConversionMotion(previous_subsystem,
-                                      vessel->subsystem(),
+            PlacementConversionMotion({previous_subsystem, previous_anchor},
+                                      {vessel->subsystem(), vessel->anchor()},
                                       previous_time) *
             transferred_part->rigid_motion());
       }
@@ -825,16 +839,23 @@ void Plugin::SetPartApparentRigidMotion(
 
 RigidMotion<EccentricPart, World> Plugin::GetPartActualMotion(
     PartId const part_id,
+    PartId const reference_part_id,
     RigidMotion<Barycentric, World> const& barycentric_to_world) const {
   not_null<Vessel*> const vessel = FindOrDie(part_id_to_vessel_, part_id);
+  not_null<Vessel*> const reference_vessel =
+      FindOrDie(part_id_to_vessel_, reference_part_id);
   Part const& part = *vessel->part(part_id);
   RigidMotion<RigidPart, Barycentric> part_rigid_motion = part.rigid_motion();
-  if (int const vessel_subsystem = vessel->subsystem(),
-          main_body_subsystem = ephemeris_->subsystem_of_body(main_body_);
-      vessel_subsystem != main_body_subsystem) {
+  if (vessel->subsystem() != reference_vessel->subsystem() ||
+      vessel->anchor() != reference_vessel->anchor()) {
+    // Convert into the placement of the reference vessel — the `Barycentric`
+    // side of `barycentric_to_world`.  Between two anchored vessels the
+    // anchors difference exactly on the sector lattice, so the conversion is
+    // small and precise no matter how deep in the void they are.
     part_rigid_motion =
-        SubsystemConversionMotion(vessel_subsystem,
-                                  main_body_subsystem,
+        PlacementConversionMotion({vessel->subsystem(), vessel->anchor()},
+                                  {reference_vessel->subsystem(),
+                                   reference_vessel->anchor()},
                                   current_time_) *
         part_rigid_motion;
   }
@@ -844,22 +865,33 @@ RigidMotion<EccentricPart, World> Plugin::GetPartActualMotion(
 
 DegreesOfFreedom<World> Plugin::CelestialWorldDegreesOfFreedom(
     Index const index,
+    PartId const reference_part_id,
     RigidMotion<Barycentric, World> const& barycentric_to_world,
     Instant const& time) const {
   auto const& celestial = *FindOrDie(celestials_, index);
+  not_null<Vessel*> const reference_vessel =
+      FindOrDie(part_id_to_vessel_, reference_part_id);
+  // `barycentric_to_world` was built at `current_time_`; with an anchored
+  // reference a skewed `time` would inject the anchor velocity times the skew
+  // into the result — the vessel's full cruise speed in the void.
+  CHECK_EQ(time, current_time_);
   DegreesOfFreedom<Barycentric> degrees_of_freedom =
       celestial.current_degrees_of_freedom(time);
-  if (int const celestial_subsystem = celestial.subsystem(),
-          main_body_subsystem = ephemeris_->subsystem_of_body(main_body_);
-      celestial_subsystem != main_body_subsystem) {
+  if (int const celestial_subsystem = celestial.subsystem();
+      celestial_subsystem != reference_vessel->subsystem() ||
+      reference_vessel->anchor().has_value()) {
+    // Into the placement of the reference vessel — the `Barycentric` side of
+    // `barycentric_to_world`.  For an anchored reference this materializes the
+    // void-scale offset once, on the celestial: at that distance the rounding
+    // is invisible.
+    auto const [conversion_displacement, conversion_velocity] =
+        ephemeris_->placement_conversion(
+            {celestial_subsystem, std::nullopt},
+            {reference_vessel->subsystem(), reference_vessel->anchor()},
+            time);
     degrees_of_freedom = {
-        degrees_of_freedom.position() +
-            ephemeris_->subsystem_conversion(celestial_subsystem,
-                                             main_body_subsystem,
-                                             time),
-        degrees_of_freedom.velocity() +
-            ephemeris_->subsystem_velocity_conversion(celestial_subsystem,
-                                                      main_body_subsystem)};
+        degrees_of_freedom.position() + conversion_displacement,
+        degrees_of_freedom.velocity() + conversion_velocity};
   }
   return barycentric_to_world(degrees_of_freedom);
 }
@@ -878,21 +910,27 @@ RigidMotion<Barycentric, World> Plugin::BarycentricToWorld(
   not_null<Vessel*> const reference_vessel =
       FindOrDie(part_id_to_vessel_, reference_part_id);
   Part const& reference_part = *reference_vessel->part(reference_part_id);
+  DegreesOfFreedom<Barycentric> const
+      reference_part_placement_degrees_of_freedom =
+          reference_part.rigid_motion()(
+              reference_part.MakeRigidToEccentricMotion().Inverse()(
+                  {EccentricPart::origin, EccentricPart::unmoving}));
   DegreesOfFreedom<Barycentric> reference_part_barycentric_degrees_of_freedom =
-      reference_part.rigid_motion()(
-          reference_part.MakeRigidToEccentricMotion().Inverse()(
-              {EccentricPart::origin, EccentricPart::unmoving}));
+      reference_part_placement_degrees_of_freedom;
   if (int const vessel_subsystem = reference_vessel->subsystem(),
           main_body_subsystem = main_body_frame.subsystem();
-      vessel_subsystem != main_body_subsystem) {
+      vessel_subsystem != main_body_subsystem ||
+      reference_vessel->anchor().has_value()) {
+    auto const [conversion_displacement, conversion_velocity] =
+        ephemeris_->placement_conversion(
+            {vessel_subsystem, reference_vessel->anchor()},
+            {main_body_subsystem, std::nullopt},
+            current_time_);
     reference_part_barycentric_degrees_of_freedom = {
         reference_part_barycentric_degrees_of_freedom.position() +
-            ephemeris_->subsystem_conversion(vessel_subsystem,
-                                             main_body_subsystem,
-                                             current_time_),
+            conversion_displacement,
         reference_part_barycentric_degrees_of_freedom.velocity() +
-            ephemeris_->subsystem_velocity_conversion(vessel_subsystem,
-                                                      main_body_subsystem)};
+            conversion_velocity};
   }
   auto const reference_part_degrees_of_freedom =
       barycentric_to_main_body_motion(
@@ -929,7 +967,27 @@ RigidMotion<Barycentric, World> Plugin::BarycentricToWorld(
           /*velocity_of_to_frame_origin=*/World::unmoving}.Inverse();
     }
   }();
-  return main_body_to_world * barycentric_to_main_body_motion;
+  // The placement lift, anchored numerically on the reference part: its
+  // `from_origin` is the part's (small) placement coordinates and its
+  // `to_origin` is the very value fed to `barycentric_to_main_body_motion`
+  // above, so composing cancels the void-scale intermediates bit for bit —
+  // the composed map takes small placement inputs straight to `World` without
+  // materializing another void-scale absolute per part.
+  RigidMotion<Barycentric, Barycentric> const placement_lift{
+      RigidTransformation<Barycentric, Barycentric>(
+          reference_part_placement_degrees_of_freedom.position(),
+          reference_part_barycentric_degrees_of_freedom.position(),
+          OrthogonalMap<Barycentric, Barycentric>::Identity()),
+      Barycentric::nonrotating,
+      reference_part_placement_degrees_of_freedom.velocity() -
+          reference_part_barycentric_degrees_of_freedom.velocity()};
+  // Composed right-to-left: `barycentric_to_main_body_motion * placement_lift`
+  // reproduces `reference_part_degrees_of_freedom` bit for bit as its
+  // `to_origin`, which then cancels `main_body_to_world`'s `from_origin`
+  // exactly.  The left association would difference two independently rounded
+  // void-scale intermediates and leave a ULP-of-the-void residual.
+  return main_body_to_world *
+         (barycentric_to_main_body_motion * placement_lift);
 }
 
 void Plugin::AdvanceTime(Instant const& t, Angle const& planetarium_rotation) {
@@ -950,12 +1008,11 @@ void Plugin::AdvanceTime(Instant const& t, Angle const& planetarium_rotation) {
 void Plugin::CatchUpLaggingVessels(VesselSet& collided_vessels) {
   CHECK(!initializing_);
 
-  // Rebase the vessels that have crossed into another subsystem.  This must
-  // happen while no pile-up is being advanced.
+  // Rebase the vessels that have crossed into another subsystem, and adopt,
+  // renew or drop void anchors — for loaded vessels too, whose paths are
+  // placement-aware.  This must happen while no pile-up is being advanced.
   for (auto const& [_, vessel] : vessels_) {
-    if (!is_loaded(vessel.get())) {
-      vessel->RebaseIfNeeded();
-    }
+    vessel->RebaseIfNeeded();
   }
 
   // Start all the integrations in parallel.
@@ -993,9 +1050,7 @@ not_null<std::unique_ptr<PileUpFuture>> Plugin::CatchUpVessel(
 
   // Find the vessel and the pile-up that contains it.
   Vessel& vessel = *FindOrDie(vessels_, vessel_guid);
-  if (!is_loaded(&vessel)) {
-    vessel.RebaseIfNeeded();
-  }
+  vessel.RebaseIfNeeded();
   PileUp* pile_up = nullptr;
   vessel.ForSomePart([&pile_up](Part& part) {
     pile_up = part.containing_pile_up();
@@ -2067,6 +2122,21 @@ RigidMotion<Barycentric, Barycentric> Plugin::SubsystemConversionMotion(
           OrthogonalMap<Barycentric, Barycentric>::Identity()),
       Barycentric::nonrotating,
       -ephemeris_->subsystem_velocity_conversion(s1, s2));
+}
+
+RigidMotion<Barycentric, Barycentric> Plugin::PlacementConversionMotion(
+    Ephemeris<Barycentric>::SubsystemPlacement const& from,
+    Ephemeris<Barycentric>::SubsystemPlacement const& to,
+    Instant const& t) const {
+  auto const [conversion_displacement, conversion_velocity] =
+      ephemeris_->placement_conversion(from, to, t);
+  return RigidMotion<Barycentric, Barycentric>(
+      RigidTransformation<Barycentric, Barycentric>(
+          Barycentric::origin,
+          Barycentric::origin + conversion_displacement,
+          OrthogonalMap<Barycentric, Barycentric>::Identity()),
+      Barycentric::nonrotating,
+      -conversion_velocity);
 }
 
 Velocity<World> Plugin::VesselVelocity(

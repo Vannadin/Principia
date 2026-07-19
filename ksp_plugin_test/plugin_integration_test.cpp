@@ -35,11 +35,13 @@
 #include "integrators/methods.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/identification.hpp"
+#include "ksp_plugin/part.hpp"
 #include "ksp_plugin/planetarium.hpp"
 #include "numerics/elementary_functions.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/ephemeris.hpp"
 #include "physics/massive_body.hpp"
+#include "physics/rigid_motion.hpp"
 #include "physics/solar_system.hpp"
 #include "quantities/astronomy.hpp"
 #include "quantities/named_quantities.hpp"
@@ -81,6 +83,7 @@ using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_
 using namespace principia::integrators::_methods;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
+using namespace principia::ksp_plugin::_part;
 using namespace principia::ksp_plugin::_planetarium;
 using namespace principia::ksp_plugin::_plugin;
 using namespace principia::ksp_plugin::_vessel;
@@ -88,6 +91,7 @@ using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
+using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_named_quantities;
@@ -1895,8 +1899,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, ThousandLightYearScale) {
 // An unloaded vessel coasting where the damped far field is exactly zero
 // adopts an anchor — a private origin moving with it — so that its stored
 // coordinates stay near zero instead of growing to ~10¹⁶ m.  The anchor
-// survives a save, and loading the vessel drops it without moving the vessel
-// physically.
+// survives a save, and loading the vessel keeps it — the loaded paths are
+// placement-aware — without moving the vessel physically.
 TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
   Index const star_a = 0;
   Index const star_b = 1;
@@ -2011,16 +2015,15 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
   ASSERT_TRUE(drifter2->anchor().has_value());
   EXPECT_EQ(saved_anchor, *drifter2->anchor());
 
-  // Loading the vessel drops the anchor and restores subsystem-relative
-  // coordinates without moving the vessel physically.
-  auto const& [t_head, anchored_degrees_of_freedom] =
-      drifter2->trajectory().back();
+  // Loading the vessel keeps the anchor and the small anchored coordinates:
+  // the loaded paths convert between placements instead of demanding the
+  // subsystem-relative absolute.
   Position<Barycentric> const expected_position =
-      anchored_degrees_of_freedom.position() +
-      drifter2->anchor()->OffsetAt(t_head);
+      drifter2->trajectory().back().degrees_of_freedom.position();
   plugin2->InsertOrKeepVessel(guid_void, "drifter", star_a,
                               /*loaded=*/true, inserted);
-  EXPECT_FALSE(drifter2->anchor().has_value());
+  ASSERT_TRUE(drifter2->anchor().has_value());
+  EXPECT_EQ(saved_anchor, *drifter2->anchor());
   EXPECT_EQ(expected_position,
             drifter2->trajectory().back().degrees_of_freedom.position());
 }
@@ -2086,6 +2089,168 @@ void InsertTwoStarVoid(Plugin& plugin) {
                                             initial_state);
   }
   plugin.EndInitialization();
+}
+
+// The loaded path in the deep void: a loaded vessel keeps its anchor, the
+// inbound and outbound World conversions are placement-aware, and the
+// World-side layout survives at void scale — within a vessel, across a part
+// transfer between two anchored vessels, and between the two vessels.  A
+// vessel spawning loaded in the void adopts an anchor at catch-up.  Without
+// the placement-aware conversions the layout quantizes at the ~4 m ULP of the
+// ~2×10¹⁶ m subsystem-relative absolute, and a velocity sign error would show
+// up as twice the 3 km/s cruise, so the bounds below have teeth.
+TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  // An unloaded drifter deep in the void adopts an anchor, and so does a
+  // tender a kilometre away.  The 3 km/s cruise velocity ends up in the
+  // anchors, giving the velocity terms of the placement conversions teeth.
+  bool inserted;
+  GUID const guid = "drifter";
+  GUID const tender_guid = "tender";
+  Velocity<AliceSun> const cruise_velocity(
+      {0 * Metre / Second,
+       3 * Kilo(Metre) / Second,
+       0 * Metre / Second});
+  plugin->InsertOrKeepVessel(guid, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      401, "scaffold", guid,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       cruise_velocity});
+  plugin->InsertOrKeepVessel(tender_guid, "tender", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      404, "tender scaffold", tender_guid,
+      {Displacement<AliceSun>({2e16 * Metre, 1 * Kilo(Metre), 0 * Metre}),
+       cruise_velocity});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid);
+  not_null<Vessel*> const tender = plugin->GetVessel(tender_guid);
+  ASSERT_TRUE(drifter->anchor().has_value());
+  ASSERT_TRUE(tender->anchor().has_value());
+
+  // A tick goes by (the loaded insertion evaluates the main-body frame just
+  // before the current time, which must not precede the ephemeris).
+  plugin->AdvanceTime(plugin->CurrentTime() + 60 * Second, 1 * Radian);
+
+  // The vessel loads with two fresh parts half a metre apart, replacing the
+  // scaffold, the way a scene reconstruction would.  The World-side inputs
+  // put the vessel near the World origin and the main body a void away.
+  plugin->InsertOrKeepVessel(guid, "drifter", star_a,
+                             /*loaded=*/true, inserted);
+  plugin->InsertOrKeepVessel(tender_guid, "tender", star_a,
+                             /*loaded=*/true, inserted);
+  ASSERT_TRUE(drifter->anchor().has_value());
+  ASSERT_TRUE(tender->anchor().has_value());
+  Mass const mass = 1000 * Kilogram;
+  // The main body's World coordinates must be consistent with the scene in
+  // which the scaffold sits at the World origin — the way the game hands them
+  // to the plugin — else the inserted parts would map a long way from the
+  // vessel's true position.
+  DegreesOfFreedom<World> const main_body_degrees_of_freedom =
+      plugin->CelestialWorldDegreesOfFreedom(
+          star_a, 401,
+          plugin->BarycentricToWorld(/*reference_part_is_unmoving=*/true, 401,
+                                     /*main_body_centre=*/std::nullopt),
+          plugin->CurrentTime());
+  // Independent teeth for the celestial path and for the velocity terms: in
+  // the scene where the drifter is unmoving, the main body sits a void away
+  // and recedes at the cruise speed.
+  EXPECT_THAT((main_body_degrees_of_freedom.position() - World::origin).Norm(),
+              AbsoluteErrorFrom(2e16 * Metre, Lt(1e12 * Metre)));
+  EXPECT_THAT(main_body_degrees_of_freedom.velocity().Norm(),
+              AbsoluteErrorFrom(3 * Kilo(Metre) / Second,
+                                Lt(1 * Metre / Second)));
+  Displacement<World> const layout_offset(
+      {0.5 * Metre, 0.25 * Metre, 0 * Metre});
+  auto const part_motion = [](Position<World> const& position) {
+    return RigidMotion<EccentricPart, World>(
+        RigidTransformation<EccentricPart, World>(
+            EccentricPart::origin,
+            position,
+            OrthogonalMap<EccentricPart, World>::Identity()),
+        World::nonrotating,
+        World::unmoving);
+  };
+  plugin->InsertOrKeepLoadedPart(
+      402, "pod", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin), 20 * Milli(Second));
+  plugin->InsertOrKeepLoadedPart(
+      403, "outrigger", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin + layout_offset), 20 * Milli(Second));
+  // The outrigger is then transferred to the tender — a part moving between
+  // two anchored loaded vessels, exercising the placement conversion at the
+  // transfer site.  The transfer changes the representation, not the physics.
+  plugin->InsertOrKeepLoadedPart(
+      403, "outrigger", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      tender_guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin + layout_offset), 20 * Milli(Second));
+  // A stray vessel spawns loaded, anchorless, in the void: the catch-up must
+  // adopt an anchor for it even though it is loaded.
+  GUID const stray_guid = "stray";
+  plugin->InsertOrKeepVessel(stray_guid, "stray", star_a,
+                             /*loaded=*/true, inserted);
+  EXPECT_FALSE(plugin->GetVessel(stray_guid)->anchor().has_value());
+  plugin->InsertOrKeepLoadedPart(
+      405, "stray pod", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      stray_guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin +
+                  Displacement<World>({200 * Metre, 0 * Metre, 0 * Metre})),
+      20 * Milli(Second));
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  ASSERT_TRUE(drifter->anchor().has_value());
+  ASSERT_TRUE(tender->anchor().has_value());
+  EXPECT_TRUE(plugin->GetVessel(stray_guid)->anchor().has_value());
+
+  // The round trip back to `World`: the reference part sits at the World
+  // origin, unmoving despite the 3 km/s anchored cruise, and the half-metre
+  // geometry survives to sub-mm, void scale notwithstanding — including for
+  // the outrigger, which is now another anchored vessel's part and goes
+  // through the anchor-to-anchor placement conversion.
+  auto const barycentric_to_world = plugin->BarycentricToWorld(
+      /*reference_part_is_unmoving=*/true, 402, /*main_body_centre=*/
+      std::nullopt);
+  DegreesOfFreedom<World> const pod_degrees_of_freedom =
+      plugin->GetPartActualMotion(402, 402, barycentric_to_world)(
+          {EccentricPart::origin, EccentricPart::unmoving});
+  DegreesOfFreedom<World> const outrigger_degrees_of_freedom =
+      plugin->GetPartActualMotion(403, 402, barycentric_to_world)(
+          {EccentricPart::origin, EccentricPart::unmoving});
+  EXPECT_THAT((pod_degrees_of_freedom.position() - World::origin).Norm(),
+              Lt(1 * Milli(Metre)));
+  EXPECT_THAT(pod_degrees_of_freedom.velocity().Norm(),
+              Lt(1e-3 * Metre / Second));
+  EXPECT_THAT(((outrigger_degrees_of_freedom.position() -
+                pod_degrees_of_freedom.position()) -
+               layout_offset).Norm(),
+              Lt(1 * Milli(Metre)));
+  EXPECT_THAT((outrigger_degrees_of_freedom.velocity() -
+               pod_degrees_of_freedom.velocity()).Norm(),
+              Lt(1e-3 * Metre / Second));
 }
 
 // WS6-4: an anchored vessel's prediction must be a force-free coast, not a

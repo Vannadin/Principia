@@ -131,7 +131,8 @@ class Vessel {
 
   // The anchor further displacing the representation of this vessel while it
   // coasts in the force-free inter-subsystem void, if any.  A loaded vessel
-  // is never anchored.
+  // may be anchored: the loaded paths are placement-aware and convert at the
+  // World boundary.
   virtual std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
 
   // Re-expresses this vessel relative to its subsystem's origin, dropping the

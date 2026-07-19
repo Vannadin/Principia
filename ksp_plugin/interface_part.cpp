@@ -137,6 +137,7 @@ QPRW __cdecl principia__PartGetActualRigidMotion(
   RigidMotion<EccentricPart, World> const part_motion =
       plugin->GetPartActualMotion(
           part_id,
+          origin.reference_part_id,
           plugin->BarycentricToWorld(
               origin.reference_part_is_unmoving,
               origin.reference_part_id,

@@ -277,22 +277,32 @@ class Plugin {
 
   // Returns the motion of the given part in `World`, assuming that
   // the origin of `World` is fixed at the centre of mass of the
-  // `part_at_origin`.
+  // `part_at_origin`.  `reference_part_id` must be the part from which
+  // `barycentric_to_world` was built; a part is converted into the placement
+  // of the reference part's vessel, so between two anchored vessels the
+  // anchors difference exactly on the sector lattice.
   virtual RigidMotion<EccentricPart, World> GetPartActualMotion(
       PartId part_id,
+      PartId reference_part_id,
       RigidMotion<Barycentric, World> const& barycentric_to_world) const;
 
   // Returns the `World` degrees of freedom of the `Celestial` with the given
   // `Index`, identifying the origin of `World` with the centre of mass of the
-  // `Part` with the given `PartId`.
+  // `Part` with the given `PartId`.  `reference_part_id` must be the part from
+  // which `barycentric_to_world` was built.
   virtual DegreesOfFreedom<World> CelestialWorldDegreesOfFreedom(
       Index index,
+      PartId reference_part_id,
       RigidMotion<Barycentric, World> const& barycentric_to_world,
       Instant const& time) const;
 
-  // The `Barycentric` side of the returned motion is represented relative to
-  // the local origin of the subsystem of the main body; `GetPartActualMotion`
-  // and `CelestialWorldDegreesOfFreedom` convert their inputs accordingly.
+  // The `Barycentric` side of the returned motion is represented in the
+  // placement of the reference part's vessel — its subsystem AND its anchor,
+  // if any; `GetPartActualMotion` and `CelestialWorldDegreesOfFreedom` convert
+  // their inputs accordingly.  Keeping the anchored representation on the
+  // `Barycentric` side is what preserves the World-side layout of a loaded
+  // vessel in the deep void: the per-part inputs stay small, and the one
+  // void-scale displacement is materialized once, into the map itself.
   virtual RigidMotion<Barycentric, World> BarycentricToWorld(
       bool reference_part_is_unmoving,
       PartId reference_part_id,
@@ -564,6 +574,14 @@ class Plugin {
   RigidMotion<Barycentric, Barycentric> SubsystemConversionMotion(
       int s1,
       int s2,
+      Instant const& t) const;
+
+  // The rigid motion that re-expresses a motion represented in placement
+  // `from` into placement `to`, converting subsystem and anchor together (a
+  // single collapse, on the sector lattice).
+  RigidMotion<Barycentric, Barycentric> PlacementConversionMotion(
+      Ephemeris<Barycentric>::SubsystemPlacement const& from,
+      Ephemeris<Barycentric>::SubsystemPlacement const& to,
       Instant const& t) const;
 
   // Fill `celestials` using the `index` and `parent_index` fields found in
