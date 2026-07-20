@@ -198,32 +198,14 @@ bool Vessel::RebaseIfNeeded() {
   // Copies, not references: the translations below rebuild the timeline that
   // `back()` points into.
   Instant const t = PresentState(trajectory_, psychohistory_).time;
-  Position<Barycentric> q =
+  Position<Barycentric> const q =
       PresentState(trajectory_, psychohistory_).degrees_of_freedom.position();
-  if (anchor_.has_value()) {
-    // The dominance geometry below assumes subsystem-relative coordinates:
-    // while anchored we only watch for the void exit and for coordinate
-    // growth (a burn can carry the vessel away from its anchor).
-    if (ephemeris_->FarFieldIsZero(q + anchor_->OffsetAt(t), subsystem_, t)) {
-      // Re-anchor when the anchored coordinates grow (a burn carries the
-      // vessel away from its anchor) and also when the affine term grows (a
-      // long coast): keeping both small keeps anchor *differences* — the
-      // relative geometry of two anchored vessels — at the ULP of the local
-      // parts, sub-mm.
-      if ((q - Barycentric::origin).Norm²() >
-              re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_ ||
-          (anchor_->velocity * (t - anchor_->epoch)).Norm²() >
-              re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_) {
-        AdoptAnchor();
-      }
-      return false;
-    }
-    DropAnchor();
-    q = PresentState(trajectory_, psychohistory_).degrees_of_freedom.position();
-  } else if (ephemeris_->FarFieldIsZero(q, subsystem_, t)) {
-    AdoptAnchor();
-    return true;
-  }
+  // The true position, independent of the representation: the dominance
+  // geometry below must not depend on whether the vessel is anchored.  The
+  // collapse rounds at the ULP of the void distance, which is harmless in a
+  // μ/d² comparison.
+  Position<Barycentric> const true_q =
+      anchor_.has_value() ? q + anchor_->OffsetAt(t) : q;
   // The dominance μ/d² is computed from the subsystem masses and (linearly
   // extrapolated) barycentres, not from the acceleration field: far-field
   // damping zeroes the field precisely in the region where the boundary lies.
@@ -231,7 +213,7 @@ bool Vessel::RebaseIfNeeded() {
   // special-casing.
   auto const squared_distance_to_barycentre = [&](int const s) {
     Position<Barycentric> const q_in_s =
-        q + ephemeris_->subsystem_conversion(subsystem_, s, t);
+        true_q + ephemeris_->subsystem_conversion(subsystem_, s, t);
     return (q_in_s - ephemeris_->subsystem_barycentre(s, t)).Norm²();
   };
   Square<Length> const current_distance² =
@@ -254,37 +236,130 @@ bool Vessel::RebaseIfNeeded() {
       dominant_distance² = distance²;
     }
   }
-  if (dominant_subsystem == subsystem_ ||
-      dominant_μ * current_distance² <=
+  bool changed = false;
+  if (dominant_subsystem != subsystem_ &&
+      dominant_μ * current_distance² >
           rebase_dominance_margin * current_μ * dominant_distance²) {
-    return false;
+    // A pure gravity-grouping retag: with an anchor the subsystem conversion
+    // is folded into the anchor exactly (`RebaseTo`), so the representation —
+    // and with it the mm-scale geometry of the parts — survives the retag
+    // bit for bit.
+    RebaseTo(dominant_subsystem);
+    changed = true;
   }
 
-  RebaseTo(dominant_subsystem);
-  return true;
+  // The representation invariant, void and star domain alike: the
+  // represented coordinates and the anchor's affine term stay within the
+  // re-anchor bound, so their ULP — and with it the World mapping of the
+  // parts — stays sub-millimetre everywhere.  Dominance plays no part here:
+  // in particular, entering a star's field KEEPS the anchor (unanchored
+  // subsystem coordinates of ~1e15 m in a star's domain quantize the parts
+  // at 0.125 m, which is owner-visible part-gap misalignment).  Re-anchoring
+  // also bounds the affine term (a long coast) and the coordinates (a burn
+  // carries the vessel away from its anchor), keeping anchor *differences* —
+  // the relative geometry of two anchored vessels — at the ULP of the local
+  // parts, sub-mm.
+  Position<Barycentric> const q_now =
+      PresentState(trajectory_, psychohistory_).degrees_of_freedom.position();
+  bool const coordinates_exceed_bound =
+      (q_now - Barycentric::origin).Norm²() >
+      re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_;
+  if (anchor_.has_value()) {
+    if (coordinates_exceed_bound ||
+        (anchor_->velocity * (t - anchor_->epoch)).Norm²() >
+            re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_) {
+      AdoptAnchor();
+      changed = true;
+    }
+  } else if (coordinates_exceed_bound) {
+    AdoptAnchor();
+    changed = true;
+  }
+  return changed;
 }
 
 void Vessel::RebaseTo(int const subsystem) {
-  if (trajectory_.empty()) {
-    return;
-  }
-  if (anchor_.has_value()) {
-    DropAnchor();
-  }
-  if (subsystem == subsystem_) {
+  if (trajectory_.empty() || subsystem == subsystem_) {
     return;
   }
   // A copy, not a reference: the translation below rebuilds the timeline that
   // `back()` points into.
   Instant const t = trajectory_.back().time;
-  // The origins move relative to each other, so the translation is affine in
-  // time: each point of each trajectory is translated at its own time.
+  // The origins move relative to each other, so the re-expression is affine
+  // in time: each point of each trajectory is translated at its own time.
   Displacement<Barycentric> const displacement =
       ephemeris_->subsystem_conversion(subsystem_, subsystem, t);
   Velocity<Barycentric> const velocity_offset =
       ephemeris_->subsystem_velocity_conversion(subsystem_, subsystem);
   LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
             << subsystem_ << " to subsystem " << subsystem;
+  if (anchor_.has_value()) {
+    // Fold the subsystem conversion into the anchor instead of translating
+    // the timeline: the conversion is affine in time and so is the anchor,
+    // so re-expressing the anchor at its own epoch is exact algebra —
+    // new.OffsetAt(τ) = old.OffsetAt(τ) + conversion(τ) for all τ — and the
+    // anchored coordinates (the trajectory, the parts, the pile-up) stay
+    // bit-for-bit untouched.  Translating the points instead would round
+    // every one of them at the ULP of the inter-subsystem distance (tens of
+    // metres in the void — the staging-fling class of damage).  The
+    // conversion itself is rounded at that ULP, which shifts the *absolute*
+    // placement once, as a common mode across the whole representation; the
+    // relative geometry is what the anchor machinery protects.
+    Displacement<Barycentric> const conversion_at_epoch =
+        displacement - velocity_offset * (t - anchor_->epoch);
+    SectorDisplacement<Barycentric> const split =
+        SectorDisplacement<Barycentric>::Split(conversion_at_epoch);
+    // The cells add exactly; the local parts accumulate through `TwoSum` and
+    // the residual is folded back after the (exact) re-centring, mirroring
+    // the re-anchor path of `AdoptAnchor` so that the two ways of moving an
+    // anchor round identically.
+    DoublePrecision<Displacement<Barycentric>> const local =
+        TwoSum(anchor_->offset.local, split.local);
+    Ephemeris<Barycentric>::Anchor new_anchor{
+        .offset = {.cell = anchor_->offset.cell + split.cell,
+                   .local = local.value},
+        .velocity = anchor_->velocity + velocity_offset,
+        .epoch = anchor_->epoch};
+    new_anchor.offset.Recenter();
+    new_anchor.offset += local.error;
+    {
+      absl::MutexLock l(&lock_);
+      subsystem_ = subsystem;
+      anchor_ = new_anchor;
+    }
+    // The parts' rigid motions are valid numbers in the preserved
+    // representation; only their tags change.
+    ForAllParts([this](Part& part) {
+      part.set_subsystem(subsystem_);
+      part.set_anchor(anchor_);
+    });
+    PileUp* pile_up = nullptr;
+    ForSomePart([&pile_up](Part& part) {
+      pile_up = part.containing_pile_up();
+    });
+    if (pile_up != nullptr && pile_up->subsystem() != subsystem_) {
+      pile_up->Rebase(Displacement<Barycentric>{},
+                      Velocity<Barycentric>{},
+                      t,
+                      subsystem_,
+                      anchor_);
+    }
+    for (auto& flight_plan : flight_plans_) {
+      if (auto* const optimizable_flight_plan =
+              std::get_if<OptimizableFlightPlan>(&flight_plan)) {
+        if (optimizable_flight_plan->optimization_driver != nullptr) {
+          optimizable_flight_plan->optimization_driver->Interrupt();
+        }
+        // The flight plan folds the delta between its old anchor and the
+        // composed anchor into the translation itself, which cancels the
+        // subsystem conversion to the composition rounding.
+        optimizable_flight_plan->flight_plan
+            ->Rebase(displacement, velocity_offset, t, subsystem_, anchor_)
+            .IgnoreError();
+      }
+    }
+    return;
+  }
   {
     // `AwaitReanimation` merges into `trajectory_` under `lock_`, and the
     // translation rewrites all of its points.
@@ -439,6 +514,15 @@ void Vessel::TranslateParts(Displacement<Barycentric> const& displacement,
                             Instant const& t) {
   // Flight plans and predictions are represented relative to the subsystem
   // origin, not to the anchor, so they are unaffected here.
+  //
+  // The shared pile-up below is translated at most once per tick even though
+  // every member vessel routes its re-anchors through here: a multi-vessel
+  // pile-up only exists across the docking/staging transient, the merge
+  // unifies its members onto one live anchor every tick, and the members are
+  // physically adjacent, so under the unified anchor their coordinates and
+  // affine terms sit far below the re-anchor bound — no second member can
+  // re-anchor in the same tick (red-team s28; if this invariant is ever
+  // broken, the double translation would fling the pile-up by ~the bound).
   RigidMotion<Barycentric, Barycentric> const conversion_motion(
       RigidTransformation<Barycentric, Barycentric>(
           Barycentric::origin,

@@ -761,34 +761,10 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
       });
     }
     for (auto const& [_, subset_vessels] : vessels_by_subset) {
-      if (subset_vessels.size() > 1) {
-        // The pile-up constructed below requires a single representation:
-        // re-express every vessel of the subset under one anchor — the
-        // offsets difference exactly on the sector lattice — rather than
-        // dropping the anchors, whose rounding at the void distance would
-        // scatter the relative geometry of the subset (a staging separation
-        // in the deep void used to fling the pieces apart).  In a subset
-        // spanning subsystems the `RebaseTo` below drops the anchors anyway.
-        // Load-bearing invariants: the trajectories are nonempty (the
-        // `CreateTrajectoryIfNeeded` loop above ran, so `ReanchorTo` never
-        // declines to unify), and vessels still sharing last tick's pile-up
-        // hold equal anchors (a fresh split inherits; so the `ReanchorTo`s
-        // below no-op on it rather than rebasing it once per vessel).
-        std::optional<Ephemeris<Barycentric>::Anchor> target_anchor;
-        int target_anchor_subsystem = 0;
-        for (not_null<Vessel*> const vessel : subset_vessels) {
-          if (vessel->anchor().has_value()) {
-            target_anchor = vessel->anchor();
-            target_anchor_subsystem = vessel->subsystem();
-            break;
-          }
-        }
-        for (not_null<Vessel*> const vessel : subset_vessels) {
-          if (vessel->subsystem() == target_anchor_subsystem) {
-            vessel->ReanchorTo(target_anchor);
-          }
-        }
-      }
+      // Unify the subsystem first (mass vote): `RebaseTo` folds the
+      // conversion into each vessel's anchor, so a cross-subsystem docking
+      // keeps every vessel's representation — and the mm-scale geometry of
+      // its parts — bit-for-bit intact.
       std::map<int, Mass> mass_by_subsystem;
       for (not_null<Vessel*> const vessel : subset_vessels) {
         Mass& subsystem_mass = mass_by_subsystem[vessel->subsystem()];
@@ -796,19 +772,42 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
           subsystem_mass += part.mass();
         });
       }
-      if (mass_by_subsystem.size() < 2) {
-        continue;
-      }
-      int target_subsystem = mass_by_subsystem.begin()->first;
-      Mass target_mass = mass_by_subsystem.begin()->second;
-      for (auto const& [subsystem, mass] : mass_by_subsystem) {
-        if (mass > target_mass) {
-          target_subsystem = subsystem;
-          target_mass = mass;
+      if (mass_by_subsystem.size() > 1) {
+        int target_subsystem = mass_by_subsystem.begin()->first;
+        Mass target_mass = mass_by_subsystem.begin()->second;
+        for (auto const& [subsystem, mass] : mass_by_subsystem) {
+          if (mass > target_mass) {
+            target_subsystem = subsystem;
+            target_mass = mass;
+          }
+        }
+        for (not_null<Vessel*> const vessel : subset_vessels) {
+          vessel->RebaseTo(target_subsystem);
         }
       }
-      for (not_null<Vessel*> const vessel : subset_vessels) {
-        vessel->RebaseTo(target_subsystem);
+      if (subset_vessels.size() > 1) {
+        // The pile-up constructed below requires a single representation:
+        // re-express every vessel of the subset — now all in one subsystem —
+        // under one anchor.  The offsets difference exactly on the sector
+        // lattice, whereas dropping the anchors would round each vessel at
+        // the ULP of the void distance and scatter the relative geometry of
+        // the subset (a staging separation in the deep void used to fling
+        // the pieces apart).  Load-bearing invariants: the trajectories are
+        // nonempty (the `CreateTrajectoryIfNeeded` loop above ran, so
+        // `ReanchorTo` never declines to unify), and vessels still sharing
+        // last tick's pile-up hold equal anchors (a fresh split inherits; so
+        // the `ReanchorTo`s below no-op on it rather than rebasing it once
+        // per vessel).
+        std::optional<Ephemeris<Barycentric>::Anchor> target_anchor;
+        for (not_null<Vessel*> const vessel : subset_vessels) {
+          if (vessel->anchor().has_value()) {
+            target_anchor = vessel->anchor();
+            break;
+          }
+        }
+        for (not_null<Vessel*> const vessel : subset_vessels) {
+          vessel->ReanchorTo(target_anchor);
+        }
       }
     }
   }

@@ -113,20 +113,25 @@ class Vessel {
   // positions of the trajectories of this vessel are represented.
   virtual int subsystem() const;
 
-  // If another subsystem gravitationally dominates the vessel — its μ/d²
-  // exceeds that of the current subsystem by a hysteresis margin —
-  // re-expresses all the trajectories of this vessel (and those of its
-  // pile-up and flight plans) relative to the local origin of the dominant
-  // subsystem.  Returns true if a rebase happened.  Must not be called while
-  // the pile-ups are being advanced.
+  // Maintains the two representation invariants of an interstellar system.
+  // Dominance: if another subsystem gravitationally dominates the vessel —
+  // its μ/d² exceeds that of the current subsystem by a hysteresis margin —
+  // retags the vessel (and its pile-up and flight plans) to the dominant
+  // subsystem via `RebaseTo`.  Uniform representation: adopts or renews an
+  // anchor whenever the represented coordinates or the anchor's affine term
+  // exceed the re-anchor bound, in the void and in a star's domain alike, so
+  // that the ULP of the representation stays sub-millimetre everywhere.
+  // Returns true if either changed.  Must not be called while the pile-ups
+  // are being advanced.
   virtual bool RebaseIfNeeded();
 
   // Re-expresses all the trajectories of this vessel (and those of its parts,
   // pile-up and flight plans) relative to the local origin of the given
-  // subsystem, translating each point at its own time.  Drops any anchor
-  // first.  Does nothing if the vessel is already represented in that
-  // subsystem and unanchored.  Must not be called while the pile-ups are
-  // being advanced.
+  // subsystem.  On an anchored vessel the subsystem conversion is folded
+  // into the anchor, leaving the represented coordinates bit-for-bit
+  // untouched; on an unanchored vessel each point is translated at its own
+  // time.  Does nothing if the vessel is already represented in that
+  // subsystem.  Must not be called while the pile-ups are being advanced.
   virtual void RebaseTo(int subsystem);
 
   // The anchor further displacing the representation of this vessel while it

@@ -3679,17 +3679,19 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   EXPECT_THAT((reloaded_sample.velocity() - actual_sample.velocity()).Norm(),
               Lt(0.1 * Metre / Second));
 
-  // ——— Stage 6: void exit — the anchor is dropped and the vessel rebases
-  // into star B's subsystem, exactly once, in the same step ———
+  // ——— Stage 6: void exit — the vessel rebases into star B's subsystem,
+  // exactly once; the anchor survives the retag (the conversion is folded
+  // into it), keeping the representation uniform across the boundary ———
   for (int step = 0; step < 15 && vessel2.subsystem() != subsystem_b; ++step) {
     coast_frame(*plugin2);
     step_checks(*plugin2, vessel2);
   }
   ASSERT_EQ(subsystem_b, vessel2.subsystem());
   EXPECT_EQ(1, rebases);
-  // The anchor went with the void: inside star B's far field the vessel is
-  // unanchored.
-  EXPECT_FALSE(vessel2.anchor().has_value());
+  // Uniform representation: entering star B's field KEEPS the anchor — an
+  // unanchored representation at these subsystem distances would quantize
+  // the parts at the domain ULP (the owner-visible part gaps at TRAPPIST-1).
+  EXPECT_TRUE(vessel2.anchor().has_value());
 
   // ——— Stage 5 (checks): the flight plan survived the reload AND the rebase,
   // still coasts, and renders consistently ———
@@ -3879,8 +3881,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   }
   not_null<Vessel*> const station = plugin2->GetVessel(station_guid);
   EXPECT_EQ(subsystem_b, station->subsystem());
-  // Inside star B's far field: no anchors here.
-  EXPECT_FALSE(station->anchor().has_value());
+  // Uniform representation: the station's coordinates in star B's subsystem
+  // exceed the re-anchor bound, so it anchors inside the star's field too.
+  EXPECT_TRUE(station->anchor().has_value());
   Displacement<AliceSun> const separation_before_docking =
       plugin2->VesselFromParent(star_b, station_guid).displacement() -
       plugin2->VesselFromParent(star_b, vessel_guid).displacement();
