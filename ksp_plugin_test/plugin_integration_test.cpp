@@ -2242,6 +2242,39 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
       part_motion(World::origin +
                   Displacement<World>({200 * Metre, 0 * Metre, 0 * Metre})),
       20 * Milli(Second));
+  // A vessel born of the drifter — an EVA kerbal — inherits the drifter's
+  // placement BEFORE its part is inserted: the insertion then converts
+  // through the anchored (small) coordinates and the spawn is exact, where
+  // the anchorless stray above representably rounds through the 2e16 m
+  // absolute (measured ~0.4 m).
+  GUID const newborn_guid = "newborn";
+  plugin->InsertOrKeepVessel(newborn_guid, "newborn", star_a,
+                             /*loaded=*/true, inserted);
+  plugin->InheritVesselPlacement(newborn_guid, guid);
+  plugin->InsertOrKeepLoadedPart(
+      406, "newborn pod", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      newborn_guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin +
+                  Displacement<World>({300 * Metre, 0 * Metre, 0 * Metre})),
+      20 * Milli(Second));
+  // A packed newborn — the unloaded split path — inherits too, and
+  // `InsertUnloadedPart` must then express the celestial-relative state in
+  // the vessel's anchored placement; without that conversion the part would
+  // land a whole anchor offset (~2e16 m) away.
+  RelativeDegreesOfFreedom<AliceSun> const drifter_from_star =
+      plugin->VesselFromParent(star_a, guid);
+  RelativeDegreesOfFreedom<AliceSun> const packed_newborn_from_star(
+      drifter_from_star.displacement() +
+          Displacement<AliceSun>({500 * Metre, 0 * Metre, 0 * Metre}),
+      drifter_from_star.velocity());
+  GUID const packed_newborn_guid = "packedborn";
+  plugin->InsertOrKeepVessel(packed_newborn_guid, "packedborn", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InheritVesselPlacement(packed_newborn_guid, guid);
+  plugin->InsertUnloadedPart(407, "packed pod", packed_newborn_guid,
+                             packed_newborn_from_star);
   plugin->PrepareToReportCollisions();
   plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
   {
@@ -2296,6 +2329,44 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
   EXPECT_THAT((stray_degrees_of_freedom.velocity() -
                stray_part_degrees_of_freedom.velocity()).Norm(),
               Lt(1e-2 * Metre / Second));
+
+  // The inherited newborn carries the drifter's anchor bit for bit, and its
+  // spawn is exact where the anchorless stray rounds through the void
+  // absolute (the fail-first for this bound was measured empirically: the
+  // stray misses an intended-position assertion at this tolerance by
+  // ~0.4 m).
+  not_null<Vessel*> const newborn = plugin->GetVessel(newborn_guid);
+  ASSERT_TRUE(newborn->anchor().has_value());
+  EXPECT_EQ(*drifter->anchor(), *newborn->anchor());
+  DegreesOfFreedom<World> const newborn_degrees_of_freedom =
+      plugin->GetPartActualMotion(406, 402, barycentric_to_world)(
+          {EccentricPart::origin, EccentricPart::unmoving});
+  EXPECT_THAT(((newborn_degrees_of_freedom.position() -
+                pod_degrees_of_freedom.position()) -
+               Displacement<World>({300 * Metre, 0 * Metre, 0 * Metre}))
+                  .Norm(),
+              Lt(1 * Milli(Metre)));
+  EXPECT_THAT((newborn_degrees_of_freedom.velocity() -
+               pod_degrees_of_freedom.velocity()).Norm(),
+              Lt(1e-3 * Metre / Second));
+
+  // The packed newborn inherited the anchor too — without this tooth an
+  // inheritance that silently failed would still pass the position bound
+  // below (unanchored, same subsystem: the old path also lands nearby).
+  not_null<Vessel*> const packed_newborn =
+      plugin->GetVessel(packed_newborn_guid);
+  ASSERT_TRUE(packed_newborn->anchor().has_value());
+  EXPECT_EQ(*drifter->anchor(), *packed_newborn->anchor());
+  // Its unloaded insertion survived the anchored placement: it sits ~500 m
+  // from the drifter, not an anchor offset away.  The tolerance absorbs the
+  // celestial-relative round trip, which collapses the 2e16 m absolute into
+  // doubles on both legs.
+  EXPECT_THAT((plugin->VesselFromParent(star_a, packed_newborn_guid)
+                   .displacement() -
+               drifter_from_star.displacement() -
+               Displacement<AliceSun>({500 * Metre, 0 * Metre, 0 * Metre}))
+                  .Norm(),
+              Lt(100 * Metre));
 }
 
 // A staging separation in the deep void: the new vessel receiving the

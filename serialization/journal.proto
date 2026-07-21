@@ -2874,6 +2874,19 @@ message VesselGetPlacement {
   optional Out out = 2;
 }
 
+message VesselInheritPlacement {
+  extend Method {
+    optional VesselInheritPlacement extension = 5225;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin const",
+                                 (is_subject) = true];
+    required string vessel_guid = 2;
+    required string parent_vessel_guid = 3;
+  }
+  optional In in = 1;
+}
+
 message VesselGetWorldDegreesOfFreedom {
   extend Method {
     optional VesselGetWorldDegreesOfFreedom extension = 5224;

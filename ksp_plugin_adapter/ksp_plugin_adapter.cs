@@ -1478,6 +1478,24 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                                    main_body_index,
                                    !vessel.packed,
                                    out bool inserted);
+        if (inserted &&
+            coherent_creations_.TryGetValue(vessel.id,
+                                            out CoherentCreation lineage) &&
+            plugin_.HasVessel(lineage.parent_id.ToString())) {
+          // A vessel born of a split or an EVA inherits its parent vessel's
+          // placement — subsystem and anchor — BEFORE any of its parts are
+          // inserted, so that the insertions convert through the anchored
+          // (small) coordinates: an unanchored birth rounds the spawn at the
+          // ULP of the star distance — tens of metres of offset 40 ly out.
+          // The record outlives the adoption (see `PruneCoherentCreations`),
+          // so every unready-Kerbal reinsertion inherits too.  In a chain
+          // split (A→B→C in one frame) C may enumerate before its parent B
+          // is in the plugin; the guard above then skips the inheritance and
+          // C degrades to the pre-inheritance behaviour until it anchors on
+          // its own.
+          plugin_.VesselInheritPlacement(vessel_guid,
+                                         lineage.parent_id.ToString());
+        }
         if (!vessel.packed) {
           Profiler.BeginSample("InsertOrKeepLoadedPart");
           foreach (Part part in vessel.parts.Where(PartIsFaithful)) {

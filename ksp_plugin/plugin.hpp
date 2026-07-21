@@ -296,6 +296,16 @@ class Plugin {
       RigidMotion<Barycentric, World> const& barycentric_to_world,
       Instant const& time) const;
 
+  // Makes the vessel with the given GUID inherit the placement — subsystem
+  // and anchor — of its parent vessel, if it is fresh (no trajectory, parts,
+  // or anchor of its own); a no-op otherwise.  Called by the adapter for a
+  // vessel born of a split or an EVA, BEFORE its parts are inserted, so that
+  // the insertions convert through the anchored (small) coordinates instead
+  // of rounding through the void-scale absolute — the unanchored birth
+  // quantizes the spawn at the ULP of the star distance, tens of metres.
+  virtual void InheritVesselPlacement(GUID const& vessel_guid,
+                                      GUID const& parent_vessel_guid) const;
+
   // Returns the `World` degrees of freedom of the vessel with the given GUID
   // (its present state, never a prediction endpoint), identifying the origin
   // of `World` as `barycentric_to_world` does.  `reference_part_id` must be

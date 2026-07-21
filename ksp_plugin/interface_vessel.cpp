@@ -104,6 +104,19 @@ void __cdecl principia__VesselGetPlacement(Plugin const* const plugin,
   return m.Return();
 }
 
+// Makes the vessel inherit its parent vessel's placement if it is fresh;
+// a no-op otherwise.  Must be called before the vessel's parts are inserted.
+void __cdecl principia__VesselInheritPlacement(
+    Plugin const* const plugin,
+    char const* const vessel_guid,
+    char const* const parent_vessel_guid) {
+  journal::Method<journal::VesselInheritPlacement> m(
+      {plugin, vessel_guid, parent_vessel_guid});
+  CHECK(plugin != nullptr);
+  plugin->InheritVesselPlacement(vessel_guid, parent_vessel_guid);
+  return m.Return();
+}
+
 // Returns the vessel's present `World` degrees of freedom through the
 // placement conversions, so that the caller can place an on-rails vessel in
 // the scene without routing through the void-scale absolutes that quantize

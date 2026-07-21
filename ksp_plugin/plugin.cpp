@@ -476,15 +476,19 @@ void Plugin::InsertUnloadedPart(
   DegreesOfFreedom<Barycentric> degrees_of_freedom =
       vessel->parent()->current_degrees_of_freedom(current_time_) + relative;
   if (int const parent_subsystem = vessel->parent()->subsystem();
-      parent_subsystem != vessel->subsystem()) {
+      parent_subsystem != vessel->subsystem() ||
+      vessel->anchor().has_value()) {
+    // Into the vessel's placement — subsystem AND anchor: a vessel born of a
+    // split or an EVA inherits its parent vessel's placement before its
+    // parts are inserted, so the anchored case is reachable here.
+    auto const [conversion_displacement, conversion_velocity] =
+        ephemeris_->placement_conversion(
+            {parent_subsystem, std::nullopt},
+            {vessel->subsystem(), vessel->anchor()},
+            current_time_);
     degrees_of_freedom = {
-        degrees_of_freedom.position() +
-            ephemeris_->subsystem_conversion(parent_subsystem,
-                                             vessel->subsystem(),
-                                             current_time_),
-        degrees_of_freedom.velocity() +
-            ephemeris_->subsystem_velocity_conversion(parent_subsystem,
-                                                      vessel->subsystem())};
+        degrees_of_freedom.position() + conversion_displacement,
+        degrees_of_freedom.velocity() + conversion_velocity};
   }
 
   AddPart(vessel, part_id, name, degrees_of_freedom);
@@ -923,6 +927,14 @@ DegreesOfFreedom<World> Plugin::CelestialWorldDegreesOfFreedom(
         degrees_of_freedom.velocity() + conversion_velocity};
   }
   return barycentric_to_world(degrees_of_freedom);
+}
+
+void Plugin::InheritVesselPlacement(GUID const& vessel_guid,
+                                    GUID const& parent_vessel_guid) const {
+  not_null<Vessel*> const vessel = FindOrDie(vessels_, vessel_guid).get();
+  not_null<Vessel*> const parent =
+      FindOrDie(vessels_, parent_vessel_guid).get();
+  vessel->TryInheritPlacement(parent->subsystem(), parent->anchor());
 }
 
 DegreesOfFreedom<World> Plugin::VesselWorldDegreesOfFreedom(
