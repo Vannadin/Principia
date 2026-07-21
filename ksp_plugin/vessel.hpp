@@ -159,13 +159,17 @@ class Vessel {
   virtual void ReanchorTo(
       std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
-  // Adopts the given anchor on a vessel that has no trajectory, parts, or
-  // anchor yet — a vessel freshly created to receive the parts of a split —
-  // so that the transferred parts keep their anchored representation instead
-  // of being rounded through a void-scale absolute.  Returns false (and does
-  // nothing) if this vessel already has state of its own.
-  virtual bool TryInheritAnchor(
-      Ephemeris<Barycentric>::Anchor const& anchor);
+  // Adopts the given placement — subsystem and anchor — on a vessel that has
+  // no trajectory, parts, or anchor yet — a vessel freshly created to receive
+  // the parts of a split — so that the transferred parts keep their
+  // representation instead of being rounded through a void-scale absolute.
+  // The fresh vessel's own subsystem comes from its stock parent celestial,
+  // which in the dominance-hysteresis band disagrees with the splitting
+  // vessel's, so the subsystem is inherited along with the anchor.  Returns
+  // false (and does nothing) if this vessel already has state of its own.
+  virtual bool TryInheritPlacement(
+      int subsystem,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
   // Adds the given part to this vessel.  Note that this does not add the part
   // to the set of kept parts, and that unless `KeepPart` is called, the part

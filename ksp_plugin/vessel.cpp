@@ -542,11 +542,13 @@ void Vessel::ReanchorTo(
   TranslateParts(displacement, velocity_offset, t, old_anchor);
 }
 
-bool Vessel::TryInheritAnchor(
-    Ephemeris<Barycentric>::Anchor const& anchor) {
+bool Vessel::TryInheritPlacement(
+    int const subsystem,
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
   if (!trajectory_.empty() || !parts_.empty() || anchor_.has_value()) {
     return false;
   }
+  subsystem_ = subsystem;
   anchor_ = anchor;
   return true;
 }

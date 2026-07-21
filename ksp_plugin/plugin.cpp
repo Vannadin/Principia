@@ -557,14 +557,15 @@ void Plugin::InsertOrKeepLoadedPart(
       std::optional<Ephemeris<Barycentric>::Anchor> const previous_anchor =
           current_vessel->anchor();
       associated_vessel = vessel;
-      if (previous_anchor.has_value() &&
-          previous_subsystem == vessel->subsystem()) {
-        // A vessel freshly created to receive the parts of a split inherits
-        // the anchor of the vessel they come from, so that the transfer below
-        // is the identity: rounding the parts through a void-scale absolute
-        // would scatter the separating vessels.
-        vessel->TryInheritAnchor(*previous_anchor);
-      }
+      // A vessel freshly created to receive the parts of a split inherits
+      // the placement — subsystem and anchor — of the vessel they come from,
+      // so that the transfer below is the identity: rounding the parts
+      // through a void-scale absolute would scatter the separating vessels.
+      // The fresh vessel's own subsystem comes from its stock parent
+      // celestial, which in the dominance-hysteresis band disagrees with the
+      // splitting vessel's — requiring them to match would (and did) defeat
+      // the inheritance exactly where it protects.
+      vessel->TryInheritPlacement(previous_subsystem, previous_anchor);
       vessel->AddPart(current_vessel->ExtractPart(part_id));
       if (previous_subsystem != vessel->subsystem() ||
           previous_anchor != vessel->anchor()) {

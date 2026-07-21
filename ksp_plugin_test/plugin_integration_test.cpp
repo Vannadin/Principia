@@ -2471,6 +2471,140 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidStagingKeepsAnchors) {
               Lt(1e-3 * Metre / Second));
 }
 
+// A staging separation after the parent vessel dominance-rebased away from
+// its stock parent celestial's subsystem — the in-game norm for a vessel deep
+// in the void, whose stock parent stays the departure star while dominance
+// hands it to the destination.  The fresh vessel created to receive the
+// separated part is born with the STOCK parent's subsystem, so inheritance
+// must carry the splitting vessel's whole placement — subsystem and anchor —
+// or the transfer rounds the part through a ~3×10¹⁶ m absolute (~4 m ULP)
+// and the pieces scatter — the observed in-game staging failure.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       VoidStagingInheritsPlacementAcrossRebase) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  // An unloaded vessel 4/5 of the way to star B: star B dominates the
+  // equal-mass pair 16:1, far beyond the hysteresis margin, so the first
+  // catch-up rebases the vessel to star B's subsystem and adopts an anchor —
+  // while its stock parent celestial remains star A.
+  bool inserted;
+  GUID const guid = "deepstack";
+  plugin->InsertOrKeepVessel(guid, "deepstack", star_a,
+                             /*loaded=*/false, inserted);
+  Displacement<AliceSun> const b_from_a =
+      plugin->CelestialFromParent(star_b).displacement();
+  plugin->InsertUnloadedPart(
+      600, "deep scaffold", guid,
+      {0.8 * b_from_a,
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const stack = plugin->GetVessel(guid);
+  ASSERT_TRUE(stack->anchor().has_value());
+  ASSERT_EQ(plugin->GetCelestial(star_b).subsystem(), stack->subsystem());
+  ASSERT_NE(plugin->GetCelestial(star_a).subsystem(), stack->subsystem());
+  plugin->AdvanceTime(plugin->CurrentTime() + 60 * Second, 1 * Radian);
+
+  // The vessel loads with two parts 2 m apart; the stock main body handed to
+  // the loaded path is still star A.
+  plugin->InsertOrKeepVessel(guid, "deepstack", star_a,
+                             /*loaded=*/true, inserted);
+  Mass const mass = 1000 * Kilogram;
+  DegreesOfFreedom<World> const main_body_degrees_of_freedom =
+      plugin->CelestialWorldDegreesOfFreedom(
+          star_a, 600,
+          plugin->BarycentricToWorld(/*reference_part_is_unmoving=*/true, 600,
+                                     /*main_body_centre=*/std::nullopt),
+          plugin->CurrentTime());
+  Displacement<World> const stage_offset({2 * Metre, 0 * Metre, 0 * Metre});
+  auto const part_motion = [](Position<World> const& position) {
+    return RigidMotion<EccentricPart, World>(
+        RigidTransformation<EccentricPart, World>(
+            EccentricPart::origin,
+            position,
+            OrthogonalMap<EccentricPart, World>::Identity()),
+        World::nonrotating,
+        World::unmoving);
+  };
+  plugin->InsertOrKeepLoadedPart(
+      601, "deep upper stage", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin), 20 * Milli(Second));
+  plugin->InsertOrKeepLoadedPart(
+      602, "deep booster", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin + stage_offset), 20 * Milli(Second));
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(601, 602);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  ASSERT_TRUE(stack->anchor().has_value());
+  auto const stack_anchor = *stack->anchor();
+  auto const part_q = [](not_null<Vessel*> const vessel, PartId const id) {
+    return vessel->part(id)->rigid_motion()(
+        {RigidPart::origin, RigidPart::unmoving}).position();
+  };
+  EXPECT_THAT(((part_q(stack, 602) - part_q(stack, 601)).Norm()),
+              AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
+      << "(a) after load-phase catch-up";
+
+  // Staging on the next frame: the booster becomes a fresh loaded vessel,
+  // created — as the adapter does — with the STOCK parent celestial, star A.
+  plugin->AdvanceTime(plugin->CurrentTime() + 20 * Milli(Second), 1 * Radian);
+  GUID const booster_guid = "deepbooster";
+  plugin->InsertOrKeepVessel(guid, "deepstack", star_a,
+                             /*loaded=*/true, inserted);
+  plugin->InsertOrKeepVessel(booster_guid, "deepbooster", star_a,
+                             /*loaded=*/true, inserted);
+  plugin->InsertOrKeepLoadedPart(
+      601, "deep upper stage", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin), 20 * Milli(Second));
+  plugin->InsertOrKeepLoadedPart(
+      602, "deep booster", mass, EccentricPart::origin,
+      MakeWaterSphereInertiaTensor(mass),
+      /*is_solid_rocket_motor=*/false,
+      booster_guid, star_a, main_body_degrees_of_freedom,
+      part_motion(World::origin + stage_offset), 20 * Milli(Second));
+  not_null<Vessel*> const booster = plugin->GetVessel(booster_guid);
+  // The whole placement was inherited at the transfer: subsystem AND anchor.
+  EXPECT_EQ(stack->subsystem(), booster->subsystem());
+  ASSERT_TRUE(booster->anchor().has_value());
+  EXPECT_EQ(stack_anchor, *booster->anchor());
+  EXPECT_THAT(((part_q(booster, 602) - part_q(stack, 601)).Norm()),
+              AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
+      << "(b) after the transfer, before the merge";
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(601, 602);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  EXPECT_THAT(((part_q(booster, 602) - part_q(stack, 601)).Norm()),
+              AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
+      << "(c) after the merge and catch-up";
+}
+
 // WS6-4: an anchored vessel's prediction must be a force-free coast, not a
 // plunge.  The prognostication is seeded from the near-origin anchored
 // coordinates; without the anchor the integrator reads them as
