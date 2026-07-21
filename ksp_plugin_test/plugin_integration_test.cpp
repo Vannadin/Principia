@@ -1739,6 +1739,32 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CrossSubsystemDockingReconciles) {
   EXPECT_THAT((plugin->VesselFromParent(star_b, guid_b).displacement() -
                visitor_from_star_b).Norm(),
               Lt(100 * Metre));
+
+  // Both vessels adopted their FIRST anchors in the catch-up above (they
+  // reached the void unanchored), so the shared pile-up was asked to move
+  // twice at the same epoch.  The second move must translate it from the
+  // placement the first one left it in — the vessels' 10 m separation — not
+  // by the second vessel's own ~2e16 m delta: compounded translations would
+  // teleport the docked pair by the void distance at the next advance.  Run
+  // that next advance and require the pair to still be where it was.
+  Instant const t2 = t + 100 * Second;
+  plugin->AdvanceTime(t2, 1 * Radian);
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_b,
+                             /*loaded=*/false, inserted);
+  plugin->GetVessel(guid_a)->KeepPart(101);
+  plugin->GetVessel(guid_b)->KeepPart(102);
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(101, 102);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  EXPECT_THAT((plugin->VesselFromParent(star_b, guid_b).displacement() -
+               visitor_from_star_b).Norm(),
+              Lt(100 * Metre));
 }
 
 // At 1000 light years (9.46e18 m) the per-subsystem representation keeps every

@@ -415,6 +415,7 @@ void Vessel::DropAnchor() {
   }
   // Value copies: the translations rebuild the timeline.
   Instant const t = trajectory_.back().time;
+  std::optional<Ephemeris<Barycentric>::Anchor> const old_anchor = anchor_;
   Displacement<Barycentric> const displacement = anchor_->OffsetAt(t);
   Velocity<Barycentric> const velocity_offset = anchor_->velocity;
   LOG(INFO) << "Vessel " << ShortDebugString() << " drops its anchor";
@@ -423,7 +424,7 @@ void Vessel::DropAnchor() {
     trajectory_.Translate(displacement, velocity_offset, t);
     anchor_.reset();
   }
-  TranslateParts(displacement, velocity_offset, t);
+  TranslateParts(displacement, velocity_offset, t, old_anchor);
 }
 
 void Vessel::AdoptAnchor() {
@@ -435,6 +436,7 @@ void Vessel::AdoptAnchor() {
   // (under a predicted burn) can disagree with the present motion, inflating
   // the anchored coordinates.
   // Value copies: the translations rebuild the timeline.
+  std::optional<Ephemeris<Barycentric>::Anchor> const old_anchor = anchor_;
   Instant const t = PresentState(trajectory_, psychohistory_).time;
   DegreesOfFreedom<Barycentric> const degrees_of_freedom =
       PresentState(trajectory_, psychohistory_).degrees_of_freedom;
@@ -479,7 +481,7 @@ void Vessel::AdoptAnchor() {
     trajectory_.Translate(translation, -velocity_offset, t);
     anchor_ = new_anchor;
   }
-  TranslateParts(translation, -velocity_offset, t);
+  TranslateParts(translation, -velocity_offset, t, old_anchor);
 }
 
 void Vessel::ReanchorTo(
@@ -489,6 +491,7 @@ void Vessel::ReanchorTo(
   }
   // Value copies: the translations rebuild the timeline.
   Instant const t = trajectory_.back().time;
+  std::optional<Ephemeris<Barycentric>::Anchor> const old_anchor = anchor_;
   auto const [displacement, velocity_offset] =
       Ephemeris<Barycentric>::Anchor::Conversion(anchor_, anchor, t);
   LOG(INFO) << "Vessel " << ShortDebugString() << " re-anchors";
@@ -497,7 +500,7 @@ void Vessel::ReanchorTo(
     trajectory_.Translate(displacement, velocity_offset, t);
     anchor_ = anchor;
   }
-  TranslateParts(displacement, velocity_offset, t);
+  TranslateParts(displacement, velocity_offset, t, old_anchor);
 }
 
 bool Vessel::TryInheritAnchor(
@@ -509,20 +512,13 @@ bool Vessel::TryInheritAnchor(
   return true;
 }
 
-void Vessel::TranslateParts(Displacement<Barycentric> const& displacement,
-                            Velocity<Barycentric> const& velocity_offset,
-                            Instant const& t) {
+void Vessel::TranslateParts(
+    Displacement<Barycentric> const& displacement,
+    Velocity<Barycentric> const& velocity_offset,
+    Instant const& t,
+    std::optional<Ephemeris<Barycentric>::Anchor> const& old_anchor) {
   // Flight plans and predictions are represented relative to the subsystem
   // origin, not to the anchor, so they are unaffected here.
-  //
-  // The shared pile-up below is translated at most once per tick even though
-  // every member vessel routes its re-anchors through here: a multi-vessel
-  // pile-up only exists across the docking/staging transient, the merge
-  // unifies its members onto one live anchor every tick, and the members are
-  // physically adjacent, so under the unified anchor their coordinates and
-  // affine terms sit far below the re-anchor bound — no second member can
-  // re-anchor in the same tick (red-team s28; if this invariant is ever
-  // broken, the double translation would fling the pile-up by ~the bound).
   RigidMotion<Barycentric, Barycentric> const conversion_motion(
       RigidTransformation<Barycentric, Barycentric>(
           Barycentric::origin,
@@ -538,8 +534,29 @@ void Vessel::TranslateParts(Displacement<Barycentric> const& displacement,
   ForSomePart([&pile_up](Part& part) {
     pile_up = part.containing_pile_up();
   });
-  if (pile_up != nullptr) {
+  if (pile_up == nullptr) {
+    return;
+  }
+  if (pile_up->subsystem() == subsystem_ && pile_up->anchor() == old_anchor) {
+    // The pile-up is in this vessel's old placement, so this vessel's own
+    // translation moves it, bit for bit the same as the parts.
     pile_up->Rebase(displacement, velocity_offset, t, subsystem_, anchor_);
+  } else {
+    // The shared pile-up is NOT in this vessel's old placement: a co-piled
+    // vessel already moved it this tick (each member vessel routes its
+    // re-anchors through here — e.g. two vessels docking in the void adopt
+    // their first anchors in the same catch-up).  Applying this vessel's
+    // delta on top would compound the two translations and fling the
+    // pile-up by ~the void distance; translate it from ITS placement to the
+    // target instead, which for physically adjacent members is their small
+    // separation.
+    auto const [pile_up_displacement, pile_up_velocity_offset] =
+        ephemeris_->placement_conversion(
+            {pile_up->subsystem(), pile_up->anchor()},
+            {subsystem_, anchor_},
+            t);
+    pile_up->Rebase(
+        pile_up_displacement, pile_up_velocity_offset, t, subsystem_, anchor_);
   }
 }
 
