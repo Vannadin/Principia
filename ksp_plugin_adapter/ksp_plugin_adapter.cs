@@ -983,6 +983,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     GameEvents.onCrewOnEva.Add(OnCrewOnEva);
     GameEvents.onPartDeCoupleNewVesselComplete.Add(OnVesselSplit);
     GameEvents.onVesselsUndocking.Add(OnVesselSplit);
+    GameEvents.onVesselGoOffRails.Add(OnVesselGoOffRails);
 
     // Timing0, -8008 on the script execution order page.
     TimingManager.FixedUpdateAdd(TimingManager.TimingStage.ObscenelyEarly,
@@ -1393,6 +1394,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     GameEvents.onCrewOnEva.Remove(OnCrewOnEva);
     GameEvents.onPartDeCoupleNewVesselComplete.Remove(OnVesselSplit);
     GameEvents.onVesselsUndocking.Remove(OnVesselSplit);
+    GameEvents.onVesselGoOffRails.Remove(OnVesselGoOffRails);
     TimingManager.FixedUpdateRemove(TimingManager.TimingStage.ObscenelyEarly,
                                     ObscenelyEarly);
     TimingManager.FixedUpdateRemove(TimingManager.TimingStage.Precalc, Precalc);
@@ -2178,6 +2180,96 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     // The only timing that satisfies these constraints is BetterLateThanNever
     // in LateUpdate.
     map_node_pool_.Update();
+    // After the stock `OrbitDriver` (rails, UPDATE mode) has positioned the
+    // packed vessels, and before rendering.
+    RepositionOnRailsVesselsInScene();
+  }
+
+  // Stock positions a packed vessel each frame from its orbit through the
+  // main body's sun-centric absolute position, whose double ULP at
+  // interstellar distances — metres to tens of metres — is re-rounded as the
+  // floating origin moves: a packed ship visibly thrashes against the
+  // physics-driven active vessel, and the pre-unpack overlap can detonate a
+  // boarding.  Re-place packed loaded vessels through the plugin, whose
+  // placement conversions cancel the void-scale absolute.  Requires an
+  // unpacked active vessel as the physics reference; under rails warp every
+  // vessel is packed and collisions cannot arise, so the stock placement
+  // stands there.
+  private void RepositionOnRailsVesselsInScene() {
+    if (!PluginRunning() ||
+        !HighLogic.LoadedSceneIsFlight ||
+        !TryGetSceneReferenceOrigin(out Origin origin,
+                                    out Part active_root)) {
+      return;
+    }
+    foreach (Vessel vessel in FlightGlobals.Vessels.Where(
+        v => v.loaded && is_manageable_on_rails(v))) {
+      RepositionVesselInScene(vessel, origin, active_root);
+    }
+  }
+
+  // The physics reference for scene placement: the unpacked active vessel's
+  // root part, which the plugin also knows.
+  private bool TryGetSceneReferenceOrigin(out Origin origin,
+                                          out Part active_root) {
+    origin = default;
+    active_root = null;
+    Vessel active_vessel = FlightGlobals.ActiveVessel;
+    if (active_vessel == null ||
+        active_vessel.packed ||
+        !is_manageable(active_vessel) ||
+        !plugin_.HasVessel(active_vessel.id.ToString())) {
+      return false;
+    }
+    Part root = active_vessel.rootPart;
+    if (root == null || root.rb == null ||
+        !plugin_.PartIsKnown(root.flightID)) {
+      return false;
+    }
+    active_root = root;
+    origin = new Origin{
+        reference_part_is_at_origin = true,
+        reference_part_is_unmoving = true,
+        // Unused: with `reference_part_is_at_origin` the returned degrees of
+        // freedom are relative to the reference part, and the void-scale
+        // main-body absolute cancels instead of being consulted.
+        main_body_centre_in_world = default(XYZ),
+        reference_part_id = root.flightID};
+    return true;
+  }
+
+  private void RepositionVesselInScene(Vessel vessel,
+                                       Origin origin,
+                                       Part active_root) {
+    string vessel_guid = vessel.id.ToString();
+    if (!plugin_.HasVessel(vessel_guid)) {
+      return;
+    }
+    QP dof = plugin_.VesselGetWorldDegreesOfFreedom(vessel_guid, origin);
+    // The plugin returns the vessel's centre of mass relative to the
+    // reference part; translate the vessel so that its centre of mass lands
+    // there, preserving its internal layout.
+    Vector3d target_centre_of_mass =
+        (Vector3d)active_root.rb.position + (Vector3d)dof.q;
+    Vector3d delta = target_centre_of_mass - vessel.CoMD;
+    vessel.SetPosition((Vector3d)vessel.vesselTransform.position + delta);
+  }
+
+  // The unpack seed comes from the stock orbit through the same absolute
+  // rounding that `RepositionOnRailsVesselsInScene` corrects; fix the
+  // position before the first physics step sees it, lest the ship overlap an
+  // adjacent vessel — a boarding kerbal — by the rounding.  The velocities
+  // are computed from smooth orbital quantities and carry no such rounding.
+  private void OnVesselGoOffRails(Vessel vessel) {
+    if (!PluginRunning() ||
+        !HighLogic.LoadedSceneIsFlight ||
+        vessel == FlightGlobals.ActiveVessel ||
+        !is_manageable(vessel) ||
+        !TryGetSceneReferenceOrigin(out Origin origin,
+                                    out Part active_root)) {
+      return;
+    }
+    RepositionVesselInScene(vessel, origin, active_root);
   }
 
   private void SetBodyFrames() {

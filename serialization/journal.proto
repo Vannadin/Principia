@@ -2874,6 +2874,23 @@ message VesselGetPlacement {
   optional Out out = 2;
 }
 
+message VesselGetWorldDegreesOfFreedom {
+  extend Method {
+    optional VesselGetWorldDegreesOfFreedom extension = 5224;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin const",
+                                 (is_subject) = true];
+    required string vessel_guid = 2;
+    required Origin origin = 3;
+  }
+  message Return {
+    required QP result = 1;
+  }
+  optional In in = 1;
+  optional Return return = 3;
+}
+
 message VesselGetPredictionAdaptiveStepParameters {
   extend Method {
     optional VesselGetPredictionAdaptiveStepParameters extension = 5090;

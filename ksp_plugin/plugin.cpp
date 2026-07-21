@@ -925,6 +925,46 @@ DegreesOfFreedom<World> Plugin::CelestialWorldDegreesOfFreedom(
   return barycentric_to_world(degrees_of_freedom);
 }
 
+DegreesOfFreedom<World> Plugin::VesselWorldDegreesOfFreedom(
+    GUID const& vessel_guid,
+    PartId const reference_part_id,
+    RigidMotion<Barycentric, World> const& barycentric_to_world,
+    Instant const& time) const {
+  not_null<Vessel*> const vessel = FindOrDie(vessels_, vessel_guid).get();
+  not_null<Vessel*> const reference_vessel =
+      FindOrDie(part_id_to_vessel_, reference_part_id);
+  // `barycentric_to_world` was built at `current_time_`; with an anchored
+  // reference a skewed `time` would inject the anchor velocity times the skew
+  // into the result — the vessel's full cruise speed in the void.
+  CHECK_EQ(time, current_time_);
+  // The present state — never the endpoint of a prediction.  The adapter only
+  // queries vessels it has inserted, whose histories the same frame's
+  // catch-up has prepared; a caller that reaches an unprepared history should
+  // fail loudly rather than dereference it.
+  auto const psychohistory = vessel->psychohistory();
+  CHECK(psychohistory != vessel->trajectory().segments().end() &&
+        !psychohistory->empty())
+      << "Unprepared history for " << vessel_guid;
+  DegreesOfFreedom<Barycentric> degrees_of_freedom =
+      psychohistory->back().degrees_of_freedom;
+  if (vessel->subsystem() != reference_vessel->subsystem() ||
+      vessel->anchor() != reference_vessel->anchor()) {
+    // Into the placement of the reference vessel — the `Barycentric` side of
+    // `barycentric_to_world`.  Between two anchored vessels the anchors
+    // difference exactly on the sector lattice, so the conversion is small
+    // and precise no matter how deep in the void they are.
+    auto const [conversion_displacement, conversion_velocity] =
+        ephemeris_->placement_conversion(
+            {vessel->subsystem(), vessel->anchor()},
+            {reference_vessel->subsystem(), reference_vessel->anchor()},
+            time);
+    degrees_of_freedom = {
+        degrees_of_freedom.position() + conversion_displacement,
+        degrees_of_freedom.velocity() + conversion_velocity};
+  }
+  return barycentric_to_world(degrees_of_freedom);
+}
+
 RigidMotion<Barycentric, World> Plugin::BarycentricToWorld(
     bool const reference_part_is_unmoving,
     PartId const reference_part_id,

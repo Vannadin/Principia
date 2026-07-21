@@ -296,6 +296,20 @@ class Plugin {
       RigidMotion<Barycentric, World> const& barycentric_to_world,
       Instant const& time) const;
 
+  // Returns the `World` degrees of freedom of the vessel with the given GUID
+  // (its present state, never a prediction endpoint), identifying the origin
+  // of `World` as `barycentric_to_world` does.  `reference_part_id` must be
+  // the part from which `barycentric_to_world` was built.  Works for packed
+  // and unloaded vessels — no part of the queried vessel is involved — so the
+  // adapter can place an on-rails vessel in the scene through the placement
+  // conversions, which cancel the void-scale absolute that quantizes the
+  // stock orbit-driven placement at metres per ULP.
+  virtual DegreesOfFreedom<World> VesselWorldDegreesOfFreedom(
+      GUID const& vessel_guid,
+      PartId reference_part_id,
+      RigidMotion<Barycentric, World> const& barycentric_to_world,
+      Instant const& time) const;
+
   // The `Barycentric` side of the returned motion is represented in the
   // placement of the reference part's vessel — its subsystem AND its anchor,
   // if any; `GetPartActualMotion` and `CelestialWorldDegreesOfFreedom` convert

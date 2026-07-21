@@ -1,5 +1,7 @@
 #include "ksp_plugin/interface.hpp"
 
+#include <optional>
+
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "geometry/grassmann.hpp"
@@ -100,6 +102,30 @@ void __cdecl principia__VesselGetPlacement(Plugin const* const plugin,
     *anchor_local = XYZ{0, 0, 0};
   }
   return m.Return();
+}
+
+// Returns the vessel's present `World` degrees of freedom through the
+// placement conversions, so that the caller can place an on-rails vessel in
+// the scene without routing through the void-scale absolutes that quantize
+// the stock orbit-driven placement at metres per ULP.
+QP __cdecl principia__VesselGetWorldDegreesOfFreedom(
+    Plugin const* const plugin,
+    char const* const vessel_guid,
+    Origin const origin) {
+  journal::Method<journal::VesselGetWorldDegreesOfFreedom> m(
+      {plugin, vessel_guid, origin});
+  CHECK(plugin != nullptr);
+  return m.Return(ToQP(plugin->VesselWorldDegreesOfFreedom(
+      vessel_guid,
+      origin.reference_part_id,
+      plugin->BarycentricToWorld(
+          origin.reference_part_is_unmoving,
+          origin.reference_part_id,
+          origin.reference_part_is_at_origin
+              ? std::nullopt
+              : std::make_optional(FromXYZ<Position<World>>(
+                    origin.main_body_centre_in_world))),
+      plugin->CurrentTime())));
 }
 
 AdaptiveStepParameters __cdecl

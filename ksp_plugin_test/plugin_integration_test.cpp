@@ -2277,6 +2277,25 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
   EXPECT_THAT((outrigger_degrees_of_freedom.velocity() -
                pod_degrees_of_freedom.velocity()).Norm(),
               Lt(1e-3 * Metre / Second));
+
+  // The vessel-level World mapping — used by the adapter to place on-rails
+  // vessels in the scene — agrees with the part pipeline: the stray,
+  // anchored on its own anchor, maps to where its part maps, at rest
+  // relative to it, despite the 3 km/s anchored cruise carried by the
+  // anchors on both sides of the conversion.
+  DegreesOfFreedom<World> const stray_part_degrees_of_freedom =
+      plugin->GetPartActualMotion(405, 402, barycentric_to_world)(
+          {EccentricPart::origin, EccentricPart::unmoving});
+  DegreesOfFreedom<World> const stray_degrees_of_freedom =
+      plugin->VesselWorldDegreesOfFreedom(stray_guid, 402,
+                                          barycentric_to_world,
+                                          plugin->CurrentTime());
+  EXPECT_THAT((stray_degrees_of_freedom.position() -
+               stray_part_degrees_of_freedom.position()).Norm(),
+              Lt(1 * Milli(Metre)));
+  EXPECT_THAT((stray_degrees_of_freedom.velocity() -
+               stray_part_degrees_of_freedom.velocity()).Norm(),
+              Lt(1e-2 * Metre / Second));
 }
 
 // A staging separation in the deep void: the new vessel receiving the
