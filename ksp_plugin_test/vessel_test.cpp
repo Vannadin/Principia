@@ -476,6 +476,62 @@ TEST_F(VesselTest, AnchoredRebaseFoldsConversionIntoAnchor) {
   EXPECT_THAT((true_after - true_before).Norm(), Lt(1 * Milli(Metre)));
 }
 
+// A re-anchor refreshes a flight plan's placement only once the gap between
+// the plan's anchor and the vessel's fresh one exceeds the refresh margin:
+// below it the plan keeps its placement — stale but correct, and the refresh
+// costs a full segment recomputation — and beyond it the plan is rebased onto
+// the vessel's anchor, capping the growth of its anchored coordinates.
+TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
+  Length const saved_bound = Vessel::re_anchor_bound_for_testing_;
+  Vessel::re_anchor_bound_for_testing_ = 1e9 * Metre;
+  absl::Cleanup restore_bound = [saved_bound] {
+    Vessel::re_anchor_bound_for_testing_ = saved_bound;
+  };
+
+  EXPECT_CALL(ephemeris_, t_min())
+      .WillRepeatedly(Return(t0_));
+  EXPECT_CALL(ephemeris_, t_max())
+      .WillRepeatedly(Return(t0_ + 4 * Second));
+  EXPECT_CALL(ephemeris_, FlowWithAdaptiveStep(_, _, _, _, _, _))
+      .Times(AnyNumber());
+  EXPECT_CALL(ephemeris_, Prolong(_, _))
+      .Times(AnyNumber());
+  ON_CALL(ephemeris_, bodies()).WillByDefault(ReturnRef(bodies_));
+
+  Velocity<Barycentric> const v(
+      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  auto const at_x = [&](Length const& x) {
+    return DegreesOfFreedom<Barycentric>(
+        Barycentric::origin +
+            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
+        v);
+  };
+
+  // An unanchored vessel with a flight plan; the trajectory is unprepared, so
+  // its last point is the present state.
+  AppendToVesselTrajectory(t0_, at_x(4e9 * Metre));
+  vessel_.CreateFlightPlan(t0_ + 3.0 * Second,
+                           10 * Kilogram,
+                           DefaultPredictionParameters(),
+                           DefaultBurnParameters());
+  EXPECT_FALSE(vessel_.flight_plan().anchor().has_value());
+
+  // First adoption: the gap between the plan's placement (unanchored) and the
+  // new anchor is 4e9 m, within the 64-bound margin — the plan keeps its
+  // placement.
+  vessel_.AdoptAnchor();
+  ASSERT_TRUE(vessel_.anchor().has_value());
+  EXPECT_FALSE(vessel_.flight_plan().anchor().has_value());
+
+  // The vessel drifts far from its anchor and re-anchors; the gap now exceeds
+  // the margin and the plan is rebased onto the vessel's fresh anchor.
+  AppendToVesselTrajectory(t0_ + 1 * Second, at_x(1e11 * Metre));
+  vessel_.AdoptAnchor();
+  ASSERT_TRUE(vessel_.anchor().has_value());
+  ASSERT_TRUE(vessel_.flight_plan().anchor().has_value());
+  EXPECT_EQ(*vessel_.anchor(), *vessel_.flight_plan().anchor());
+}
+
 TEST_F(VesselTest, KeepAndFreeParts) {
   std::set<PartId> remaining_part_ids;
   vessel_.ForAllParts([&remaining_part_ids](Part const& part) {

@@ -146,7 +146,8 @@ class Vessel {
 
   // Adopts an anchor at the head of the trajectory, moving with it (composing
   // with any current anchor): the anchored coordinates and velocity start at
-  // zero.  Only meaningful where the far field is zero.
+  // zero.  Also refreshes the placement of any flight plan whose own anchor
+  // has drifted beyond the refresh margin from the new one.
   virtual void AdoptAnchor();
 
   // Re-expresses this vessel under the given anchor (or unanchored, for

@@ -482,6 +482,45 @@ void Vessel::AdoptAnchor() {
     anchor_ = new_anchor;
   }
   TranslateParts(translation, -velocity_offset, t, old_anchor);
+  // A flight plan keeps its own placement and stays correct under a stale
+  // anchor — its consumers convert through `Anchor::Conversion` — but every
+  // re-anchor of the vessel widens the gap between the plan's anchor and the
+  // vessel's, and the plan's anchored coordinates grow with that gap,
+  // degrading their ULP.  Refresh the plan's placement once the gap warrants
+  // it; the margin keeps the refresh — a full `RecomputeAllSegments` — far
+  // rarer than the re-anchor cadence (which at high warp in a close star
+  // orbit fires every few real seconds) while capping the plan's coordinate
+  // growth at ULP ~1 cm.
+  Length const flight_plan_rebase_bound = 64 * re_anchor_bound_for_testing_;
+  for (auto& flight_plan : flight_plans_) {
+    // Lazily-deserialized plans are skipped, as in `RebaseTo`: they are
+    // re-expressed in the vessel's current placement when they materialize.
+    auto* const optimizable_flight_plan =
+        std::get_if<OptimizableFlightPlan>(&flight_plan);
+    if (optimizable_flight_plan == nullptr) {
+      continue;
+    }
+    auto const [gap, gap_velocity] =
+        Ephemeris<Barycentric>::Anchor::Conversion(
+            optimizable_flight_plan->flight_plan->anchor(), anchor_, t);
+    if (gap.Norm²() <= flight_plan_rebase_bound * flight_plan_rebase_bound) {
+      continue;
+    }
+    // Any optimization in progress operates on a copy of the flight plan in
+    // the old representation; discard it.
+    if (optimizable_flight_plan->optimization_driver != nullptr) {
+      optimizable_flight_plan->optimization_driver->Interrupt();
+    }
+    // The subsystem is unchanged, so the whole translation is the anchor
+    // conversion computed by `Rebase` itself.
+    optimizable_flight_plan->flight_plan
+        ->Rebase(Displacement<Barycentric>{},
+                 Velocity<Barycentric>{},
+                 t,
+                 subsystem_,
+                 anchor_)
+        .IgnoreError();
+  }
 }
 
 void Vessel::ReanchorTo(
