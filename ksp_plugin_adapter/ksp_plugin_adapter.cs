@@ -1851,6 +1851,21 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
           physical_object_rb.transform.position += q_correction_at_root_part;
           physical_object_rb.velocity += v_correction_at_root_part;
         }
+        // A loaded vessel that the plugin does not manage — a Kerbal in the
+        // middle of going on EVA, a vessel whose insertion was deferred —
+        // must ride the same correction as the physical objects above, lest
+        // it drift off its plugin-managed neighbours by one correction per
+        // tick (tens of metres per tick in interstellar domains) and the
+        // skew be baked into its degrees of freedom at adoption.
+        foreach (Vessel vessel in FlightGlobals.Vessels.Where(
+            v => !v.packed && !plugin_.HasVessel(v.id.ToString()))) {
+          foreach (Part part in vessel.parts.Where(PartIsFaithful)) {
+            UnityEngine.Rigidbody part_rb = part.rb;
+            part_rb.position += q_correction_at_root_part;
+            part_rb.transform.position += q_correction_at_root_part;
+            part_rb.velocity += v_correction_at_root_part;
+          }
+        }
         QP main_body_dof = plugin_.CelestialWorldDegreesOfFreedom(
             main_body.flightGlobalsIndex,
             origin,
