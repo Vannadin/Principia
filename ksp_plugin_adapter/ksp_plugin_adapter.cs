@@ -2247,12 +2247,40 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     }
     QP dof = plugin_.VesselGetWorldDegreesOfFreedom(vessel_guid, origin);
     // The plugin returns the vessel's centre of mass relative to the
-    // reference part; translate the vessel so that its centre of mass lands
-    // there, preserving its internal layout.
+    // reference part; translate the parts so that the centre of mass lands
+    // there, preserving the internal layout.  The centre of mass is
+    // recomputed from the CURRENT part transforms: stock's cached CoM and
+    // the vessel transform are written at other points of the frame than
+    // the orbit-driven part positions, and a delta mixing those samples
+    // re-applies the very churn being corrected.
     Vector3d target_centre_of_mass =
         (Vector3d)active_root.rb.position + (Vector3d)dof.q;
-    Vector3d delta = target_centre_of_mass - vessel.CoMD;
-    vessel.SetPosition((Vector3d)vessel.vesselTransform.position + delta);
+    Vector3d current_centre_of_mass = Vector3d.zero;
+    double total_mass = 0;
+    foreach (Part part in vessel.parts) {
+      double mass = part.mass + part.resourceMass;
+      if (part.partTransform == null || mass <= 0) {
+        continue;
+      }
+      current_centre_of_mass +=
+          mass * (Vector3d)part.partTransform.position;
+      total_mass += mass;
+    }
+    if (total_mass == 0) {
+      return;
+    }
+    current_centre_of_mass /= total_mass;
+    Vector3d delta = target_centre_of_mass - current_centre_of_mass;
+    foreach (Part part in vessel.parts) {
+      if (part.partTransform == null) {
+        continue;
+      }
+      part.partTransform.position =
+          (Vector3d)part.partTransform.position + delta;
+      if (part.rb != null) {
+        part.rb.position = part.partTransform.position;
+      }
+    }
   }
 
   // The unpack seed comes from the stock orbit through the same absolute
