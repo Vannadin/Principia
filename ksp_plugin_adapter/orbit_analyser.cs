@@ -22,6 +22,29 @@ internal static class Formatters {
     return $"{(value / 1000).FormatN(0)} km";
   }
 
+  // Formats an interstellar distance (given in metres), picking km, AU or ly
+  // by magnitude.
+  public static string FormatNavDistance(this double value) {
+    const double au = 149_597_870_700;
+    const double ly = 9.460_730_472_580_8e15;
+    if (value >= 0.1 * ly) {
+      return $"{(value / ly).FormatN(3)} ly";
+    } else if (value >= 0.1 * au) {
+      return $"{(value / au).FormatN(2)} AU";
+    } else {
+      return $"{(value / 1000).FormatN(0)} km";
+    }
+  }
+
+  // Formats a speed (given in m/s), with its fraction of the speed of light
+  // when that fraction is resolvable at 4 fractional digits.
+  public static string FormatNavSpeed(this double value) {
+    const double c = 299_792_458;
+    return value / c >= 5e-5
+        ? $"{value.FormatN(0)} m/s ({(value / c).FormatN(4)} c)"
+        : $"{value.FormatN(0)} m/s";
+  }
+
   // Displays an interval as midpoint±half-width.
   public static string FormatInterval(this Interval interval) {
     double half_width = (interval.max - interval.min) / 2;

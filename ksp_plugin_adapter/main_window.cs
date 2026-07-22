@@ -87,6 +87,11 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
       show_coordinate_origin_ =
           Convert.ToBoolean(show_coordinate_origin_value);
     }
+    string show_void_navigation_value =
+        node.GetAtMostOneValue("show_void_navigation");
+    if (show_void_navigation_value != null) {
+      show_void_navigation_ = Convert.ToBoolean(show_void_navigation_value);
+    }
 
     string history_length_value = node.GetAtMostOneValue("history_length");
     if (history_length_value != null) {
@@ -154,6 +159,9 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
                   createIfNotFound : true);
     node.SetValue("show_coordinate_origin",
                   show_coordinate_origin_,
+                  createIfNotFound : true);
+    node.SetValue("show_void_navigation",
+                  show_void_navigation_,
                   createIfNotFound : true);
 
     node.SetValue("history_length", history_length, createIfNotFound : true);
@@ -319,9 +327,103 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
         RenderToggleableSection(name   : "Coordinate origin",
                                 show   : ref show_coordinate_origin_,
                                 render : RenderCoordinateOrigin);
+        bool in_void = UpdateVoidNavigationState();
+        if (in_void) {
+          RenderToggleableSection(
+              name   : L10N.CacheFormat("#Principia_MainWindow_VoidNavigation"),
+              show   : ref show_void_navigation_,
+              render : RenderVoidNavigation);
+        } else if (void_navigation_section_visible_) {
+          // The section disappeared with its contents, so the window must
+          // shrink.
+          ScheduleShrink();
+        }
+        void_navigation_section_visible_ = in_void;
       }
     }
     UnityEngine.GUI.DragWindow();
+  }
+
+  // Queries the void-navigation state of the active vessel; returns true and
+  // caches the readouts when it is coasting in the interstellar void.
+  private bool UpdateVoidNavigationState() {
+    // A single-subsystem (stock) system has no interstellar void; skip the
+    // interface call on that common path.
+    RebuildSubsystemNamesIfNeeded();
+    if (subsystem_names_.Count <= 1) {
+      return false;
+    }
+    string vessel_guid = FlightGlobals.ActiveVessel?.id.ToString();
+    if (vessel_guid == null || !plugin.HasVessel(vessel_guid)) {
+      return false;
+    }
+    nav_target_celestial_ = FlightGlobals.fetch.VesselTarget as CelestialBody;
+    nav_reference_celestial_ = plotting_frame_selector_.Centre() ??
+                               plotting_frame_selector_.Primary();
+    plugin.VesselGetNavigationState(
+        vessel_guid,
+        nav_target_celestial_?.flightGlobalsIndex ?? -1,
+        nav_reference_celestial_?.flightGlobalsIndex ?? -1,
+        out bool in_void,
+        out nav_nearest_star_index_,
+        out nav_nearest_star_distance_,
+        out nav_position_wrt_target_,
+        out nav_velocity_wrt_target_,
+        out nav_velocity_wrt_reference_);
+    return in_void;
+  }
+
+  // There are no conics between the stars, so the void panel shows distances,
+  // celestial-relative speeds and the direction of travel instead.  The speed
+  // reference is the celestial of the plotting frame.
+  private void RenderVoidNavigation() {
+    UnityEngine.GUILayout.Label(
+        L10N.CacheFormat("#Principia_MainWindow_VoidNav_NearestStar",
+                         FlightGlobals.Bodies[nav_nearest_star_index_].Name(),
+                         nav_nearest_star_distance_.FormatNavDistance()));
+    if (nav_reference_celestial_ != null) {
+      UnityEngine.GUILayout.Label(
+          L10N.CacheFormat(
+              "#Principia_MainWindow_VoidNav_SpeedRelativeTo",
+              nav_reference_celestial_.Name(),
+              ((Vector3d)nav_velocity_wrt_reference_).magnitude.
+                  FormatNavSpeed()));
+    }
+    if (nav_target_celestial_ == null) {
+      UnityEngine.GUILayout.Label(
+          L10N.CacheFormat("#Principia_MainWindow_VoidNav_NoTarget"),
+          style : Style.Info(UnityEngine.GUI.skin.label));
+      return;
+    }
+    Vector3d position = (Vector3d)nav_position_wrt_target_;
+    Vector3d velocity = (Vector3d)nav_velocity_wrt_target_;
+    double target_distance = position.magnitude;
+    double target_speed = velocity.magnitude;
+    UnityEngine.GUILayout.Label(
+        L10N.CacheFormat("#Principia_MainWindow_VoidNav_Target",
+                         nav_target_celestial_.Name(),
+                         target_distance.FormatNavDistance()));
+    UnityEngine.GUILayout.Label(
+        L10N.CacheFormat("#Principia_MainWindow_VoidNav_SpeedRelativeTo",
+                         nav_target_celestial_.Name(),
+                         target_speed.FormatNavSpeed()));
+    if (target_distance > 0 && target_speed > 0) {
+      // 0° when the velocity points straight at the target; the position is
+      // vessel-relative-to-target, so the line of sight is its negation.
+      double cosine = Vector3d.Dot(velocity, -position) /
+                      (target_speed * target_distance);
+      double approach_angle =
+          Math.Acos(Math.Max(-1, Math.Min(1, cosine))) * (180 / Math.PI);
+      UnityEngine.GUILayout.Label(
+          L10N.CacheFormat("#Principia_MainWindow_VoidNav_ApproachAngle",
+                           approach_angle.FormatN(1)));
+      Vector3d direction = velocity / target_speed;
+      UnityEngine.GUILayout.Label(
+          L10N.CacheFormat("#Principia_MainWindow_VoidNav_TravelDirection",
+                           $"[{direction.x.FormatN(3)}, " +
+                           $"{direction.y.FormatN(3)}, " +
+                           $"{direction.z.FormatN(3)}]"));
+    }
   }
 
   // Displays the placement under which the active vessel is represented: the
@@ -384,6 +486,13 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
   // system (named by the stock sun), and each added star heads its own
   // subsystem.  The map is rebuilt when the plugin is.
   private string SubsystemName(int subsystem) {
+    RebuildSubsystemNamesIfNeeded();
+    return subsystem_names_.TryGetValue(subsystem, out string name)
+        ? name
+        : "unknown";
+  }
+
+  private void RebuildSubsystemNamesIfNeeded() {
     if (plugin != subsystem_names_plugin_) {
       subsystem_names_.Clear();
       foreach (CelestialBody body in FlightGlobals.Bodies) {
@@ -395,9 +504,6 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
       }
       subsystem_names_plugin_ = plugin;
     }
-    return subsystem_names_.TryGetValue(subsystem, out string name)
-        ? name
-        : "unknown";
   }
 
   private void RenderKSPFeatures() {
@@ -712,6 +818,15 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
   private bool show_ksp_features_ = false;
   private bool show_logging_settings_ = false;
   private bool show_coordinate_origin_ = false;
+  private bool show_void_navigation_ = false;
+  private bool void_navigation_section_visible_ = false;
+  private CelestialBody nav_target_celestial_;
+  private CelestialBody nav_reference_celestial_;
+  private int nav_nearest_star_index_;
+  private double nav_nearest_star_distance_;
+  private XYZ nav_position_wrt_target_;
+  private XYZ nav_velocity_wrt_target_;
+  private XYZ nav_velocity_wrt_reference_;
 
   private string last_placement_state_ = null;
   private readonly List<string> placement_events_ = new List<string>();
