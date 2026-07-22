@@ -293,7 +293,7 @@ message OrbitAnalysis {
 }
 
 message Method {
-  extensions 5000 to 5999;  // Last used: 5223.
+  extensions 5000 to 5999;  // Last used: 5226.
 }
 
 message ActivatePlayer {
@@ -2853,6 +2853,29 @@ message VesselGetAnalysis {
   }
   optional In in = 1;
   optional Return return = 3;
+}
+
+message VesselGetNavigationState {
+  extend Method {
+    optional VesselGetNavigationState extension = 5226;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin const",
+                                 (is_subject) = true];
+    required string vessel_guid = 2;
+    required int32 target_celestial_index = 3;
+    required int32 reference_celestial_index = 4;
+  }
+  message Out {
+    required bool in_void = 1;
+    required int32 nearest_star_index = 2;
+    required double nearest_star_distance = 3;
+    required XYZ position_wrt_target = 4;
+    required XYZ velocity_wrt_target = 5;
+    required XYZ velocity_wrt_reference = 6;
+  }
+  optional In in = 1;
+  optional Out out = 2;
 }
 
 message VesselGetPlacement {

@@ -403,6 +403,27 @@ class Plugin {
   virtual RelativeDegreesOfFreedom<AliceSun> CelestialFromParent(
       Index celestial_index) const;
 
+  // The readouts of the void navigation display.  All quantities are computed
+  // placement-aware in `Barycentric`, so they stay precise at interstellar
+  // separations.
+  struct NavigationState {
+    // The vessel coasts force-free: every body's damped far field is zero at
+    // the vessel's position.  Always false if the far field is not damped.
+    bool in_void = false;
+    // The subsystem primary nearest to the vessel, and its distance.
+    Index nearest_star_index = 0;
+    Length nearest_star_distance;
+    // Relative to the target celestial; zero when no target was given.
+    Displacement<Barycentric> position_wrt_target;
+    Velocity<Barycentric> velocity_wrt_target;
+    // Relative to the reference celestial; zero when none was given.
+    Velocity<Barycentric> velocity_wrt_reference;
+  };
+  virtual NavigationState VesselNavigationState(
+      GUID const& vessel_guid,
+      std::optional<Index> target_index,
+      std::optional<Index> reference_index) const;
+
   virtual void SetPredictionAdaptiveStepParameters(
       GUID const& vessel_guid,
       Ephemeris<Barycentric>::AdaptiveStepParameters const&

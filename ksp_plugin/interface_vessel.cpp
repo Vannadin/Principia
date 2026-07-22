@@ -77,6 +77,52 @@ OrbitAnalysis* __cdecl principia__VesselGetAnalysis(
 // and, if the vessel coasts anchored in the inter-subsystem void, the sector
 // cell and intra-cell offset of its anchor (zero when unanchored).  The cell
 // indices are integers exactly representable as doubles.
+// Returns the void-navigation readouts of the vessel: whether it coasts
+// force-free outside every star's damped far field, the nearest star, and the
+// vessel's state relative to the target and reference celestials (indices < 0
+// when not selected), all at `Barycentric` precision.
+void __cdecl principia__VesselGetNavigationState(
+    Plugin const* const plugin,
+    char const* const vessel_guid,
+    int const target_celestial_index,
+    int const reference_celestial_index,
+    bool* const in_void,
+    int* const nearest_star_index,
+    double* const nearest_star_distance,
+    XYZ* const position_wrt_target,
+    XYZ* const velocity_wrt_target,
+    XYZ* const velocity_wrt_reference) {
+  journal::Method<journal::VesselGetNavigationState> m(
+      {plugin,
+       vessel_guid,
+       target_celestial_index,
+       reference_celestial_index},
+      {in_void,
+       nearest_star_index,
+       nearest_star_distance,
+       position_wrt_target,
+       velocity_wrt_target,
+       velocity_wrt_reference});
+  CHECK(plugin != nullptr);
+  Plugin::NavigationState const state = plugin->VesselNavigationState(
+      vessel_guid,
+      target_celestial_index < 0
+          ? std::nullopt
+          : std::make_optional(target_celestial_index),
+      reference_celestial_index < 0
+          ? std::nullopt
+          : std::make_optional(reference_celestial_index));
+  *in_void = state.in_void;
+  *nearest_star_index = state.nearest_star_index;
+  *nearest_star_distance = state.nearest_star_distance / Metre;
+  *position_wrt_target = ToXYZ(state.position_wrt_target.coordinates() / Metre);
+  *velocity_wrt_target =
+      ToXYZ(state.velocity_wrt_target.coordinates() / (Metre / Second));
+  *velocity_wrt_reference =
+      ToXYZ(state.velocity_wrt_reference.coordinates() / (Metre / Second));
+  return m.Return();
+}
+
 void __cdecl principia__VesselGetPlacement(Plugin const* const plugin,
                                            char const* const vessel_guid,
                                            int* const subsystem,

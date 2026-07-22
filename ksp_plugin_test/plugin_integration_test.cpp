@@ -863,6 +863,157 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
   }
 }
 
+// The void-navigation readouts: the force-free boundary, the nearest star,
+// and the target- and reference-relative states across distinct subsystem
+// representations.
+TEST_F(PluginIntegrationTestWithoutPlugin, VoidNavigationState) {
+  Index const star_a = 0;
+  Index const star_b = 1;
+  auto const plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_a,
+                                            /*parent_index=*/std::nullopt,
+                                            gravity_model,
+                                            initial_state);
+  }
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star B"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star B"
+           x    : "4e16 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "5e3 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(star_b,
+                                            /*parent_index=*/star_a,
+                                            gravity_model,
+                                            initial_state);
+  }
+  plugin->EndInitialization();
+
+  GUID const near_a_guid = "near-a";
+  GUID const void_guid = "in-void";
+  bool inserted;
+  Vector<double, AliceSun> const to_star_b =
+      Normalize(plugin->CelestialFromParent(star_b).displacement());
+  Speed const v = 1e3 * Metre / Second;
+  Speed const v_star_b = 5e3 * Metre / Second;
+  plugin->InsertOrKeepVessel(near_a_guid,
+                            "near A",
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  plugin->InsertUnloadedPart(111,
+                             "near part",
+                             near_a_guid,
+                             {(1e10 * Metre) * to_star_b, v * to_star_b});
+  plugin->InsertOrKeepVessel(void_guid,
+                            "in the void",
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  plugin->InsertUnloadedPart(222,
+                             "void part",
+                             void_guid,
+                             {(2.1e16 * Metre) * to_star_b, v * to_star_b});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  Time const δt = 1200 * Second;
+  plugin->AdvanceTime(Instant() + δt, 1 * Radian);
+  plugin->InsertOrKeepVessel(near_a_guid,
+                            "near A",
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  plugin->InsertOrKeepVessel(void_guid,
+                            "in the void",
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  VesselSet collided_vessels;
+  plugin->CatchUpLaggingVessels(collided_vessels);
+
+  // Near star A the far field is undamped and star A is the nearest star.
+  auto const near_state = plugin->VesselNavigationState(
+      near_a_guid,
+      /*target_index=*/star_b,
+      /*reference_index=*/star_a);
+  EXPECT_FALSE(near_state.in_void);
+  EXPECT_EQ(star_a, near_state.nearest_star_index);
+  EXPECT_THAT(near_state.nearest_star_distance,
+              RelativeErrorFrom(1e10 * Metre, Lt(1e-2)));
+
+  // Between the stars, beyond both outer thresholds √(μ/floor) ≈ 1.14e16 m,
+  // the vessel coasts force-free and star B is the nearer star.  The target-
+  // and reference-relative states cross the subsystem representations: the
+  // vessel is still represented in star A's subsystem while star B, in its
+  // own moving subsystem, exercises the position and velocity conversions.
+  EXPECT_EQ(plugin->GetCelestial(star_a).subsystem(),
+            plugin->GetVessel(void_guid)->subsystem());
+  EXPECT_NE(plugin->GetCelestial(star_b).subsystem(),
+            plugin->GetVessel(void_guid)->subsystem());
+  auto const void_state = plugin->VesselNavigationState(
+      void_guid,
+      /*target_index=*/star_b,
+      /*reference_index=*/star_a);
+  EXPECT_TRUE(void_state.in_void);
+  EXPECT_EQ(star_b, void_state.nearest_star_index);
+  EXPECT_THAT(void_state.nearest_star_distance,
+              RelativeErrorFrom(1.9e16 * Metre, Lt(1e-3)));
+  // The components are checked in `Barycentric`, where the vessel cruises
+  // along +x and star B moves along +y; magnitude-only checks would let a
+  // misdirected subsystem conversion through.
+  EXPECT_THAT(void_state.position_wrt_target.coordinates().x,
+              RelativeErrorFrom(-1.9e16 * Metre, Lt(1e-3)));
+  EXPECT_THAT(void_state.position_wrt_target.coordinates().y,
+              AbsoluteErrorFrom(-v_star_b * δt, Lt(1 * Kilo(Metre))));
+  EXPECT_THAT(void_state.velocity_wrt_target.coordinates().x,
+              RelativeErrorFrom(v, Lt(1e-6)));
+  EXPECT_THAT(void_state.velocity_wrt_target.coordinates().y,
+              RelativeErrorFrom(-v_star_b, Lt(1e-6)));
+  EXPECT_THAT(void_state.velocity_wrt_reference.coordinates().x,
+              RelativeErrorFrom(v, Lt(1e-6)));
+  EXPECT_THAT(void_state.velocity_wrt_reference.coordinates().y,
+              AbsoluteErrorFrom(0 * Metre / Second,
+                                Lt(1e-3 * Metre / Second)));
+}
+
 // The mass-based rebase boundary, end-to-end, on an unequal pair: star A is
 // sixteen times heavier than star B, so the dominance boundary sits at 4/5 of
 // the way — far past the geometric midpoint — and the hysteresis margin puts

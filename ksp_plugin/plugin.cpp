@@ -1260,6 +1260,73 @@ RelativeDegreesOfFreedom<AliceSun> Plugin::VesselFromParent(
   return result;
 }
 
+Plugin::NavigationState Plugin::VesselNavigationState(
+    GUID const& vessel_guid,
+    std::optional<Index> const target_index,
+    std::optional<Index> const reference_index) const {
+  CHECK(!initializing_);
+  ephemeris_->Prolong(current_time_).IgnoreError();
+  Vessel const& vessel = *FindOrDie(vessels_, vessel_guid);
+  // The vessel's degrees of freedom in plain subsystem-relative coordinates,
+  // with any anchor offset folded in.
+  DegreesOfFreedom<Barycentric> vessel_dof =
+      vessel.psychohistory()->back().degrees_of_freedom;
+  if (auto const& anchor = vessel.anchor(); anchor.has_value()) {
+    vessel_dof = DegreesOfFreedom<Barycentric>(
+        vessel_dof.position() + anchor->OffsetAt(current_time_),
+        vessel_dof.velocity() + anchor->velocity);
+  }
+  int const vessel_subsystem = vessel.subsystem();
+  // The vessel's state relative to a celestial, converted across subsystem
+  // representations like `VesselFromParent`.
+  auto const relative_to = [&](Celestial const& celestial) {
+    RelativeDegreesOfFreedom<Barycentric> result =
+        vessel_dof - celestial.current_degrees_of_freedom(current_time_);
+    if (int const celestial_subsystem = celestial.subsystem();
+        vessel_subsystem != celestial_subsystem) {
+      result = {result.displacement() +
+                    ephemeris_->subsystem_conversion(vessel_subsystem,
+                                                     celestial_subsystem,
+                                                     current_time_),
+                result.velocity() +
+                    ephemeris_->subsystem_velocity_conversion(
+                        vessel_subsystem,
+                        celestial_subsystem)};
+    }
+    return result;
+  };
+
+  NavigationState state;
+  state.in_void = ephemeris_->FarFieldIsZero(vessel_dof.position(),
+                                             vessel_subsystem,
+                                             current_time_);
+  state.nearest_star_distance = Infinity<Length>;
+  std::set<int> subsystems_seen;
+  for (auto const& [index, celestial] : celestials_) {
+    // `celestials_` is ordered by index, so the first body seen in a
+    // subsystem is its primary — the star of the nearest-star readout.
+    if (!subsystems_seen.insert(celestial->subsystem()).second) {
+      continue;
+    }
+    Length const distance = relative_to(*celestial).displacement().Norm();
+    if (distance < state.nearest_star_distance) {
+      state.nearest_star_index = index;
+      state.nearest_star_distance = distance;
+    }
+  }
+  if (target_index.has_value()) {
+    RelativeDegreesOfFreedom<Barycentric> const relative =
+        relative_to(*FindOrDie(celestials_, *target_index));
+    state.position_wrt_target = relative.displacement();
+    state.velocity_wrt_target = relative.velocity();
+  }
+  if (reference_index.has_value()) {
+    state.velocity_wrt_reference =
+        relative_to(*FindOrDie(celestials_, *reference_index)).velocity();
+  }
+  return state;
+}
+
 RelativeDegreesOfFreedom<AliceSun> Plugin::CelestialFromParent(
     Index const celestial_index) const {
   CHECK(!initializing_);
