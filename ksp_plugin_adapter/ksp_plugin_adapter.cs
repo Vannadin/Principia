@@ -2674,19 +2674,15 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       RemoveStockTrajectoriesIfNeeded(celestial);
     }
     foreach (var vessel in FlightGlobals.Vessels.Where(
-                 v => v.orbitDriver?.Renderer != null)) {
-      if (vessel.mapObject?.uiNode != null) {
-        // There is no way to check if we have already added a callback to an
-        // event...
-        vessel.mapObject.uiNode.OnClick -= OnVesselNodeClick;
-        vessel.mapObject.uiNode.OnClick += OnVesselNodeClick;
-      }
-      // The tracking station surveys every vessel, and the stock line — our
-      // written-back orbit, rendered at float32 — is the only orbit display
-      // there until our own line for that vessel draws; suppress per vessel,
-      // one frame behind the plot.
-      if (HighLogic.LoadedScene != GameScenes.TRACKSTATION ||
-          plotter_.PlottedInTrackingStation(vessel.id)) {
+                 v => v.mapObject?.uiNode != null)) {
+      // There is no way to check if we have already added a callback to an
+      // event...
+      vessel.mapObject.uiNode.OnClick -= OnVesselNodeClick;
+      vessel.mapObject.uiNode.OnClick += OnVesselNodeClick;
+      // Our lines are not visible in the tracking station even when their
+      // vertices plot, so nothing may be suppressed there: the stock lines
+      // are the only orbit display that scene has.
+      if (HighLogic.LoadedScene != GameScenes.TRACKSTATION) {
         RemoveStockTrajectoriesIfNeeded(vessel);
       }
     }

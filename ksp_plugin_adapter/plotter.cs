@@ -65,11 +65,7 @@ class Plotter {
                                       double history_length,
                                       double? prediction_t_max,
                                       double? flight_plan_t_max) {
-    main_prediction_vertex_count_ = 0;
-    last_main_vessel_id_ = null;
-    last_vessel_plot_frame_ = UnityEngine.Time.frameCount;
     if (main_vessel_guid != null) {
-      last_main_vessel_id_ = new Guid(main_vessel_guid);
       {
         planetarium.PlanetariumPlotPsychohistory(
             Plugin,
@@ -94,7 +90,6 @@ class Plotter {
                                               VertexBuffer.size,
                                               out int vertex_count,
                                               out XYZ anchor);
-        main_prediction_vertex_count_ = vertex_count;
         DrawLineMesh(ref prediction_mesh_,
                      vertex_count,
                      anchor,
@@ -176,16 +171,6 @@ class Plotter {
                      adapter_.target_prediction_style);
       }
     }
-  }
-
-  // Reports whether the last plot drew the given vessel's prediction, so
-  // that the tracking station only suppresses a stock line that we replace.
-  // The answer is one frame behind the plot; older data is treated as
-  // absent, so that a scene re-entry never suppresses from stale state.
-  public bool PlottedInTrackingStation(Guid vessel_id) {
-    return UnityEngine.Time.frameCount - last_vessel_plot_frame_ <= 2 &&
-           vessel_id == last_main_vessel_id_ &&
-           main_prediction_vertex_count_ >= 2;
   }
 
   private void PlotCelestialTrajectories(DisposablePlanetarium planetarium,
@@ -371,9 +356,6 @@ class Plotter {
   private readonly Dictionary<CelestialBody, CelestialTrajectories>
       celestial_trajectory_meshes_ =
       new Dictionary<CelestialBody, CelestialTrajectories>();
-  private Guid? last_main_vessel_id_;
-  private int last_vessel_plot_frame_ = -1;
-  private int main_prediction_vertex_count_;
   private UnityEngine.Mesh psychohistory_mesh_;
   private UnityEngine.Mesh prediction_mesh_;
   private readonly List<UnityEngine.Mesh> flight_plan_segment_meshes_ =
