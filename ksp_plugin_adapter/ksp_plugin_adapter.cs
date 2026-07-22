@@ -511,7 +511,23 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
     if (MapView.MapIsEnabled) {
       string main_vessel_guid = main_vessel?.id.ToString();
-      if (!plotting_frame_selector_.target_frame_selected &&
+      if (HighLogic.LoadedScene == GameScenes.TRACKSTATION) {
+        if (plotting_frame_selector_.target_frame_selected &&
+            TargetVessel() == null) {
+          // In flight this reconciliation lives with the navball, which does
+          // not run here; a stale target frame would hide every history and
+          // clamp every prediction.
+          plotting_frame_selector_.UnsetTargetFrame();
+        }
+        // The tracking station surveys the whole fleet.
+        string[] vessel_guids = FlightGlobals.Vessels.
+            Select(vessel => vessel.id.ToString()).
+            Where(guid => plugin_.HasVessel(guid)).
+            ToArray();
+        if (vessel_guids.Length > 0) {
+          plugin_.UpdatePrediction(vessel_guids);
+        }
+      } else if (!plotting_frame_selector_.target_frame_selected &&
           TargetVesselGuid() is string target_guid) {
         if (main_vessel_guid == null) {
           plugin_.UpdatePrediction(new string[]{ target_guid });
@@ -2675,9 +2691,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       }
       // The tracking station surveys every vessel, and the stock line — our
       // written-back orbit, rendered at float32 — is the only orbit display
-      // for unselected vessels there; keep it until our renderer covers all
-      // of them.
-      if (HighLogic.LoadedScene != GameScenes.TRACKSTATION) {
+      // there until our own line for that vessel draws; suppress per vessel,
+      // one frame behind the plot.
+      if (HighLogic.LoadedScene != GameScenes.TRACKSTATION ||
+          plotter_.PlottedInTrackingStation(vessel.id)) {
         RemoveStockTrajectoriesIfNeeded(vessel);
       }
     }
@@ -2691,6 +2708,11 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                                   main_window_.history_length,
                                   prediction_collision_?.t,
                                   flight_plan_collision_?.t);
+        if (HighLogic.LoadedScene == GameScenes.TRACKSTATION) {
+          plotter_.PlotFleetTrajectories(planetarium,
+                                         main_vessel_guid,
+                                         main_window_.history_length);
+        }
         plotter_.PlotEquipotentials(planetarium);
       }
     }
