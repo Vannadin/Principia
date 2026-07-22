@@ -2673,10 +2673,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         vessel.mapObject.uiNode.OnClick -= OnVesselNodeClick;
         vessel.mapObject.uiNode.OnClick += OnVesselNodeClick;
       }
-      // In the tracking station a vessel may have no map node, but its stock
-      // orbit line still draws — through the sun-centric absolute at float32,
-      // which is broken at interstellar distances; suppress it regardless.
-      RemoveStockTrajectoriesIfNeeded(vessel);
+      // The tracking station surveys every vessel, and the stock line — our
+      // written-back orbit, rendered at float32 — is the only orbit display
+      // for unselected vessels there; keep it until our renderer covers all
+      // of them.
+      if (HighLogic.LoadedScene != GameScenes.TRACKSTATION) {
+        RemoveStockTrajectoriesIfNeeded(vessel);
+      }
     }
     string main_vessel_guid = PredictedVessel()?.id.ToString();
     if (MapView.MapIsEnabled) {
