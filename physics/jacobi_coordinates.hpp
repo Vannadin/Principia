@@ -64,6 +64,9 @@ class JacobiCoordinates final {
   // in the order in which they were added.
   std::vector<DegreesOfFreedom<PrimocentricFrame>> primocentric_dof_;
 
+  // The gravitational parameter of the primary alone, for diagnostics.
+  GravitationalParameter primary_gravitational_parameter_;
+
   // The barycentre of the system, weighted by its total gravitational
   // parameter.
   BarycentreCalculator<DegreesOfFreedom<PrimocentricFrame>,
