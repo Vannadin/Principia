@@ -512,11 +512,11 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     if (MapView.MapIsEnabled) {
       string main_vessel_guid = main_vessel?.id.ToString();
       if (HighLogic.LoadedScene == GameScenes.TRACKSTATION &&
-          plotting_frame_selector_.target_frame_selected &&
-          TargetVessel() == null) {
-        // In flight this reconciliation lives with the navball, which does
-        // not run here; a stale target frame would hide the history and
-        // clamp the prediction of the selected vessel.
+          plotting_frame_selector_.target_frame_selected) {
+        // A target frame is a rendezvous view: the tracking station has no
+        // active vessel, the target-relative lines never draw there, and a
+        // set target hides every psychohistory.  In flight the navball
+        // restores the target frame when it applies.
         plotting_frame_selector_.UnsetTargetFrame();
       }
       if (!plotting_frame_selector_.target_frame_selected &&
