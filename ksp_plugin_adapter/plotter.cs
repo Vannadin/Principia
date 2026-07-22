@@ -66,7 +66,10 @@ class Plotter {
                                       double? prediction_t_max,
                                       double? flight_plan_t_max) {
     main_prediction_vertex_count_ = 0;
+    last_main_vessel_id_ = null;
+    last_vessel_plot_frame_ = UnityEngine.Time.frameCount;
     if (main_vessel_guid != null) {
+      last_main_vessel_id_ = new Guid(main_vessel_guid);
       {
         planetarium.PlanetariumPlotPsychohistory(
             Plugin,
@@ -175,95 +178,14 @@ class Plotter {
     }
   }
 
-  // Plots the trajectories of every plugin-managed vessel other than
-  // `main_vessel_guid`, in the target-vessel colours — the palette of a
-  // vessel that is not the protagonist.  Used in the tracking station, which
-  // surveys the whole fleet; `PlottedInTrackingStation` reports which
-  // vessels actually drew, so that the caller only suppresses stock lines
-  // that we replace.
-  public void PlotFleetTrajectories(DisposablePlanetarium planetarium,
-                                    string main_vessel_guid,
-                                    double history_length) {
-    fleet_plotted_.Clear();
-    last_fleet_plot_frame_ = UnityEngine.Time.frameCount;
-    var present = new HashSet<Guid>();
-    foreach (Vessel vessel in FlightGlobals.Vessels) {
-      string vessel_guid = vessel.id.ToString();
-      if (!Plugin.HasVessel(vessel_guid)) {
-        continue;
-      }
-      present.Add(vessel.id);
-      if (vessel_guid == main_vessel_guid) {
-        // Plotted by `PlotVesselTrajectories`, with its flight plan; the
-        // same warm-up gate applies before its stock line goes.
-        if (main_prediction_vertex_count_ >= 2) {
-          fleet_plotted_.Add(vessel.id);
-        }
-        continue;
-      }
-      if (!fleet_trajectory_meshes_.TryGetValue(
-              vessel.id,
-              out FleetTrajectories trajectories)) {
-        trajectories = fleet_trajectory_meshes_[vessel.id] =
-            new FleetTrajectories();
-      }
-      {
-        planetarium.PlanetariumPlotPsychohistory(
-            Plugin,
-            vessel_guid,
-            history_length,
-            t_max: null,
-            VertexBuffer.data,
-            VertexBuffer.size,
-            out int vertex_count,
-            out XYZ anchor);
-        DrawLineMesh(trajectories.past, vertex_count, anchor,
-                     adapter_.target_history_colour,
-                     adapter_.target_history_style);
-      }
-      {
-        planetarium.PlanetariumPlotPrediction(
-            Plugin,
-            vessel_guid,
-            t_max: null,
-            VertexBuffer.data,
-            VertexBuffer.size,
-            out int vertex_count,
-            out XYZ anchor);
-        DrawLineMesh(trajectories.future, vertex_count, anchor,
-                     adapter_.target_prediction_colour,
-                     adapter_.target_prediction_style);
-        // Only report the vessel as covered once its orbit actually drew, so
-        // that its stock line survives until the prognosticator delivers.
-        if (vertex_count >= 2) {
-          fleet_plotted_.Add(vessel.id);
-        }
-      }
-    }
-    List<Guid> stale = null;
-    foreach (Guid vessel_id in fleet_trajectory_meshes_.Keys) {
-      if (!present.Contains(vessel_id)) {
-        if (stale == null) {
-          stale = new List<Guid>();
-        }
-        stale.Add(vessel_id);
-      }
-    }
-    if (stale != null) {
-      foreach (Guid vessel_id in stale) {
-        FleetTrajectories trajectories = fleet_trajectory_meshes_[vessel_id];
-        UnityEngine.Object.Destroy(trajectories.past);
-        UnityEngine.Object.Destroy(trajectories.future);
-        fleet_trajectory_meshes_.Remove(vessel_id);
-      }
-    }
-  }
-
+  // Reports whether the last plot drew the given vessel's prediction, so
+  // that the tracking station only suppresses a stock line that we replace.
+  // The answer is one frame behind the plot; older data is treated as
+  // absent, so that a scene re-entry never suppresses from stale state.
   public bool PlottedInTrackingStation(Guid vessel_id) {
-    // The set is one frame behind the plot; treat older data as absent so
-    // that a scene re-entry never suppresses from a stale set.
-    return UnityEngine.Time.frameCount - last_fleet_plot_frame_ <= 2 &&
-           fleet_plotted_.Contains(vessel_id);
+    return UnityEngine.Time.frameCount - last_vessel_plot_frame_ <= 2 &&
+           vessel_id == last_main_vessel_id_ &&
+           main_prediction_vertex_count_ >= 2;
   }
 
   private void PlotCelestialTrajectories(DisposablePlanetarium planetarium,
@@ -446,18 +368,11 @@ class Plotter {
     public UnityEngine.Mesh past = MakeDynamicMesh();
   }
 
-  private class FleetTrajectories {
-    public UnityEngine.Mesh future = MakeDynamicMesh();
-    public UnityEngine.Mesh past = MakeDynamicMesh();
-  }
-
   private readonly Dictionary<CelestialBody, CelestialTrajectories>
       celestial_trajectory_meshes_ =
       new Dictionary<CelestialBody, CelestialTrajectories>();
-  private readonly Dictionary<Guid, FleetTrajectories>
-      fleet_trajectory_meshes_ = new Dictionary<Guid, FleetTrajectories>();
-  private readonly HashSet<Guid> fleet_plotted_ = new HashSet<Guid>();
-  private int last_fleet_plot_frame_ = -1;
+  private Guid? last_main_vessel_id_;
+  private int last_vessel_plot_frame_ = -1;
   private int main_prediction_vertex_count_;
   private UnityEngine.Mesh psychohistory_mesh_;
   private UnityEngine.Mesh prediction_mesh_;
