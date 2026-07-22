@@ -221,21 +221,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
           new Dictionary<Vessel, Vector3d>();
 
   // Vessels created in the scene from a vessel that we manage (a Kerbal going
-  // on EVA, a vessel undocking or decoupling), recorded so that, if they pack
-  // before we adopt them, they are inserted from their parent vessel's state
-  // plus their scene-relative offset, rather than from the orbit produced by
-  // the stock scene-to-orbit conversion.  That conversion disagrees with our
-  // scene mapping by a few ticks times the Krakensbane frame velocity; at
-  // interstellar orbital speeds the resulting offset exceeds the unload
-  // radius, so the new vessel packs immediately and the skewed orbit becomes
-  // permanent (see also the discussion of #2590 below).  The dictionary is static because the vessel
-  // creation may trigger a scene reload that recreates this adapter before
-  // the new vessel is adopted; entries are short-lived and self-purging.
+  // on EVA, a vessel undocking or decoupling), recorded so that they inherit
+  // their parent vessel's placement — subsystem and anchor — before their
+  // parts are inserted.  The dictionary is static because the vessel creation
+  // may trigger a scene reload that recreates this adapter before the new
+  // vessel is adopted; entries are short-lived and self-purging.
   private class CoherentCreation {
     public Guid parent_id;
-    // Relative degrees of freedom in planetarium (AliceSun) axes.
-    public Vector3d relative_position;
-    public Vector3d relative_velocity;
     public double creation_ut;
   }
   private static readonly Dictionary<Guid, CoherentCreation>
@@ -599,27 +591,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         parent == kerbal || !plugin_.HasVessel(parent.id.ToString())) {
       return;
     }
-    // The state is sampled once, here, and deliberately never refreshed: this
-    // is the only instant at which the scene relationship is intact.  Until
-    // the new vessel is adopted it does not receive our world corrections, so
-    // its rigidbody drifts away from its parent by the Krakensbane frame
-    // velocity every tick (measured in-game: 2,098 m per tick in low orbit
-    // around a red dwarf 40 ly out) — any later scene-relative sample would
-    // measure the very drift being corrected.  The position is the part
-    // offset and the velocity is zero; the stock spawn gives the Kerbal the
-    // point velocity of the hatch, so both are metre- and metre-per-second-
-    // accurate, three orders of magnitude inside the unload radius.
     coherent_creations_[kerbal.id] = new CoherentCreation{
         parent_id = parent.id,
-        relative_position =
-            ((Vector3d)action.to.transform.position -
-             (Vector3d)action.from.transform.position).xzy,
-        relative_velocity = Vector3d.zero,
         creation_ut = Planetarium.GetUniversalTime()
     };
     Log.Info("Kerbal " + kerbal.vesselName + " (" + kerbal.id +
              ") went on EVA from " + parent.vesselName + " (" + parent.id +
-             "); recording its scene-relative state for coherent adoption");
+             "); recording its lineage for placement inheritance");
   }
 
   private void OnVesselSplit(Vessel parent, Vessel new_vessel) {
@@ -628,26 +606,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         !plugin_.HasVessel(parent.id.ToString())) {
       return;
     }
-    // The state is sampled once, here, and never refreshed, for the same
-    // reason as in `OnCrewOnEva`.  Unlike there, the new vessel's parts are
-    // live rigidbodies that were simulated as part of its parent until this
-    // instant, so the relative velocity is meaningful.  The decoupler's
-    // ejection impulse may still be queued rather than applied, in which case
-    // it is missing from the sample; that is metres per second against the
-    // kilometres at stake, and the loaded path re-derives the state anyway
-    // whenever the vessel is in the physics bubble.
-    UnityEngine.Rigidbody root_rb = new_vessel.rootPart.rb;
     coherent_creations_[new_vessel.id] = new CoherentCreation{
         parent_id = parent.id,
-        relative_position =
-            ((Vector3d)root_rb.worldCenterOfMass - parent.CoMD).xzy,
-        relative_velocity =
-            ((Vector3d)root_rb.velocity - parent.rb_velocityD).xzy,
         creation_ut = Planetarium.GetUniversalTime()
     };
     Log.Info("Vessel " + new_vessel.vesselName + " (" + new_vessel.id +
              ") split from " + parent.vesselName + " (" + parent.id +
-             "); recording its scene-relative state for coherent adoption");
+             "); recording its lineage for placement inheritance");
   }
 
   private bool VesselHasPartsOwnedElsewhere(Vessel vessel) {
@@ -669,7 +634,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       CoherentCreation creation = pair.Value;
       // The record deliberately outlives the adoption: an unready Kerbal is
       // repeatedly removed from the plugin and reinserted while it settles,
-      // and each reinsertion must be coherent, not just the first one.
+      // and each reinsertion must inherit the placement, not just the first.
       if (FlightGlobals.FindVessel(pair.Key) == null ||
           FlightGlobals.FindVessel(creation.parent_id) == null ||
           Planetarium.GetUniversalTime() - creation.creation_ut >
@@ -1566,39 +1531,15 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
           Profiler.EndSample();
         } else if (inserted) {
           Profiler.BeginSample("InsertUnloadedPart");
-          // The state produced by the stock scene-to-orbit conversion; its
-          // epoch bookkeeping disagrees with our scene mapping by a few ticks
-          // times the Krakensbane frame velocity.
+          // The stock scene-to-orbit conversion; its epoch bookkeeping lags
+          // our scene mapping by about a tick of frame velocity.  New
+          // vessels insert loaded in practice; a packed-at-birth split
+          // carries the lag until it unpacks, which exceeds the unload
+          // radius only beyond ~110 km/s of cruise.
           var initial_state = new QP{
               q = (XYZ)vessel.orbit.pos,
               p = (XYZ)vessel.orbit.vel
           };
-          if (coherent_creations_.TryGetValue(vessel.id,
-                                              out CoherentCreation creation)) {
-            Vessel parent_vessel = FlightGlobals.FindVessel(creation.parent_id);
-            string parent_guid = creation.parent_id.ToString();
-            // The same-body check keeps the re-parenting side effect of
-            // `VesselFromParent` benign.
-            if (parent_vessel != null &&
-                parent_vessel.mainBody == vessel.mainBody &&
-                plugin_.HasVessel(parent_guid)) {
-              QP parent_state = plugin_.VesselFromParent(main_body_index,
-                                                         parent_guid);
-              var coherent_state = new QP{
-                  q = (XYZ)((Vector3d)parent_state.q +
-                            creation.relative_position),
-                  p = (XYZ)((Vector3d)parent_state.p +
-                            creation.relative_velocity)
-              };
-              Log.Info("Adopting " + vessel.vesselName + " (" + vessel_guid +
-                       ") from the state of its parent vessel " +
-                       parent_vessel.vesselName + "; this moves it by " +
-                       ((Vector3d)coherent_state.q -
-                        (Vector3d)initial_state.q).magnitude +
-                       " m relative to the stock orbit");
-              initial_state = coherent_state;
-            }
-          }
           var parts = vessel.protoVessel.protoPartSnapshots;
           // For reasons that are unclear, the asteroid spawning code sometimes
           // generates the same flightID twice; we regenerate the flightID on
