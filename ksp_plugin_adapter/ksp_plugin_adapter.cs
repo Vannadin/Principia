@@ -167,6 +167,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   }
 
   private KSP.UI.Screens.SpaceTracking space_tracking_;
+  private Guid? last_tracking_station_selection_;
 
   private KSP.UI.Screens.SpaceTracking space_tracking {
     get {
@@ -2649,6 +2650,15 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     if (!PluginRunning()) {
       return;
     }
+    if (HighLogic.LoadedScene == GameScenes.TRACKSTATION) {
+      Guid? selected = space_tracking?.SelectedVessel?.id;
+      if (selected != last_tracking_station_selection_) {
+        last_tracking_station_selection_ = selected;
+        Log.Info("Tracking station selection: " +
+                 (selected?.ToString() ?? "none") + "; map view enabled = " +
+                 MapView.MapIsEnabled);
+      }
+    }
     foreach (var celestial in FlightGlobals.Bodies.Where(
                  c => c.MapObject?.uiNode != null)) {
       celestial.MapObject.uiNode.OnClick -= OnCelestialNodeClick;
@@ -2656,11 +2666,16 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       RemoveStockTrajectoriesIfNeeded(celestial);
     }
     foreach (var vessel in FlightGlobals.Vessels.Where(
-                 v => v.mapObject?.uiNode != null)) {
-      // There is no way to check if we have already added a callback to an
-      // event...
-      vessel.mapObject.uiNode.OnClick -= OnVesselNodeClick;
-      vessel.mapObject.uiNode.OnClick += OnVesselNodeClick;
+                 v => v.orbitDriver?.Renderer != null)) {
+      if (vessel.mapObject?.uiNode != null) {
+        // There is no way to check if we have already added a callback to an
+        // event...
+        vessel.mapObject.uiNode.OnClick -= OnVesselNodeClick;
+        vessel.mapObject.uiNode.OnClick += OnVesselNodeClick;
+      }
+      // In the tracking station a vessel may have no map node, but its stock
+      // orbit line still draws — through the sun-centric absolute at float32,
+      // which is broken at interstellar distances; suppress it regardless.
       RemoveStockTrajectoriesIfNeeded(vessel);
     }
     string main_vessel_guid = PredictedVessel()?.id.ToString();
