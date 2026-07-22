@@ -180,6 +180,12 @@ DiscreteTrajectory<Barycentric>::value_type const& PresentState(
       !psychohistory->empty()) {
     return psychohistory->back();
   }
+  // Only freshly constructed vessels should land here; with more than the
+  // history present, `back()` may be a prediction endpoint.
+  LOG_IF(WARNING, trajectory.segments().size() > 1)
+      << "Present state read from the end of "
+      << trajectory.segments().size()
+      << " segments with an unprepared psychohistory";
   return trajectory.back();
 }
 
