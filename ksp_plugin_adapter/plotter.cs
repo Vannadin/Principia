@@ -37,6 +37,9 @@ class Plotter {
     }
     var colour = adapter_.plotting_frame_selector_.Primary()
         .orbitDriver?.Renderer?.orbitColor ?? XKCDColors.SunshineYellow;
+    CelestialBody equipotential_reference =
+        adapter_.plotting_frame_selector_.Centre() ??
+        adapter_.plotting_frame_selector_.Primary();
     for (int i = 0; i < number_of_equipotentials; ++i) {
       planetarium.PlanetariumPlotEquipotential(
           Plugin,
@@ -46,7 +49,8 @@ class Plotter {
           out int vertex_count,
           out XYZ anchor);
       DrawLineMesh(equipotential_meshes_[i], vertex_count, anchor, colour,
-                   GLLines.Style.Solid);
+                   GLLines.Style.Solid,
+                   equipotential_reference?.position);
     }
   }
 
@@ -66,6 +70,9 @@ class Plotter {
                                       double? prediction_t_max,
                                       double? flight_plan_t_max) {
     if (main_vessel_guid != null) {
+      Vessel main_vessel =
+          FlightGlobals.FindVessel(new Guid(main_vessel_guid));
+      Vector3d? main_reference = main_vessel?.GetWorldPos3D();
       {
         planetarium.PlanetariumPlotPsychohistory(
             Plugin,
@@ -80,7 +87,8 @@ class Plotter {
                      vertex_count,
                      anchor,
                      adapter_.history_colour,
-                     adapter_.history_style);
+                     adapter_.history_style,
+                     main_reference);
       }
       {
         planetarium.PlanetariumPlotPrediction(Plugin,
@@ -94,7 +102,8 @@ class Plotter {
                      vertex_count,
                      anchor,
                      adapter_.prediction_colour,
-                     adapter_.prediction_style);
+                     adapter_.prediction_style,
+                     main_reference);
       }
 
       // Main vessel flight plan.
@@ -127,18 +136,20 @@ class Plotter {
                        colour,
                        is_burn
                            ? adapter_.burn_style
-                           : adapter_.flight_plan_style);
+                           : adapter_.flight_plan_style,
+                       main_reference);
         }
       }
     }
 
     // Target psychohistory and prediction.
-    string target_id = FlightGlobals.fetch.VesselTarget?.GetVessel()?.id.
-        ToString();
+    Vessel target_vessel = FlightGlobals.fetch.VesselTarget?.GetVessel();
+    string target_id = target_vessel?.id.ToString();
     if (FlightGlobals.ActiveVessel != null &&
         !adapter_.plotting_frame_selector_.target_frame_selected &&
         target_id != null &&
         Plugin.HasVessel(target_id)) {
+      Vector3d target_reference = target_vessel.GetWorldPos3D();
       {
         planetarium.PlanetariumPlotPsychohistory(
             Plugin,
@@ -153,7 +164,8 @@ class Plotter {
                      vertex_count,
                      anchor,
                      adapter_.target_history_colour,
-                     adapter_.target_history_style);
+                     adapter_.target_history_style,
+                     target_reference);
       }
       {
         planetarium.PlanetariumPlotPrediction(
@@ -168,7 +180,8 @@ class Plotter {
                      vertex_count,
                      anchor,
                      adapter_.target_prediction_colour,
-                     adapter_.target_prediction_style);
+                     adapter_.target_prediction_style,
+                     target_reference);
       }
     }
   }
@@ -216,7 +229,8 @@ class Plotter {
                      vertex_count,
                      anchor,
                      colour,
-                     GLLines.Style.Faded);
+                     GLLines.Style.Faded,
+                     root.position);
       }
 
       if (main_vessel_guid != null) {
@@ -235,7 +249,8 @@ class Plotter {
                      vertex_count,
                      anchor,
                      colour,
-                     GLLines.Style.Solid);
+                     GLLines.Style.Solid,
+                     root.position);
       }
     }
     foreach (CelestialBody child in root.orbitingBodies) {
@@ -252,24 +267,39 @@ class Plotter {
     }
   }
 
+  // The scene's world-to-scaled transform and the affine map given to the
+  // planetarium disagree by the float32 rounding of the transform state —
+  // ~1e8 m at interstellar magnitudes.  Rebasing a mesh by this correction,
+  // evaluated at a reference near its geometry, draws it through the scene's
+  // own mapping there, so the disagreement is common-mode with the icons and
+  // sprites the lines are compared against.
+  private static Vector3d SceneMappingCorrection(Vector3d reference_world) {
+    return (Vector3d)ScaledSpace.LocalToScaledSpace(reference_world) -
+           (reference_world - GLLines.current_scaled_space_origin) *
+               ScaledSpace.InverseScaleFactor;
+  }
+
   private void DrawLineMesh(ref UnityEngine.Mesh mesh,
                             int vertex_count,
                             XYZ anchor,
                             UnityEngine.Color colour,
-                            GLLines.Style style) {
+                            GLLines.Style style,
+                            Vector3d? scene_reference_world = null) {
     // Construct the mesh on the first call because Unity doesn't want us to do
     // that at construction.
     if (mesh == null) {
       mesh = MakeDynamicMesh();
     }
-    DrawLineMesh(mesh, vertex_count, anchor, colour, style);
+    DrawLineMesh(mesh, vertex_count, anchor, colour, style,
+                 scene_reference_world);
   }
 
   private void DrawLineMesh(UnityEngine.Mesh mesh,
                             int vertex_count,
                             XYZ anchor,
                             UnityEngine.Color colour,
-                            GLLines.Style style) {
+                            GLLines.Style style,
+                            Vector3d? scene_reference_world = null) {
     if (vertex_count > VertexBuffer.size) {
       Log.Fatal("Trying to draw " +
                 vertex_count +
@@ -313,13 +343,20 @@ class Plotter {
     mesh.RecalculateBounds();
     // The vertices are relative to the anchor, whose single float rounding
     // here is common-mode over the mesh; drawing at the anchor reassembles
-    // their scaled-space positions.
+    // their scaled-space positions.  A nonzero anchor is rebased on the
+    // scene's own mapping at the reference; zero is the stock bit-identical
+    // path, left untouched.
+    Vector3d translation = (Vector3d)anchor;
+    if (scene_reference_world.HasValue &&
+        (anchor.x != 0 || anchor.y != 0 || anchor.z != 0)) {
+      translation += SceneMappingCorrection(scene_reference_world.Value);
+    }
     // If the lines are drawn in layer 31 (Vectors), which sounds more
     // appropriate, they vanish when zoomed out.  Layer 9 works; pay no
     // attention to its name.
     UnityEngine.Graphics.DrawMesh(
         mesh,
-        (UnityEngine.Vector3)anchor,
+        (UnityEngine.Vector3)translation,
         UnityEngine.Quaternion.identity,
         GLLines.line_material,
         (int)PrincipiaPluginAdapter.UnityLayers.Atmosphere,

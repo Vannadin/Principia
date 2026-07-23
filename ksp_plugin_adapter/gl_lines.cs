@@ -35,6 +35,10 @@ internal static class GLLines {
     }
   }
 
+  // The world position of the scaled-space origin as given to the current
+  // planetarium; `Plotter` rebases mesh anchors against it.
+  public static Vector3d current_scaled_space_origin { get; private set; }
+
   public static DisposablePlanetarium NewPlanetarium(IntPtr plugin,
                                                      XYZ sun_world_position) {
     UnityEngine.Camera camera = PlanetariumCamera.Camera;
@@ -66,6 +70,8 @@ internal static class GLLines {
     double m11 = camera.projectionMatrix[1, 1];
     double field_of_view = Math.Atan2(Math.Sqrt(m00 * m00 + m11 * m11),
                                       m00 * m11);
+    current_scaled_space_origin =
+        ScaledSpace.ScaledToLocalSpace(Vector3d.zero);
     return plugin.PlanetariumCreate(sun_world_position,
                                     (XYZ)(Vector3d)opengl_camera_x_in_world,
                                     (XYZ)(Vector3d)opengl_camera_y_in_world,
@@ -75,8 +81,8 @@ internal static class GLLines {
                                     field_of_view,
                                     ScaledSpace.InverseScaleFactor,
                                     2 * Math.PI / (360 * 60) /*1 arc minute*/,
-                                    scaled_space_origin: (XYZ)ScaledSpace.
-                                        ScaledToLocalSpace(Vector3d.zero));
+                                    scaled_space_origin:
+                                        (XYZ)current_scaled_space_origin);
   }
 
   private static UnityEngine.Vector3 WorldToMapScreen(Vector3d world) {
