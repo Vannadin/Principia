@@ -155,12 +155,12 @@ class Planetarium {
   // subsystem and anchor relative to which the positions of `trajectory` are
   // represented.  If `anchor_out` is not null and the ephemeris has multiple
   // subsystems, the vertices passed to `add_point` are expressed relative to
-  // an anchor near the geometry — the first plotted point — whose scaled-space
-  // coordinates are returned in `anchor_out`; the vertices then quantize at
-  // the float ULP of the geometry's own span instead of that of its distance
-  // to the scaled-space origin, and the caller must translate the drawn mesh
-  // by the anchor.  With a single subsystem the anchor is zero and the
-  // vertices reproduce the absolute rendering bit for bit.
+  // an anchor at the camera position, whose scaled-space coordinates are
+  // returned in `anchor_out`; the vertices then quantize at the float ULP of
+  // their distance from the camera instead of that of their distance to the
+  // scaled-space origin, and the caller must translate the drawn mesh by the
+  // anchor.  With a single subsystem the anchor is zero and the vertices
+  // reproduce the absolute rendering bit for bit.
   void PlotMethod4(
       Trajectory<Barycentric> const& trajectory,
       DiscreteTrajectory<Barycentric>::iterator begin,

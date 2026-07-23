@@ -214,18 +214,19 @@ void Planetarium::PlotMethod4(
 
   Time Δt = final_time - previous_time;
 
-  // Anchoring the vertices at the first plotted point bounds their float
-  // rounding by the ULP of the geometry's span; subtracting a zero anchor
-  // leaves them bit-identical to the absolute rendering.
-  R3Element<double> const initial_scaled_space_point =
-      plotting_to_scaled_space_(previous_time, previous_position);
+  // Anchoring the vertices at the camera bounds their float rounding by the
+  // ULP of their distance from the camera — angularly sub-pixel from any
+  // viewpoint — whereas an anchor on the geometry lets the end of a long
+  // trajectory far from it quantize visibly as the camera closes in on it.
+  // Subtracting a zero anchor leaves the vertices bit-identical to the
+  // absolute rendering.
   R3Element<double> anchor{};
   if (anchor_out != nullptr && ephemeris_->number_of_subsystems() > 1) {
-    anchor = initial_scaled_space_point;
+    anchor = plotting_to_scaled_space_(previous_time, perspective_.camera());
     *anchor_out = anchor;
   }
-  add_point(
-      ScaledSpacePoint::FromCoordinates(initial_scaled_space_point - anchor));
+  add_point(ScaledSpacePoint::FromCoordinates(
+      plotting_to_scaled_space_(previous_time, previous_position) - anchor));
   int points_added = 1;
 
   Instant t;

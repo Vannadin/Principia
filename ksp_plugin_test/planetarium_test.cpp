@@ -27,6 +27,7 @@
 #include "geometry/instant.hpp"
 #include "geometry/orthogonal_map.hpp"
 #include "geometry/perspective.hpp"
+#include "geometry/r3_element.hpp"
 #include "geometry/rotation.hpp"
 #include "geometry/sign.hpp"
 #include "geometry/signature.hpp"
@@ -86,6 +87,7 @@ using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
 using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_perspective;
+using namespace principia::geometry::_r3_element;
 using namespace principia::geometry::_rotation;
 using namespace principia::geometry::_sign;
 using namespace principia::geometry::_signature;
@@ -470,6 +472,74 @@ TEST_F(PlanetariumTest, PlotMethod4WithAnchor) {
               with_anchor[i].z != without_anchor[i].z;
   }
   EXPECT_TRUE(differs);
+}
+
+// The render anchor returned by `PlotMethod4` is the camera position: the
+// float vertices then quantize at the ULP of their distance from the camera,
+// which is angularly sub-pixel wherever the camera looks.
+TEST_F(PlanetariumTest, PlotMethod4CameraAnchor) {
+  DiscreteTrajectory<Barycentric> discrete_trajectory;
+  AppendTrajectoryTimeline(/*from=*/NewCircularTrajectoryTimeline<Barycentric>(
+                                        /*period=*/10 * Second,
+                                        /*r=*/3 * Metre,
+                                        /*Δt=*/1 * Second,
+                                        /*t1=*/t0_,
+                                        /*t2=*/t0_ + 11 * Second),
+                           /*to=*/discrete_trajectory);
+  EXPECT_CALL(mock_ephemeris_, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+
+  Planetarium::Parameters const parameters(
+      /*sphere_radius_multiplier=*/1,
+      /*angular_resolution=*/0 * Degree,
+      /*field_of_view=*/90 * Degree);
+  Planetarium const planetarium(parameters,
+                                perspective_,
+                                &mock_ephemeris_,
+                                &plotting_frame_,
+                                plotting_to_scaled_space_);
+
+  auto const plot = [&planetarium, &discrete_trajectory](
+                        R3Element<double>* const anchor_out) {
+    std::vector<ScaledSpacePoint> points;
+    planetarium.PlotMethod4(
+        discrete_trajectory,
+        discrete_trajectory.front().time,
+        discrete_trajectory.back().time,
+        /*reverse=*/false,
+        [&points](ScaledSpacePoint const& p) { points.push_back(p); },
+        /*max_points=*/std::numeric_limits<int>::max(),
+        /*minimal_distance=*/nullptr,
+        Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+        anchor_out);
+    return points;
+  };
+
+  R3Element<double> anchor;
+  auto const relative = plot(&anchor);
+  auto const absolute = plot(/*anchor_out=*/nullptr);
+
+  // The anchor is the scaled-space camera position, exactly — and it is off
+  // the geometry, so this discriminates it from any anchor on the line.
+  R3Element<double> const camera =
+      plotting_to_scaled_space_(t0_, perspective_.camera());
+  EXPECT_NE(camera.Norm(), 0);
+  EXPECT_EQ(camera.x, anchor.x);
+  EXPECT_EQ(camera.y, anchor.y);
+  EXPECT_EQ(camera.z, anchor.z);
+
+  // The vertices are anchor-relative: translating them back by the anchor
+  // reassembles the absolute rendering to within the float roundings.
+  ASSERT_FALSE(relative.empty());
+  ASSERT_EQ(absolute.size(), relative.size());
+  for (int i = 0; i < relative.size(); ++i) {
+    double const reassembly_error =
+        (R3Element<double>(relative[i].x, relative[i].y, relative[i].z) +
+         anchor -
+         R3Element<double>(absolute[i].x, absolute[i].y, absolute[i].z))
+            .Norm();
+    EXPECT_LE(reassembly_error, 2e-9) << "vertex " << i;
+  }
 }
 
 TEST_F(PlanetariumTest, PlotMethod1) {

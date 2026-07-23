@@ -3466,9 +3466,10 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRenderShapeIsExact) {
 // real and the drawn line churned frame to frame; with the origin left at
 // interstellar magnitude they quantized at ~2.5e10 m and the line shattered.
 // Anchored plotting must instead bound every vertex's error by the ULP of its
-// distance to the plotted geometry itself, wherever the origin is.
+// distance to the camera — angularly sub-pixel from the actual viewpoint —
+// wherever the origin is.
 TEST_F(PluginIntegrationTestWithoutPlugin,
-       PlotMethod4AnchorsVerticesNearTheGeometry) {
+       PlotMethod4AnchorsVerticesAtTheCamera) {
   Index const star_a = 0;
   Index const star_b = 1;
   auto plugin =
@@ -3585,30 +3586,36 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
         {vessel.subsystem(), vessel.anchor()},
         &anchor);
     ASSERT_GT(vertices.size(), 3);
-    ASSERT_EQ(reference.size(), vertices.size());
+    // The anchor is the camera position, exactly; its conversion is recorded
+    // as the first `reference` entry, ahead of the vertices.
+    ASSERT_EQ(reference.size(), vertices.size() + 1);
+    EXPECT_EQ(anchor.x, reference.front().x);
+    EXPECT_EQ(anchor.y, reference.front().y);
+    EXPECT_EQ(anchor.z, reference.front().z);
+    reference.erase(reference.begin());
 
     // The guarantees, asserted as the adapter consumes them.
     // SHAPE: the float vertex buffer alone reproduces the geometry relative
-    // to the anchor at the float ULP of each vertex's distance from it,
-    // irrespective of where the scaled-space origin is; 6000 is the scale
-    // factor.
+    // to the anchor at the float ULP of each vertex's distance from the
+    // camera, irrespective of where the scaled-space origin is; 6000 is the
+    // scale factor.
     for (int i = 0; i < vertices.size(); ++i) {
       R3Element<double> const vertex(vertices[i].x,
                                      vertices[i].y,
                                      vertices[i].z);
       double const shape_error_in_metres =
           (vertex - (reference[i] - anchor)).Norm() * 6000;
-      double const distance_from_geometry_in_metres =
-          (reference[i] - reference.front()).Norm() * 6000;
+      double const distance_from_camera_in_metres =
+          (reference[i] - anchor).Norm() * 6000;
       EXPECT_LE(shape_error_in_metres,
-                1e-3 + 1.5e-7 * distance_from_geometry_in_metres)
+                1e-3 + 1.5e-7 * distance_from_camera_in_metres)
           << "origin at " << scaled_space_origin << ", vertex " << i;
     }
     // PLACEMENT: the adapter translates the mesh by the float-cast anchor,
     // one rounding common to every vertex — it rigidly shifts the mesh by at
-    // most the ULP of the anchor's own magnitude (zero once the game
-    // recentres the origin near the geometry, which keeps the anchor small)
-    // and cannot affect the shape asserted above.
+    // most the ULP of the anchor's own magnitude (small once the game
+    // recentres the origin at the camera focus, which keeps the camera near
+    // the origin) and cannot affect the shape asserted above.
     R3Element<double> const float_anchor(static_cast<float>(anchor.x),
                                          static_cast<float>(anchor.y),
                                          static_cast<float>(anchor.z));
@@ -4156,9 +4163,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   }
 
   // The map-view vertex path over the same anchored void flight plan: the
-  // plotted float vertices are anchored at the first plotted point, so they
-  // carry the ULP of the geometry's own span rather than that of its
-  // distance to the scaled-space origin (the lattice-anchored-rendering
+  // plotted float vertices are anchored at the camera, so they carry the ULP
+  // of their distance from it — angularly sub-pixel — rather than that of
+  // their distance to the scaled-space origin (the lattice-anchored-rendering
   // render check of this mission).
   {
     std::vector<R3Element<double>> reference;
@@ -4200,14 +4207,20 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
     // angle, so the adaptive sampling emits only the two endpoints — which
     // suffice here: the far endpoint carries the whole void span.
     ASSERT_GE(vertices.size(), 2);
-    ASSERT_EQ(reference.size(), vertices.size());
-    // The anchor is the first plotted point, exactly.
+    // The anchor is the camera position, exactly; its conversion is recorded
+    // as the first `reference` entry, ahead of the vertices.  The camera sits
+    // at the plotting-frame origin here, so the anchor is zero.
+    ASSERT_EQ(reference.size(), vertices.size() + 1);
     EXPECT_EQ(anchor.x, reference.front().x);
     EXPECT_EQ(anchor.y, reference.front().y);
     EXPECT_EQ(anchor.z, reference.front().z);
-    // SHAPE: the float vertex buffer alone reproduces the plan's geometry
-    // relative to the anchor at the float ULP of each vertex's distance from
-    // it; the adapter's float-cast of the anchor is a single common-mode
+    EXPECT_EQ(anchor.x, 0);
+    EXPECT_EQ(anchor.y, 0);
+    EXPECT_EQ(anchor.z, 0);
+    reference.erase(reference.begin());
+    // SHAPE: the float vertex buffer reproduces the plan's geometry relative
+    // to the anchor at the float ULP of each vertex's distance from the
+    // camera; the adapter's float-cast of the anchor is a single common-mode
     // translation which cannot affect it.
     for (int i = 0; i < vertices.size(); ++i) {
       R3Element<double> const vertex(vertices[i].x,
@@ -4215,10 +4228,10 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
                                      vertices[i].z);
       double const shape_error_in_metres =
           (vertex - (reference[i] - anchor)).Norm() * 6000;
-      double const distance_from_geometry_in_metres =
-          (reference[i] - reference.front()).Norm() * 6000;
+      double const distance_from_camera_in_metres =
+          (reference[i] - anchor).Norm() * 6000;
       EXPECT_LE(shape_error_in_metres,
-                1e-3 + 1.5e-7 * distance_from_geometry_in_metres)
+                1e-3 + 1.5e-7 * distance_from_camera_in_metres)
           << "vertex " << i;
     }
   }
