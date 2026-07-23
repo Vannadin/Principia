@@ -347,6 +347,11 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
   // Queries the void-navigation state of the active vessel; returns true and
   // caches the readouts when it is coasting in the interstellar void.
   private bool UpdateVoidNavigationState() {
+    // The active vessel lingers when leaving the flight scene, e.g., for the
+    // KSC; navigation only applies in flight.
+    if (!HighLogic.LoadedSceneIsFlight) {
+      return false;
+    }
     // A single-subsystem (stock) system has no interstellar void; skip the
     // interface call on that common path.
     RebuildSubsystemNamesIfNeeded();
