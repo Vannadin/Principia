@@ -51,8 +51,20 @@ internal static class GLLines {
     UnityEngine.Vector3 opengl_camera_z_in_world =
         camera.cameraToWorldMatrix.MultiplyVector(
             new UnityEngine.Vector3(0, 0, 1));
-    UnityEngine.Vector3 camera_position_in_world =
-        ScaledSpace.ScaledToLocalSpace(camera.transform.position);
+    // Reconstruct the camera's world position from its focus through the
+    // scene's forward mapping: the inverse transform sample drifts from the
+    // forward one by the float32 rounding of the transform state (~1e8 m at
+    // interstellar magnitudes), which overstates the camera distance at close
+    // focus and starves the adaptive plotting.
+    Vector3d camera_scaled = (Vector3d)camera.transform.position;
+    Vector3d? focus_world = CameraFocusWorldPosition();
+    Vector3d camera_position_in_world =
+        focus_world.HasValue
+            ? focus_world.Value +
+              (camera_scaled -
+               (Vector3d)ScaledSpace.LocalToScaledSpace(focus_world.Value)) *
+                  ScaledSpace.ScaleFactor
+            : (Vector3d)ScaledSpace.ScaledToLocalSpace(camera_scaled);
 
     // For explanations regarding the OpenGL projection matrix, see
     // http://www.songho.ca/opengl/gl_projectionmatrix.html.  The on-centre
@@ -76,7 +88,7 @@ internal static class GLLines {
                                     (XYZ)(Vector3d)opengl_camera_x_in_world,
                                     (XYZ)(Vector3d)opengl_camera_y_in_world,
                                     (XYZ)(Vector3d)opengl_camera_z_in_world,
-                                    (XYZ)(Vector3d)camera_position_in_world,
+                                    (XYZ)camera_position_in_world,
                                     focal: 1,
                                     field_of_view,
                                     ScaledSpace.InverseScaleFactor,
@@ -88,6 +100,17 @@ internal static class GLLines {
   private static UnityEngine.Vector3 WorldToMapScreen(Vector3d world) {
     return PlanetariumCamera.Camera.WorldToScreenPoint(
         ScaledSpace.LocalToScaledSpace(world));
+  }
+
+  private static Vector3d? CameraFocusWorldPosition() {
+    MapObject target = PlanetariumCamera.fetch?.target;
+    if (target?.vessel != null) {
+      return target.vessel.GetWorldPos3D();
+    }
+    if (target?.celestialBody != null) {
+      return target.celestialBody.position;
+    }
+    return null;
   }
 
   private static UnityEngine.Material line_material_;
