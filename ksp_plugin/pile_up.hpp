@@ -7,6 +7,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "absl/status/status.h"
 #include "absl/synchronization/mutex.h"
@@ -146,6 +147,37 @@ class PileUp {
               int subsystem,
               std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
+  // A single affine re-expression of a placement at `epoch`: the trajectory is
+  // translated by `displacement + velocity_offset * (t - epoch)` in position
+  // and by `velocity_offset` in velocity, and it now lives in `subsystem`
+  // under `anchor`.  `RebaseIfNeeded` applies it to the pile-up and returns it
+  // so that the plugin can replay it onto every member vessel.
+  struct PlacementChange {
+    Displacement<Barycentric> displacement;
+    Velocity<Barycentric> velocity_offset;
+    Instant epoch;
+    int subsystem;
+    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
+  };
+
+  // Maintains the two representation invariants of an interstellar system.
+  // Dominance: if another subsystem gravitationally dominates the pile-up —
+  // its μ/d² exceeds that of the current subsystem by a hysteresis margin —
+  // retags the pile-up (and its parts) to the dominant subsystem.  Uniform
+  // representation: adopts or renews an anchor whenever the represented
+  // coordinates or the anchor's affine term exceed the re-anchor bound, so
+  // that the ULP of the representation stays sub-millimetre everywhere.
+  // Applies the changes to the pile-up and returns them — at most a rebase
+  // followed by an anchor adoption — for the plugin to replay onto the member
+  // vessels.  Must not be called while the pile-up is being advanced.
+  std::vector<PlacementChange> RebaseIfNeeded();
+
+  // The bound on the represented coordinates and on the anchor's affine term
+  // beyond which the pile-up re-anchors; see `RebaseIfNeeded`.  A mutable
+  // static so that tests can lower it to exercise the re-anchor fold with a
+  // short coast instead of the years it otherwise requires.
+  static Length re_anchor_bound_for_testing_;
+
   std::list<not_null<Part*>> const& parts() const;
   Ephemeris<Barycentric>::FixedStepParameters const& fixed_step_parameters()
       const;
@@ -210,6 +242,23 @@ class PileUp {
       Bivector<AngularMomentum, NonRotatingPileUp> const& angular_momentum,
       not_null<Ephemeris<Barycentric>*> ephemeris,
       std::function<void()> deletion_callback);
+
+  // The present state of the pile-up: the end of its psychohistory when
+  // nonempty, the end of its trajectory otherwise (a freshly constructed
+  // pile-up, whose psychohistory has no point yet).  A pile-up never carries a
+  // prediction segment, so its trajectory end is always a present state.
+  DiscreteTrajectory<Barycentric>::value_type const& PresentState() const;
+
+  // Retags this pile-up (and its parts) into `subsystem` at `t`, folding the
+  // subsystem conversion into the anchor when anchored — leaving the
+  // represented coordinates bit-for-bit untouched — and translating the
+  // trajectory otherwise.  Returns the applied change.
+  PlacementChange RebaseToSubsystem(int subsystem, Instant const& t);
+
+  // Adopts an anchor at the pile-up's present state at `t` (composing with any
+  // current anchor) and re-expresses this pile-up (and its parts) under it.
+  // Returns the applied change.
+  PlacementChange AdoptAnchorAtPresentState(Instant const& t);
 
   // Sets `euler_solver_` and updates `rigid_pile_up_`.
   void MakeEulerSolver(InertiaTensor<NonRotatingPileUp> const& inertia_tensor,

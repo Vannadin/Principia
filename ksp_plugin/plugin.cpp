@@ -1066,14 +1066,38 @@ void Plugin::AdvanceTime(Instant const& t, Angle const& planetarium_rotation) {
   loaded_vessels_.clear();
 }
 
+void Plugin::ApplyPlacementChangesToVessels(
+    not_null<PileUp*> const pile_up,
+    std::vector<PileUp::PlacementChange> const& changes) {
+  if (changes.empty()) {
+    return;
+  }
+  // The pile-up already moved itself and retagged its shared parts; replay each
+  // change, in order, onto every member vessel found through its parts.
+  VesselSet members;
+  for (not_null<Part*> const part : pile_up->parts()) {
+    members.insert(FindOrDie(part_id_to_vessel_, part->part_id()));
+  }
+  for (not_null<Vessel*> const vessel : members) {
+    for (auto const& change : changes) {
+      vessel->ApplyPlacementChange(change.displacement,
+                                   change.velocity_offset,
+                                   change.epoch,
+                                   change.subsystem,
+                                   change.anchor);
+    }
+  }
+}
+
 void Plugin::CatchUpLaggingVessels(VesselSet& collided_vessels) {
   CHECK(!initializing_);
 
-  // Rebase the vessels that have crossed into another subsystem, and adopt,
-  // renew or drop void anchors — for loaded vessels too, whose paths are
-  // placement-aware.  This must happen while no pile-up is being advanced.
-  for (auto const& [_, vessel] : vessels_) {
-    vessel->RebaseIfNeeded();
+  // Rebase the pile-ups that have crossed into another subsystem, and adopt,
+  // renew or drop void anchors, replaying each change onto every member vessel
+  // — loaded vessels too, whose paths are placement-aware.  This must happen
+  // while no pile-up is being advanced.
+  for (auto* const pile_up : pile_ups_) {
+    ApplyPlacementChangesToVessels(pile_up, pile_up->RebaseIfNeeded());
   }
 
   // Start all the integrations in parallel.
@@ -1111,11 +1135,14 @@ not_null<std::unique_ptr<PileUpFuture>> Plugin::CatchUpVessel(
 
   // Find the vessel and the pile-up that contains it.
   Vessel& vessel = *FindOrDie(vessels_, vessel_guid);
-  vessel.RebaseIfNeeded();
   PileUp* pile_up = nullptr;
   vessel.ForSomePart([&pile_up](Part& part) {
     pile_up = part.containing_pile_up();
   });
+  // Rebase the pile-up if needed and replay the change onto every member
+  // vessel, not only the requested one; a second catch-up of the same pile-up
+  // re-evaluates against the updated pile-up and returns empty.
+  ApplyPlacementChangesToVessels(pile_up, pile_up->RebaseIfNeeded());
 
   return make_not_null_unique<PileUpFuture>(
       pile_up,

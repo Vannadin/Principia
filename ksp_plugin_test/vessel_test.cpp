@@ -39,6 +39,7 @@
 #include "physics/mock_ephemeris.hpp"
 #include "physics/rigid_motion.hpp"
 #include "physics/rotating_body.hpp"
+#include "physics/sector.hpp"
 #include "physics/tensors.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/quantities.hpp"
@@ -85,6 +86,7 @@ using namespace principia::physics::_massive_body;
 using namespace principia::physics::_mock_ephemeris;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_rotating_body;
+using namespace principia::physics::_sector;
 using namespace principia::physics::_tensors;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
@@ -187,305 +189,17 @@ TEST_F(VesselTest, Parent) {
   EXPECT_EQ(&other_celestial, vessel_.parent());
 }
 
-// The mass-based rebase boundary and its hysteresis, on an unequal pair of
-// subsystems: A (the vessel's, heavy) and B (light), separated by 4 × 10¹⁶ m.
-// The dominance boundary μ_A/d_A² = μ_B/d_B² is not the geometric midpoint —
-// it sits at d_B/d_A = √(μ_B/μ_A) — and switching representations further
-// requires the destination to dominate by the hysteresis margin, in either
-// direction.
-TEST_F(VesselTest, MassBasedRebaseHysteresis) {
-  // This test pins the dominance hysteresis in isolation: the coordinates
-  // used here exceed the production re-anchor bound, so raise it out of the
-  // way lest the uniform-representation invariant adopt anchors mid-test.
-  Length const saved_bound = Vessel::re_anchor_bound_for_testing_;
-  Vessel::re_anchor_bound_for_testing_ = 1e20 * Metre;
-  absl::Cleanup restore_bound = [saved_bound] {
-    Vessel::re_anchor_bound_for_testing_ = saved_bound;
-  };
-  Length const separation = 4e16 * Metre;
-  GravitationalParameter const μ_b =
-      1.3e20 * si::Unit<GravitationalParameter>;
-  GravitationalParameter const μ_a = 16 * μ_b;
-  Displacement<Barycentric> const b_from_a(
-      {separation, 0 * Metre, 0 * Metre});
-
-  EXPECT_CALL(ephemeris_, number_of_subsystems())
-      .WillRepeatedly(Return(2));
-  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(0))
-      .WillRepeatedly(ReturnRef(μ_a));
-  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(1))
-      .WillRepeatedly(ReturnRef(μ_b));
-  // The barycentre of each subsystem is at rest at its local origin.
-  EXPECT_CALL(ephemeris_, subsystem_barycentre(_, _))
-      .WillRepeatedly(Return(Barycentric::origin));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 0, _))
-      .WillRepeatedly(Return(Displacement<Barycentric>{}));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 1, _))
-      .WillRepeatedly(Return(Displacement<Barycentric>{}));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 1, _))
-      .WillRepeatedly(Return(-b_from_a));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 0, _))
-      .WillRepeatedly(Return(b_from_a));
-
-  Velocity<Barycentric> const v(
-      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
-  auto const at_x = [&](Length const& x) {
-    return DegreesOfFreedom<Barycentric>(
-        Barycentric::origin +
-            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
-        v);
-  };
-
-  // Past the geometric midpoint — nearer to B than to A — but A, sixteen
-  // times heavier, still dominates: no rebase.
-  AppendToVesselTrajectory(t0_ + 1 * Second, at_x(2.5e16 * Metre));
-  EXPECT_FALSE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(0, vessel_.subsystem());
-
-  // B dominates, but by less than the hysteresis margin: still no rebase.
-  AppendToVesselTrajectory(t0_ + 2 * Second, at_x(3.45e16 * Metre));
-  EXPECT_FALSE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(0, vessel_.subsystem());
-
-  // B dominates beyond the margin: the vessel is rebased, and its trajectory
-  // is now represented relative to B's local origin.
-  AppendToVesselTrajectory(t0_ + 3 * Second, at_x(3.6e16 * Metre));
-  EXPECT_TRUE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(1, vessel_.subsystem());
-  EXPECT_EQ(at_x(3.6e16 * Metre).position() - b_from_a,
-            vessel_.trajectory().back().degrees_of_freedom.position());
-
-  // Back on the A side of the dominance boundary — A is the (raw) dominant
-  // subsystem again — but not beyond the margin: the hysteresis keeps the
-  // vessel on B, so weaving around the boundary does not churn.
-  AppendToVesselTrajectory(t0_ + 4 * Second, at_x(3.0e16 * Metre - separation));
-  EXPECT_FALSE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(1, vessel_.subsystem());
-
-  // Deep into A's system: the margin is exceeded and the vessel returns.
-  AppendToVesselTrajectory(t0_ + 5 * Second, at_x(1.0e16 * Metre - separation));
-  EXPECT_TRUE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(0, vessel_.subsystem());
-}
-
-// A rebase into a subsystem whose local origin moves relative to the vessel's:
-// each point of the trajectory must be translated by the offset at the POINT's
-// own time and its velocity by the relative velocity of the origins.
-// Translating the whole history by the offset at a single instant would
-// misplace a point aged Δt by v_rel · Δt — a day of history against a
-// 300 km/s pair is off by 2.6 × 10¹⁰ m.
-TEST_F(VesselTest, RebaseTranslatesEachPointAtItsOwnTime) {
-  // This test pins the unanchored translation path in isolation; keep the
-  // uniform-representation invariant from anchoring the vessel first.
-  Length const saved_bound = Vessel::re_anchor_bound_for_testing_;
-  Vessel::re_anchor_bound_for_testing_ = 1e20 * Metre;
-  absl::Cleanup restore_bound = [saved_bound] {
-    Vessel::re_anchor_bound_for_testing_ = saved_bound;
-  };
-  Length const separation = 4e16 * Metre;
-  GravitationalParameter const μ_b =
-      1.3e20 * si::Unit<GravitationalParameter>;
-  GravitationalParameter const μ_a = 16 * μ_b;
-  Displacement<Barycentric> const b_from_a_at_t0(
-      {separation, 0 * Metre, 0 * Metre});
-  Velocity<Barycentric> const v_rel({300 * Kilo(Metre) / Second,
-                                     0 * Metre / Second,
-                                     0 * Metre / Second});
-  Instant const t0 = t0_;
-  auto const b_from_a = [&](Instant const& t) {
-    return b_from_a_at_t0 + v_rel * (t - t0);
-  };
-
-  EXPECT_CALL(ephemeris_, number_of_subsystems())
-      .WillRepeatedly(Return(2));
-  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(0))
-      .WillRepeatedly(ReturnRef(μ_a));
-  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(1))
-      .WillRepeatedly(ReturnRef(μ_b));
-  EXPECT_CALL(ephemeris_, subsystem_barycentre(_, _))
-      .WillRepeatedly(Return(Barycentric::origin));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 0, _))
-      .WillRepeatedly(Return(Displacement<Barycentric>{}));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 1, _))
-      .WillRepeatedly(Invoke([&](int, int, Instant const& t) {
-        return -b_from_a(t);
-      }));
-  EXPECT_CALL(ephemeris_, subsystem_velocity_conversion(0, 1))
-      .WillRepeatedly(Return(-v_rel));
-
-  Velocity<Barycentric> const v(
-      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
-  auto const at_x = [&](Length const& x) {
-    return DegreesOfFreedom<Barycentric>(
-        Barycentric::origin +
-            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
-        v);
-  };
-
-  // A day of history, then a point where B dominates beyond the margin.
-  Instant const t1 = t0 + 1 * Day;
-  AppendToVesselTrajectory(t0, at_x(3.5e16 * Metre));
-  AppendToVesselTrajectory(t1, at_x(3.8e16 * Metre));
-  EXPECT_TRUE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(1, vessel_.subsystem());
-
-  // The points are translated at their own times, not at the time of the
-  // rebase, and the velocities are translated by the origins' relative
-  // velocity.
-  auto const& front = vessel_.trajectory().front();
-  auto const& back = vessel_.trajectory().back();
-  EXPECT_EQ(at_x(3.5e16 * Metre).position() - b_from_a(t0),
-            front.degrees_of_freedom.position());
-  EXPECT_EQ(at_x(3.8e16 * Metre).position() - b_from_a(t1),
-            back.degrees_of_freedom.position());
-  EXPECT_EQ(v - v_rel, front.degrees_of_freedom.velocity());
-  EXPECT_EQ(v - v_rel, back.degrees_of_freedom.velocity());
-}
-
-// The uniform-representation invariant and the anchor-folding rebase.  The
-// policy is regime-blind — none of this depends on whether the far field
-// vanishes: coordinates beyond the re-anchor bound adopt an anchor in a
-// star's domain exactly as in the void (unanchored subsystem coordinates of
-// ~1e15 m quantize part geometry at 0.125 m — owner-visible gaps), and a
-// dominance retag of an anchored vessel folds the subsystem conversion into
-// the anchor, leaving every represented point bit for bit intact where the
-// old drop-and-translate would have rounded each point at the ULP of the
-// inter-subsystem distance.
-TEST_F(VesselTest, AnchoredRebaseFoldsConversionIntoAnchor) {
-  Length const saved_bound = Vessel::re_anchor_bound_for_testing_;
-  absl::Cleanup restore_bound = [saved_bound] {
-    Vessel::re_anchor_bound_for_testing_ = saved_bound;
-  };
-
-  Length const separation = 4e16 * Metre;
-  GravitationalParameter const μ_b =
-      1.3e20 * si::Unit<GravitationalParameter>;
-  GravitationalParameter const μ_a = 16 * μ_b;
-  Displacement<Barycentric> const b_from_a_at_t0(
-      {separation, 0 * Metre, 0 * Metre});
-  Velocity<Barycentric> const v_rel({300 * Kilo(Metre) / Second,
-                                     0 * Metre / Second,
-                                     0 * Metre / Second});
-  Instant const t0 = t0_;
-  auto const b_from_a = [&](Instant const& t) {
-    return b_from_a_at_t0 + v_rel * (t - t0);
-  };
-
-  EXPECT_CALL(ephemeris_, number_of_subsystems())
-      .WillRepeatedly(Return(2));
-  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(0))
-      .WillRepeatedly(ReturnRef(μ_a));
-  EXPECT_CALL(ephemeris_, subsystem_gravitational_parameter(1))
-      .WillRepeatedly(ReturnRef(μ_b));
-  EXPECT_CALL(ephemeris_, subsystem_barycentre(_, _))
-      .WillRepeatedly(Return(Barycentric::origin));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 0, _))
-      .WillRepeatedly(Return(Displacement<Barycentric>{}));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 1, _))
-      .WillRepeatedly(Return(Displacement<Barycentric>{}));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(0, 1, _))
-      .WillRepeatedly(Invoke([&](int, int, Instant const& t) {
-        return -b_from_a(t);
-      }));
-  EXPECT_CALL(ephemeris_, subsystem_conversion(1, 0, _))
-      .WillRepeatedly(Invoke([&](int, int, Instant const& t) {
-        return b_from_a(t);
-      }));
-  EXPECT_CALL(ephemeris_, subsystem_velocity_conversion(0, 1))
-      .WillRepeatedly(Return(-v_rel));
-
-  Velocity<Barycentric> const v(
-      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
-  auto const at_x = [&](Length const& x) {
-    return DegreesOfFreedom<Barycentric>(
-        Barycentric::origin +
-            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
-        v);
-  };
-
-  // Act 1: coordinates beyond the bound adopt an anchor — B raw-dominates
-  // here but within the hysteresis margin, so this is pure representation,
-  // no retag — and the true position survives the collapse bit for bit.
-  AppendToVesselTrajectory(t0, at_x(3.45e16 * Metre));
-  EXPECT_TRUE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(0, vessel_.subsystem());
-  ASSERT_TRUE(vessel_.anchor().has_value());
-  auto const anchor0 = *vessel_.anchor();
-  EXPECT_EQ(at_x(3.45e16 * Metre).position(),
-            vessel_.trajectory().back().degrees_of_freedom.position() +
-                anchor0.OffsetAt(t0));
-  EXPECT_EQ(Velocity<Barycentric>(),
-            vessel_.trajectory().back().degrees_of_freedom.velocity() +
-                anchor0.velocity - v);
-
-  // Act 2: a point where B dominates beyond the margin.  Raise the bound so
-  // that the retag is observed in isolation from re-anchoring.
-  Vessel::re_anchor_bound_for_testing_ = 1e20 * Metre;
-  Instant const t1 = t0 + 1 * Day;
-  DegreesOfFreedom<Barycentric> const represented_at_t1(
-      at_x(3.8e16 * Metre).position() - anchor0.OffsetAt(t1),
-      v - anchor0.velocity);
-  AppendToVesselTrajectory(t1, represented_at_t1);
-  auto const front_before = vessel_.trajectory().front().degrees_of_freedom;
-  auto const back_before = vessel_.trajectory().back().degrees_of_freedom;
-  EXPECT_TRUE(vessel_.RebaseIfNeeded());
-  EXPECT_EQ(1, vessel_.subsystem());
-  ASSERT_TRUE(vessel_.anchor().has_value());
-  auto const anchor1 = *vessel_.anchor();
-
-  // The money assertion: the represented points are bit-for-bit intact.
-  EXPECT_EQ(front_before.position(),
-            vessel_.trajectory().front().degrees_of_freedom.position());
-  EXPECT_EQ(front_before.velocity(),
-            vessel_.trajectory().front().degrees_of_freedom.velocity());
-  EXPECT_EQ(back_before.position(),
-            vessel_.trajectory().back().degrees_of_freedom.position());
-  EXPECT_EQ(back_before.velocity(),
-            vessel_.trajectory().back().degrees_of_freedom.velocity());
-
-  // The conversion was folded into the anchor: at two distinct epochs — which
-  // pins both the intercept and the slope of the affine fold — the new
-  // anchor differs from the old one by the (moving) conversion, up to the
-  // rounding of the fold at the ULP of the separation.
-  EXPECT_EQ(anchor0.velocity - v_rel, anchor1.velocity);
-  EXPECT_THAT((anchor1.OffsetAt(t0) -
-               (anchor0.OffsetAt(t0) - b_from_a(t0))).Norm(),
-              Lt(32 * Metre));
-  EXPECT_THAT((anchor1.OffsetAt(t1) -
-               (anchor0.OffsetAt(t1) - b_from_a(t1))).Norm(),
-              Lt(32 * Metre));
-
-  // Act 3: back at the production bound, in-domain coordinate growth renews
-  // the anchor; the true position moves by at most the documented sub-mm
-  // fold residual.
-  Vessel::re_anchor_bound_for_testing_ = saved_bound;
-  Instant const t2 = t1 + 1 * Second;
-  DegreesOfFreedom<Barycentric> const grown(
-      vessel_.trajectory().back().degrees_of_freedom.position() +
-          Displacement<Barycentric>({2e12 * Metre, 0 * Metre, 0 * Metre}),
-      vessel_.trajectory().back().degrees_of_freedom.velocity());
-  Position<Barycentric> const true_before =
-      grown.position() + anchor1.OffsetAt(t2);
-  AppendToVesselTrajectory(t2, grown);
-  EXPECT_TRUE(vessel_.RebaseIfNeeded());
-  ASSERT_TRUE(vessel_.anchor().has_value());
-  EXPECT_NE(anchor1, *vessel_.anchor());
-  Position<Barycentric> const true_after =
-      vessel_.trajectory().back().degrees_of_freedom.position() +
-      vessel_.anchor()->OffsetAt(t2);
-  EXPECT_THAT((true_after - true_before).Norm(), Lt(1 * Milli(Metre)));
-}
-
-// A re-anchor refreshes a flight plan's placement only once the gap between
-// the plan's anchor and the vessel's fresh one exceeds the refresh margin:
-// below it the plan keeps its placement — stale but correct, and the refresh
-// costs a full segment recomputation — and beyond it the plan is rebased onto
-// the vessel's anchor, capping the growth of its anchored coordinates.
+// An anchor adoption replayed onto the vessel by `ApplyPlacementChange`
+// refreshes a flight plan's placement only once the gap between the plan's
+// anchor and the vessel's fresh one exceeds the refresh margin: below it the
+// plan keeps its placement — stale but correct, and the refresh costs a full
+// segment recomputation — and beyond it the plan is rebased onto the vessel's
+// anchor, capping the growth of its anchored coordinates.
 TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
-  Length const saved_bound = Vessel::re_anchor_bound_for_testing_;
-  Vessel::re_anchor_bound_for_testing_ = 1e9 * Metre;
+  Length const saved_bound = PileUp::re_anchor_bound_for_testing_;
+  PileUp::re_anchor_bound_for_testing_ = 1e9 * Metre;
   absl::Cleanup restore_bound = [saved_bound] {
-    Vessel::re_anchor_bound_for_testing_ = saved_bound;
+    PileUp::re_anchor_bound_for_testing_ = saved_bound;
   };
 
   EXPECT_CALL(ephemeris_, t_min())
@@ -506,9 +220,15 @@ TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
             Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
         v);
   };
+  auto const anchor_at = [&](Length const& x, Instant const& epoch) {
+    return Ephemeris<Barycentric>::Anchor{
+        .offset = SectorDisplacement<Barycentric>::Split(
+            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre})),
+        .velocity = v,
+        .epoch = epoch};
+  };
 
-  // An unanchored vessel with a flight plan; the trajectory is unprepared, so
-  // its last point is the present state.
+  // An unanchored vessel with a flight plan.
   AppendToVesselTrajectory(t0_, at_x(4e9 * Metre));
   vessel_.CreateFlightPlan(t0_ + 3.0 * Second,
                            10 * Kilogram,
@@ -519,14 +239,21 @@ TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
   // First adoption: the gap between the plan's placement (unanchored) and the
   // new anchor is 4e9 m, within the 64-bound margin — the plan keeps its
   // placement.
-  vessel_.AdoptAnchor();
+  vessel_.ApplyPlacementChange(Displacement<Barycentric>{},
+                               Velocity<Barycentric>{},
+                               t0_,
+                               /*subsystem=*/0,
+                               anchor_at(4e9 * Metre, t0_));
   ASSERT_TRUE(vessel_.anchor().has_value());
   EXPECT_FALSE(vessel_.flight_plan().anchor().has_value());
 
   // The vessel drifts far from its anchor and re-anchors; the gap now exceeds
   // the margin and the plan is rebased onto the vessel's fresh anchor.
-  AppendToVesselTrajectory(t0_ + 1 * Second, at_x(1e11 * Metre));
-  vessel_.AdoptAnchor();
+  vessel_.ApplyPlacementChange(Displacement<Barycentric>{},
+                               Velocity<Barycentric>{},
+                               t0_ + 1 * Second,
+                               /*subsystem=*/0,
+                               anchor_at(1e11 * Metre, t0_ + 1 * Second));
   ASSERT_TRUE(vessel_.anchor().has_value());
   ASSERT_TRUE(vessel_.flight_plan().anchor().has_value());
   EXPECT_EQ(*vessel_.anchor(), *vessel_.flight_plan().anchor());

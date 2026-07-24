@@ -343,6 +343,13 @@ class Plugin {
   // `Planetarium.InverseRotAngle` is in degrees.
   virtual void AdvanceTime(Instant const& t, Angle const& planetarium_rotation);
 
+  // Replays each placement change the pile-up applied to itself onto every one
+  // of its member vessels (found through `part_id_to_vessel_`).  A no-op when
+  // `changes` is empty.  Must be called while no pile-up is being advanced.
+  void ApplyPlacementChangesToVessels(
+      not_null<PileUp*> pile_up,
+      std::vector<PileUp::PlacementChange> const& changes);
+
   // Advances time to `current_time_` for all pile ups that are not already
   // there, filling the tails of all their parts up to that instant; then
   // advances time on all vessels that are not yet at `current_time_`.  Inserts

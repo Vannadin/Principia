@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/cleanup/cleanup.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
@@ -16,6 +17,7 @@
 #include "base/not_null.hpp"
 #include "geometry/frame.hpp"
 #include "geometry/grassmann.hpp"
+#include "geometry/instant.hpp"
 #include "geometry/quaternion.hpp"
 #include "geometry/space.hpp"
 #include "gmock/gmock.h"
@@ -47,15 +49,18 @@ namespace principia {
 namespace ksp_plugin {
 
 using ::testing::DoAll;
+using ::testing::Invoke;
 using ::testing::IsEmpty;
 using ::testing::Lt;
 using ::testing::MockFunction;
 using ::testing::Return;
+using ::testing::ReturnRef;
 using ::testing::_;
 using namespace principia::astronomy::_epoch;
 using namespace principia::base::_not_null;
 using namespace principia::geometry::_frame;
 using namespace principia::geometry::_grassmann;
+using namespace principia::geometry::_instant;
 using namespace principia::geometry::_quaternion;
 using namespace principia::geometry::_space;
 using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_integrator;  // NOLINT
@@ -100,6 +105,16 @@ class TestablePileUp : public PileUp {
 
   DiscreteTrajectorySegmentIterator<Barycentric> psychohistory() const {
     return psychohistory_;
+  }
+
+  auto const& trajectory() const {
+    return trajectory_;
+  }
+
+  void AppendToTrajectory(
+      Instant const& t,
+      DegreesOfFreedom<Barycentric> const& degrees_of_freedom) {
+    CHECK_OK(trajectory_.Append(t, degrees_of_freedom));
   }
 
   PartTo<RigidMotion<RigidPart, NonRotatingPileUp>> const&
@@ -731,6 +746,333 @@ TEST_F(PileUpTest, SerializationCompatibility) {
                                      310.0 / 3.0 * Metre / Second}))),
           Return(absl::OkStatus())));
   EXPECT_OK(p->DeformAndAdvanceTime(J2000 + 1 * Second));
+}
+
+// The mass-based rebase boundary and its hysteresis, on an unequal pair of
+// subsystems: A (the pile-up's, heavy) and B (light), separated by 4 × 10¹⁶ m.
+// The dominance boundary μ_A/d_A² = μ_B/d_B² is not the geometric midpoint —
+// it sits at d_B/d_A = √(μ_B/μ_A) — and switching representations further
+// requires the destination to dominate by the hysteresis margin, in either
+// direction.
+TEST_F(PileUpTest, MassBasedRebaseHysteresis) {
+  // This test pins the dominance hysteresis in isolation: the coordinates
+  // used here exceed the production re-anchor bound, so raise it out of the
+  // way lest the uniform-representation invariant adopt anchors mid-test.
+  Length const saved_bound = PileUp::re_anchor_bound_for_testing_;
+  PileUp::re_anchor_bound_for_testing_ = 1e20 * Metre;
+  absl::Cleanup restore_bound = [saved_bound] {
+    PileUp::re_anchor_bound_for_testing_ = saved_bound;
+  };
+  Length const separation = 4e16 * Metre;
+  GravitationalParameter const μ_b =
+      1.3e20 * Pow<3>(Metre) / Pow<2>(Second);
+  GravitationalParameter const μ_a = 16 * μ_b;
+  Displacement<Barycentric> const b_from_a(
+      {separation, 0 * Metre, 0 * Metre});
+
+  MockEphemeris<Barycentric> ephemeris;
+  EXPECT_CALL(ephemeris, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+  EXPECT_CALL(ephemeris, subsystem_gravitational_parameter(0))
+      .WillRepeatedly(ReturnRef(μ_a));
+  EXPECT_CALL(ephemeris, subsystem_gravitational_parameter(1))
+      .WillRepeatedly(ReturnRef(μ_b));
+  // The barycentre of each subsystem is at rest at its local origin.
+  EXPECT_CALL(ephemeris, subsystem_barycentre(_, _))
+      .WillRepeatedly(Return(Barycentric::origin));
+  EXPECT_CALL(ephemeris, subsystem_conversion(0, 0, _))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris, subsystem_conversion(1, 1, _))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris, subsystem_conversion(0, 1, _))
+      .WillRepeatedly(Return(-b_from_a));
+  EXPECT_CALL(ephemeris, subsystem_conversion(1, 0, _))
+      .WillRepeatedly(Return(b_from_a));
+
+  Velocity<Barycentric> const v(
+      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  auto const at_x = [&](Length const& x) {
+    return DegreesOfFreedom<Barycentric>(
+        Barycentric::origin +
+            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
+        v);
+  };
+
+  Instant const t0 = J2000;
+  TestablePileUp pile_up({&p1_}, t0,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         /*deletion_callback=*/nullptr);
+
+  // Past the geometric midpoint — nearer to B than to A — but A, sixteen
+  // times heavier, still dominates: no rebase.
+  pile_up.AppendToTrajectory(t0 + 1 * Second, at_x(2.5e16 * Metre));
+  EXPECT_TRUE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(0, pile_up.subsystem());
+
+  // B dominates, but by less than the hysteresis margin: still no rebase.
+  pile_up.AppendToTrajectory(t0 + 2 * Second, at_x(3.45e16 * Metre));
+  EXPECT_TRUE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(0, pile_up.subsystem());
+
+  // B dominates beyond the margin: the pile-up is rebased, and its trajectory
+  // is now represented relative to B's local origin.
+  pile_up.AppendToTrajectory(t0 + 3 * Second, at_x(3.6e16 * Metre));
+  EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(1, pile_up.subsystem());
+  EXPECT_EQ(at_x(3.6e16 * Metre).position() - b_from_a,
+            pile_up.trajectory().back().degrees_of_freedom.position());
+
+  // Back on the A side of the dominance boundary — A is the (raw) dominant
+  // subsystem again — but not beyond the margin: the hysteresis keeps the
+  // pile-up on B, so weaving around the boundary does not churn.
+  pile_up.AppendToTrajectory(t0 + 4 * Second,
+                             at_x(3.0e16 * Metre - separation));
+  EXPECT_TRUE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(1, pile_up.subsystem());
+
+  // Deep into A's system: the margin is exceeded and the pile-up returns.
+  pile_up.AppendToTrajectory(t0 + 5 * Second,
+                             at_x(1.0e16 * Metre - separation));
+  EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(0, pile_up.subsystem());
+}
+
+// A rebase into a subsystem whose local origin moves relative to the pile-up's:
+// each point of the trajectory must be translated by the offset at the POINT's
+// own time and its velocity by the relative velocity of the origins.
+// Translating the whole history by the offset at a single instant would
+// misplace a point aged Δt by v_rel · Δt — a day of history against a
+// 300 km/s pair is off by 2.6 × 10¹⁰ m.
+TEST_F(PileUpTest, RebaseTranslatesEachPointAtItsOwnTime) {
+  // This test pins the unanchored translation path in isolation; keep the
+  // uniform-representation invariant from anchoring the pile-up first.
+  Length const saved_bound = PileUp::re_anchor_bound_for_testing_;
+  PileUp::re_anchor_bound_for_testing_ = 1e20 * Metre;
+  absl::Cleanup restore_bound = [saved_bound] {
+    PileUp::re_anchor_bound_for_testing_ = saved_bound;
+  };
+  Length const separation = 4e16 * Metre;
+  GravitationalParameter const μ_b =
+      1.3e20 * Pow<3>(Metre) / Pow<2>(Second);
+  GravitationalParameter const μ_a = 16 * μ_b;
+  Displacement<Barycentric> const b_from_a_at_t0(
+      {separation, 0 * Metre, 0 * Metre});
+  Velocity<Barycentric> const v_rel({300 * Kilo(Metre) / Second,
+                                     0 * Metre / Second,
+                                     0 * Metre / Second});
+  Instant const t0 = J2000;
+  auto const b_from_a = [&](Instant const& t) {
+    return b_from_a_at_t0 + v_rel * (t - t0);
+  };
+
+  MockEphemeris<Barycentric> ephemeris;
+  EXPECT_CALL(ephemeris, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+  EXPECT_CALL(ephemeris, subsystem_gravitational_parameter(0))
+      .WillRepeatedly(ReturnRef(μ_a));
+  EXPECT_CALL(ephemeris, subsystem_gravitational_parameter(1))
+      .WillRepeatedly(ReturnRef(μ_b));
+  EXPECT_CALL(ephemeris, subsystem_barycentre(_, _))
+      .WillRepeatedly(Return(Barycentric::origin));
+  EXPECT_CALL(ephemeris, subsystem_conversion(0, 0, _))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris, subsystem_conversion(0, 1, _))
+      .WillRepeatedly(Invoke([&](int, int, Instant const& t) {
+        return -b_from_a(t);
+      }));
+  EXPECT_CALL(ephemeris, subsystem_velocity_conversion(0, 1))
+      .WillRepeatedly(Return(-v_rel));
+
+  Velocity<Barycentric> const v(
+      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  auto const at_x = [&](Length const& x) {
+    return DegreesOfFreedom<Barycentric>(
+        Barycentric::origin +
+            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
+        v);
+  };
+
+  // The pile-up's front point is its construction centre of mass; place a lone
+  // part there so the front is a day-old point where B dominates beyond the
+  // margin, then append a fresh present state.
+  Part p_far(part_id1_,
+             "p-far",
+             mass1_,
+             EccentricPart::origin,
+             inertia_tensor1_,
+             RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+                 at_x(3.5e16 * Metre)),
+             /*deletion_callback=*/nullptr);
+  Instant const t1 = t0 + 1 * Day;
+  TestablePileUp pile_up({&p_far}, t0,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         /*deletion_callback=*/nullptr);
+  Position<Barycentric> const front_before =
+      pile_up.trajectory().front().degrees_of_freedom.position();
+  pile_up.AppendToTrajectory(t1, at_x(3.8e16 * Metre));
+  EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(1, pile_up.subsystem());
+
+  // The points are translated at their own times, not at the time of the
+  // rebase, and the velocities are translated by the origins' relative
+  // velocity.  The present state (`back`) was appended exactly, so it survives
+  // bit for bit; the front is the construction centre of mass, whose
+  // translation rounds at the ULP of the void-scale affine (metres at
+  // 4e16 m) — far below the 2.6e10 m own-time signal this test discriminates.
+  auto const& front = pile_up.trajectory().front();
+  auto const& back = pile_up.trajectory().back();
+  EXPECT_THAT((front.degrees_of_freedom.position() -
+               (front_before - b_from_a(t0))).Norm(),
+              Lt(1 * Kilo(Metre)));
+  EXPECT_EQ(at_x(3.8e16 * Metre).position() - b_from_a(t1),
+            back.degrees_of_freedom.position());
+  EXPECT_EQ(v - v_rel, back.degrees_of_freedom.velocity());
+}
+
+// The uniform-representation invariant and the anchor-folding rebase.  The
+// policy is regime-blind — none of this depends on whether the far field
+// vanishes: coordinates beyond the re-anchor bound adopt an anchor in a
+// star's domain exactly as in the void (unanchored subsystem coordinates of
+// ~1e15 m quantize part geometry at 0.125 m — owner-visible gaps), and a
+// dominance retag of an anchored pile-up folds the subsystem conversion into
+// the anchor, leaving every represented point bit for bit intact where the
+// old drop-and-translate would have rounded each point at the ULP of the
+// inter-subsystem distance.
+TEST_F(PileUpTest, AnchoredRebaseFoldsConversionIntoAnchor) {
+  Length const saved_bound = PileUp::re_anchor_bound_for_testing_;
+  absl::Cleanup restore_bound = [saved_bound] {
+    PileUp::re_anchor_bound_for_testing_ = saved_bound;
+  };
+
+  Length const separation = 4e16 * Metre;
+  GravitationalParameter const μ_b =
+      1.3e20 * Pow<3>(Metre) / Pow<2>(Second);
+  GravitationalParameter const μ_a = 16 * μ_b;
+  Displacement<Barycentric> const b_from_a_at_t0(
+      {separation, 0 * Metre, 0 * Metre});
+  Velocity<Barycentric> const v_rel({300 * Kilo(Metre) / Second,
+                                     0 * Metre / Second,
+                                     0 * Metre / Second});
+  Instant const t0 = J2000;
+  auto const b_from_a = [&](Instant const& t) {
+    return b_from_a_at_t0 + v_rel * (t - t0);
+  };
+
+  MockEphemeris<Barycentric> ephemeris;
+  EXPECT_CALL(ephemeris, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+  EXPECT_CALL(ephemeris, subsystem_gravitational_parameter(0))
+      .WillRepeatedly(ReturnRef(μ_a));
+  EXPECT_CALL(ephemeris, subsystem_gravitational_parameter(1))
+      .WillRepeatedly(ReturnRef(μ_b));
+  EXPECT_CALL(ephemeris, subsystem_barycentre(_, _))
+      .WillRepeatedly(Return(Barycentric::origin));
+  EXPECT_CALL(ephemeris, subsystem_conversion(0, 0, _))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris, subsystem_conversion(1, 1, _))
+      .WillRepeatedly(Return(Displacement<Barycentric>{}));
+  EXPECT_CALL(ephemeris, subsystem_conversion(0, 1, _))
+      .WillRepeatedly(Invoke([&](int, int, Instant const& t) {
+        return -b_from_a(t);
+      }));
+  EXPECT_CALL(ephemeris, subsystem_conversion(1, 0, _))
+      .WillRepeatedly(Invoke([&](int, int, Instant const& t) {
+        return b_from_a(t);
+      }));
+  EXPECT_CALL(ephemeris, subsystem_velocity_conversion(0, 1))
+      .WillRepeatedly(Return(-v_rel));
+
+  Velocity<Barycentric> const v(
+      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  auto const at_x = [&](Length const& x) {
+    return DegreesOfFreedom<Barycentric>(
+        Barycentric::origin +
+            Displacement<Barycentric>({x, 0 * Metre, 0 * Metre}),
+        v);
+  };
+
+  TestablePileUp pile_up({&p1_}, t0 - 1 * Second,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         /*deletion_callback=*/nullptr);
+
+  // Act 1: coordinates beyond the bound adopt an anchor — B raw-dominates
+  // here but within the hysteresis margin, so this is pure representation,
+  // no retag — and the true position survives the collapse bit for bit.
+  pile_up.AppendToTrajectory(t0, at_x(3.45e16 * Metre));
+  EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(0, pile_up.subsystem());
+  ASSERT_TRUE(pile_up.anchor().has_value());
+  auto const anchor0 = *pile_up.anchor();
+  EXPECT_EQ(at_x(3.45e16 * Metre).position(),
+            pile_up.trajectory().back().degrees_of_freedom.position() +
+                anchor0.OffsetAt(t0));
+  EXPECT_EQ(Velocity<Barycentric>(),
+            pile_up.trajectory().back().degrees_of_freedom.velocity() +
+                anchor0.velocity - v);
+
+  // Act 2: a point where B dominates beyond the margin.  Raise the bound so
+  // that the retag is observed in isolation from re-anchoring.
+  PileUp::re_anchor_bound_for_testing_ = 1e20 * Metre;
+  Instant const t1 = t0 + 1 * Day;
+  DegreesOfFreedom<Barycentric> const represented_at_t1(
+      at_x(3.8e16 * Metre).position() - anchor0.OffsetAt(t1),
+      v - anchor0.velocity);
+  pile_up.AppendToTrajectory(t1, represented_at_t1);
+  auto const front_before =
+      pile_up.trajectory().front().degrees_of_freedom;
+  auto const back_before = pile_up.trajectory().back().degrees_of_freedom;
+  EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
+  EXPECT_EQ(1, pile_up.subsystem());
+  ASSERT_TRUE(pile_up.anchor().has_value());
+  auto const anchor1 = *pile_up.anchor();
+
+  // The money assertion: the represented points are bit-for-bit intact.
+  EXPECT_EQ(front_before.position(),
+            pile_up.trajectory().front().degrees_of_freedom.position());
+  EXPECT_EQ(front_before.velocity(),
+            pile_up.trajectory().front().degrees_of_freedom.velocity());
+  EXPECT_EQ(back_before.position(),
+            pile_up.trajectory().back().degrees_of_freedom.position());
+  EXPECT_EQ(back_before.velocity(),
+            pile_up.trajectory().back().degrees_of_freedom.velocity());
+
+  // The conversion was folded into the anchor: at two distinct epochs — which
+  // pins both the intercept and the slope of the affine fold — the new
+  // anchor differs from the old one by the (moving) conversion, up to the
+  // rounding of the fold at the ULP of the separation.
+  EXPECT_EQ(anchor0.velocity - v_rel, anchor1.velocity);
+  EXPECT_THAT((anchor1.OffsetAt(t0) -
+               (anchor0.OffsetAt(t0) - b_from_a(t0))).Norm(),
+              Lt(32 * Metre));
+  EXPECT_THAT((anchor1.OffsetAt(t1) -
+               (anchor0.OffsetAt(t1) - b_from_a(t1))).Norm(),
+              Lt(32 * Metre));
+
+  // Act 3: back at the production bound, in-domain coordinate growth renews
+  // the anchor; the true position moves by at most the documented sub-mm
+  // fold residual.
+  PileUp::re_anchor_bound_for_testing_ = saved_bound;
+  Instant const t2 = t1 + 1 * Second;
+  DegreesOfFreedom<Barycentric> const grown(
+      pile_up.trajectory().back().degrees_of_freedom.position() +
+          Displacement<Barycentric>({2e12 * Metre, 0 * Metre, 0 * Metre}),
+      pile_up.trajectory().back().degrees_of_freedom.velocity());
+  Position<Barycentric> const true_before =
+      grown.position() + anchor1.OffsetAt(t2);
+  pile_up.AppendToTrajectory(t2, grown);
+  EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
+  ASSERT_TRUE(pile_up.anchor().has_value());
+  EXPECT_NE(anchor1, *pile_up.anchor());
+  Position<Barycentric> const true_after =
+      pile_up.trajectory().back().degrees_of_freedom.position() +
+      pile_up.anchor()->OffsetAt(t2);
+  EXPECT_THAT((true_after - true_before).Norm(), Lt(1 * Milli(Metre)));
 }
 
 }  // namespace ksp_plugin

@@ -84,6 +84,7 @@ using namespace principia::integrators::_methods;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
 using namespace principia::ksp_plugin::_part;
+using namespace principia::ksp_plugin::_pile_up;
 using namespace principia::ksp_plugin::_planetarium;
 using namespace principia::ksp_plugin::_plugin;
 using namespace principia::ksp_plugin::_vessel;
@@ -2268,6 +2269,113 @@ void InsertTwoStarVoid(Plugin& plugin) {
   plugin.EndInitialization();
 }
 
+// Two unanchored vessels that dock into a single pile-up in the deep void
+// share ONE re-anchor verdict: the pile-up adopts one anchor and the plugin
+// replays it onto every member, so both vessels and the pile-up hold the same
+// anchor at the same epoch.  A single verdict per group means the members move
+// in lock-step, so a following advance preserves their relative geometry — the
+// per-vessel path used to move the shared pile-up once per member and fling the
+// pair by the void distance.
+TEST_F(PluginIntegrationTestWithoutPlugin, SharedPileUpReAnchorsOnce) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+
+  // A pair sitting 10 m apart deep in star A's void (2 × 10¹⁶ m out), both
+  // reaching it unanchored — well beyond the re-anchor bound.
+  Length const midpoint = 2e16 * Metre;
+  GUID const guid_a = "station";
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      101, "part-A", guid_a,
+      {Displacement<AliceSun>({midpoint, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  GUID const guid_b = "visitor";
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      102, "part-B", guid_b,
+      {Displacement<AliceSun>({midpoint + 10 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->GetVessel(guid_a)->part(101)->set_mass(3 * Kilogram);
+  plugin->GetVessel(guid_b)->part(102)->set_mass(1 * Kilogram);
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+
+  // Next frame: the vessels dock into one pile-up, then catch up once.
+  Instant const t = Instant() + 100 * Second;
+  plugin->AdvanceTime(t, 1 * Radian);
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->GetVessel(guid_a)->KeepPart(101);
+  plugin->GetVessel(guid_b)->KeepPart(102);
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(101, 102);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  // A single shared verdict: both vessels and the pile-up hold the same anchor
+  // at the same epoch.
+  auto* const pile_up =
+      plugin->GetVessel(guid_a)->part(101)->containing_pile_up();
+  ASSERT_NE(nullptr, pile_up);
+  EXPECT_EQ(pile_up,
+            plugin->GetVessel(guid_b)->part(102)->containing_pile_up());
+  ASSERT_TRUE(pile_up->anchor().has_value());
+  ASSERT_TRUE(plugin->GetVessel(guid_a)->anchor().has_value());
+  ASSERT_TRUE(plugin->GetVessel(guid_b)->anchor().has_value());
+  EXPECT_EQ(*pile_up->anchor(), *plugin->GetVessel(guid_a)->anchor());
+  EXPECT_EQ(*pile_up->anchor(), *plugin->GetVessel(guid_b)->anchor());
+  EXPECT_EQ(pile_up->anchor()->epoch,
+            plugin->GetVessel(guid_a)->anchor()->epoch);
+  EXPECT_EQ(pile_up->anchor()->epoch,
+            plugin->GetVessel(guid_b)->anchor()->epoch);
+
+  Displacement<AliceSun> const visitor_from_star_a =
+      plugin->VesselFromParent(star_a, guid_b).displacement();
+
+  // A follow-up CatchUpVessel for one member re-evaluates against the
+  // already-anchored pile-up, returns no change, and leaves the shared anchor
+  // of every member intact.
+  {
+    auto const future = plugin->CatchUpVessel(guid_a);
+    VesselSet collided_vessels;
+    plugin->WaitForVesselToCatchUp(*future, collided_vessels);
+  }
+  EXPECT_EQ(*plugin->GetVessel(guid_a)->anchor(),
+            *plugin->GetVessel(guid_b)->anchor());
+
+  // The next advance preserves the pair's relative geometry: one verdict moved
+  // both members together, so nothing compounds.
+  Instant const t2 = t + 100 * Second;
+  plugin->AdvanceTime(t2, 1 * Radian);
+  plugin->InsertOrKeepVessel(guid_a, "station", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertOrKeepVessel(guid_b, "visitor", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->GetVessel(guid_a)->KeepPart(101);
+  plugin->GetVessel(guid_b)->KeepPart(102);
+  plugin->PrepareToReportCollisions();
+  plugin->ReportPartCollision(101, 102);
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  EXPECT_THAT((plugin->VesselFromParent(star_a, guid_b).displacement() -
+               visitor_from_star_a).Norm(),
+              Lt(100 * Metre));
+}
+
 // The loaded path in the deep void: a loaded vessel keeps its anchor, the
 // inbound and outbound World conversions are placement-aware, and the
 // World-side layout survives at void scale — within a vessel, across a part
@@ -3128,9 +3236,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
 // the anchors difference exactly on the lattice, the fold perturbation is
 // directly measurable — at sub-mm — as (q2 - q1) + Conversion(A2, A1, t2).
 TEST_F(PluginIntegrationTestWithoutPlugin, LongCoastReAnchorsContinuously) {
-  Vessel::re_anchor_bound_for_testing_ = 1e5 * Metre;
+  PileUp::re_anchor_bound_for_testing_ = 1e5 * Metre;
   absl::Cleanup restore_bound = [] {
-    Vessel::re_anchor_bound_for_testing_ = 1e12 * Metre;
+    PileUp::re_anchor_bound_for_testing_ = 1e12 * Metre;
   };
 
   Index const star_a = 0;

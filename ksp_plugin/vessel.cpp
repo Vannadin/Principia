@@ -59,14 +59,6 @@ using namespace principia::testing_utilities::_make_not_null;
 
 using namespace std::chrono_literals;
 
-// A vessel is rebased into another subsystem when the gravitational dominance
-// μ/d² of that subsystem exceeds that of its current subsystem by this
-// factor.  The margin makes the boundary hysteretic: switching back requires
-// the inverse ratio, so a vessel weaving around the balance point does not
-// oscillate between representations, and a transit that merely grazes a
-// subsystem's region does not adopt it.
-constexpr double rebase_dominance_margin = 3;
-
 // The affine offset to add to a point expressed under anchor `from` to
 // re-express it under anchor `to` at time `t`.  See
 // `Ephemeris::Anchor::Conversion`, which differences the sector offsets
@@ -166,122 +158,6 @@ not_null<Celestial const*> Vessel::parent() const {
 
 int Vessel::subsystem() const {
   return subsystem_;
-}
-
-namespace {
-
-// The present state of a vessel: the end of its psychohistory when the
-// history has been prepared, the end of its trajectory otherwise — never the
-// end of a prediction, which extends the trajectory into the future.
-DiscreteTrajectory<Barycentric>::value_type const& PresentState(
-    DiscreteTrajectory<Barycentric> const& trajectory,
-    DiscreteTrajectorySegmentIterator<Barycentric> const& psychohistory) {
-  if (psychohistory != trajectory.segments().end() &&
-      !psychohistory->empty()) {
-    return psychohistory->back();
-  }
-  // Only freshly constructed vessels should land here; with more than the
-  // history present, `back()` may be a prediction endpoint.
-  LOG_IF(WARNING, trajectory.segments().size() > 1)
-      << "Present state read from the end of "
-      << trajectory.segments().size()
-      << " segments with an unprepared psychohistory";
-  return trajectory.back();
-}
-
-}  // namespace
-
-bool Vessel::RebaseIfNeeded() {
-  int const number_of_subsystems = ephemeris_->number_of_subsystems();
-  if (number_of_subsystems < 2 || trajectory_.empty()) {
-    return false;
-  }
-  // The decision point is the present state — NOT `trajectory_.back()`: when
-  // a prediction exists it extends the trajectory far into the future, and
-  // deciding the anchor or the rebase at the predicted endpoint mis-places
-  // both (e.g. a vessel deep in the void whose prediction ends inside a
-  // star's field would never anchor).
-  // Copies, not references: the translations below rebuild the timeline that
-  // `back()` points into.
-  Instant const t = PresentState(trajectory_, psychohistory_).time;
-  Position<Barycentric> const q =
-      PresentState(trajectory_, psychohistory_).degrees_of_freedom.position();
-  // The true position, independent of the representation: the dominance
-  // geometry below must not depend on whether the vessel is anchored.  The
-  // collapse rounds at the ULP of the void distance, which is harmless in a
-  // μ/d² comparison.
-  Position<Barycentric> const true_q =
-      anchor_.has_value() ? q + anchor_->OffsetAt(t) : q;
-  // The dominance μ/d² is computed from the subsystem masses and (linearly
-  // extrapolated) barycentres, not from the acceleration field: far-field
-  // damping zeroes the field precisely in the region where the boundary lies.
-  // The comparisons are cross-multiplied so that a vanishing distance needs no
-  // special-casing.
-  auto const squared_distance_to_barycentre = [&](int const s) {
-    Position<Barycentric> const q_in_s =
-        true_q + ephemeris_->subsystem_conversion(subsystem_, s, t);
-    return (q_in_s - ephemeris_->subsystem_barycentre(s, t)).Norm²();
-  };
-  Square<Length> const current_distance² =
-      squared_distance_to_barycentre(subsystem_);
-  GravitationalParameter const current_μ =
-      ephemeris_->subsystem_gravitational_parameter(subsystem_);
-  int dominant_subsystem = subsystem_;
-  GravitationalParameter dominant_μ = current_μ;
-  Square<Length> dominant_distance² = current_distance²;
-  for (int s = 0; s < number_of_subsystems; ++s) {
-    if (s == subsystem_) {
-      continue;
-    }
-    Square<Length> const distance² = squared_distance_to_barycentre(s);
-    GravitationalParameter const μ =
-        ephemeris_->subsystem_gravitational_parameter(s);
-    if (μ * dominant_distance² > dominant_μ * distance²) {
-      dominant_subsystem = s;
-      dominant_μ = μ;
-      dominant_distance² = distance²;
-    }
-  }
-  bool changed = false;
-  if (dominant_subsystem != subsystem_ &&
-      dominant_μ * current_distance² >
-          rebase_dominance_margin * current_μ * dominant_distance²) {
-    // A pure gravity-grouping retag: with an anchor the subsystem conversion
-    // is folded into the anchor exactly (`RebaseTo`), so the representation —
-    // and with it the mm-scale geometry of the parts — survives the retag
-    // bit for bit.
-    RebaseTo(dominant_subsystem);
-    changed = true;
-  }
-
-  // The representation invariant, void and star domain alike: the
-  // represented coordinates and the anchor's affine term stay within the
-  // re-anchor bound, so their ULP — and with it the World mapping of the
-  // parts — stays sub-millimetre everywhere.  Dominance plays no part here:
-  // in particular, entering a star's field KEEPS the anchor (unanchored
-  // subsystem coordinates of ~1e15 m in a star's domain quantize the parts
-  // at 0.125 m, which is owner-visible part-gap misalignment).  Re-anchoring
-  // also bounds the affine term (a long coast) and the coordinates (a burn
-  // carries the vessel away from its anchor), keeping anchor *differences* —
-  // the relative geometry of two anchored vessels — at the ULP of the local
-  // parts, sub-mm.
-  Position<Barycentric> const q_now =
-      PresentState(trajectory_, psychohistory_).degrees_of_freedom.position();
-  bool const coordinates_exceed_bound =
-      (q_now - Barycentric::origin).Norm²() >
-      re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_;
-  if (anchor_.has_value()) {
-    if (coordinates_exceed_bound ||
-        (anchor_->velocity * (t - anchor_->epoch)).Norm²() >
-            re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_) {
-      AdoptAnchor();
-      changed = true;
-    }
-  } else if (coordinates_exceed_bound) {
-    AdoptAnchor();
-    changed = true;
-  }
-  return changed;
 }
 
 void Vessel::RebaseTo(int const subsystem) {
@@ -433,71 +309,59 @@ void Vessel::DropAnchor() {
   TranslateParts(displacement, velocity_offset, t, old_anchor);
 }
 
-void Vessel::AdoptAnchor() {
+void Vessel::ApplyPlacementChange(
+    Displacement<Barycentric> const& displacement,
+    Velocity<Barycentric> const& velocity_offset,
+    Instant const& epoch,
+    int const subsystem,
+    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
   if (trajectory_.empty()) {
     return;
   }
-  // The anchor is seeded from the present state, not `trajectory_.back()`:
-  // with a prediction present the latter is a future state whose velocity
-  // (under a predicted burn) can disagree with the present motion, inflating
-  // the anchored coordinates.
-  // Value copies: the translations rebuild the timeline.
-  std::optional<Ephemeris<Barycentric>::Anchor> const old_anchor = anchor_;
-  Instant const t = PresentState(trajectory_, psychohistory_).time;
-  DegreesOfFreedom<Barycentric> const degrees_of_freedom =
-      PresentState(trajectory_, psychohistory_).degrees_of_freedom;
-  Displacement<Barycentric> const displacement =
-      degrees_of_freedom.position() - Barycentric::origin;
-  Velocity<Barycentric> const velocity_offset = degrees_of_freedom.velocity();
-  Ephemeris<Barycentric>::Anchor new_anchor{
-      .offset = SectorDisplacement<Barycentric>::Split(displacement),
-      .velocity = velocity_offset,
-      .epoch = t};
-  // The exact translation at first adoption; `Split` is exact, so the new
-  // representation collapses back to `displacement` bit for bit.
-  Displacement<Barycentric> translation = -displacement;
-  if (anchor_.has_value()) {
-    // Re-anchoring: the new anchor is displaced from the subsystem origin by
-    // the old anchor as well as by the anchored coordinates.  The cells carry
-    // over exactly; the small terms — the old local part, the affine term,
-    // and the anchored coordinates — accumulate in double precision, the
-    // value is re-centred (exact) and the residual is folded back at the
-    // magnitude of the re-centred local part.  The affine term is reset to
-    // the new epoch.
-    Displacement<Barycentric> const affine =
-        anchor_->velocity * (t - anchor_->epoch);
-    DoublePrecision<Displacement<Barycentric>> local =
-        TwoSum(anchor_->offset.local, affine);
-    local += displacement;
-    new_anchor.offset = {.cell = anchor_->offset.cell, .local = local.value};
-    new_anchor.offset.Recenter();
-    new_anchor.offset += local.error;
-    new_anchor.velocity += anchor_->velocity;
-    // The translation that keeps the represented positions consistent with
-    // the new anchor: the cells difference exactly (`Recenter` may have moved
-    // whole cells) and the small terms are summed last.  The translation is a
-    // single displacement, so the switch perturbs the represented position by
-    // its rounding plus the fold residual — a few tenths of a millimetre at
-    // most, the ULP of the re-anchor bound — once per re-anchor.
-    translation = (anchor_->offset - new_anchor.offset).Collapse(affine);
-  }
-  LOG(INFO) << "Vessel " << ShortDebugString() << " adopts an anchor";
+  int const old_subsystem = subsystem_;
   {
+    // `AwaitReanimation` merges into `trajectory_` under `lock_`, and the
+    // translation rewrites all of its points.  The pile-up already moved
+    // itself and retagged the shared parts, so this touches neither.
     absl::MutexLock l(&lock_);
-    trajectory_.Translate(translation, -velocity_offset, t);
-    anchor_ = new_anchor;
+    trajectory_.Translate(displacement, velocity_offset, epoch);
+    subsystem_ = subsystem;
+    anchor_ = anchor;
   }
-  TranslateParts(translation, -velocity_offset, t, old_anchor);
-  // A flight plan keeps its own placement and stays correct under a stale
-  // anchor — its consumers convert through `Anchor::Conversion` — but every
-  // re-anchor of the vessel widens the gap between the plan's anchor and the
-  // vessel's, and the plan's anchored coordinates grow with that gap,
-  // degrading their ULP.  Refresh the plan's placement once the gap warrants
-  // it; the margin keeps the refresh — a full `RecomputeAllSegments` — far
-  // rarer than the re-anchor cadence (which at high warp in a close star
-  // orbit fires every few real seconds) while capping the plan's coordinate
-  // growth at ULP ~1 cm.
-  Length const flight_plan_rebase_bound = 64 * re_anchor_bound_for_testing_;
+  if (subsystem != old_subsystem) {
+    // A subsystem retag: the flight plans fold the delta between their old
+    // anchor and the composed anchor into the raw subsystem conversion, which
+    // cancels the conversion to the composition rounding.
+    Displacement<Barycentric> const conversion =
+        ephemeris_->subsystem_conversion(old_subsystem, subsystem, epoch);
+    Velocity<Barycentric> const velocity_conversion =
+        ephemeris_->subsystem_velocity_conversion(old_subsystem, subsystem);
+    for (auto& flight_plan : flight_plans_) {
+      if (auto* const optimizable_flight_plan =
+              std::get_if<OptimizableFlightPlan>(&flight_plan)) {
+        // Any optimization in progress operates on a copy of the flight plan in
+        // the old representation; discard it.
+        if (optimizable_flight_plan->optimization_driver != nullptr) {
+          optimizable_flight_plan->optimization_driver->Interrupt();
+        }
+        optimizable_flight_plan->flight_plan
+            ->Rebase(conversion, velocity_conversion, epoch, subsystem_,
+                     anchor_)
+            .IgnoreError();
+      }
+    }
+    return;
+  }
+  // An anchor adoption at an unchanged subsystem.  A flight plan keeps its own
+  // placement and stays correct under a stale anchor — its consumers convert
+  // through `Anchor::Conversion` — but every re-anchor of the vessel widens
+  // the gap between the plan's anchor and the vessel's, and the plan's
+  // anchored coordinates grow with that gap, degrading their ULP.  Refresh the
+  // plan's placement once the gap warrants it; the margin keeps the refresh —
+  // a full `RecomputeAllSegments` — far rarer than the re-anchor cadence while
+  // capping the plan's coordinate growth at ULP ~1 cm.
+  Length const flight_plan_rebase_bound =
+      64 * PileUp::re_anchor_bound_for_testing_;
   for (auto& flight_plan : flight_plans_) {
     // Lazily-deserialized plans are skipped, as in `RebaseTo`: they are
     // re-expressed in the vessel's current placement when they materialize.
@@ -508,7 +372,7 @@ void Vessel::AdoptAnchor() {
     }
     auto const [gap, gap_velocity] =
         Ephemeris<Barycentric>::Anchor::Conversion(
-            optimizable_flight_plan->flight_plan->anchor(), anchor_, t);
+            optimizable_flight_plan->flight_plan->anchor(), anchor_, epoch);
     if (gap.Norm²() <= flight_plan_rebase_bound * flight_plan_rebase_bound) {
       continue;
     }
@@ -522,7 +386,7 @@ void Vessel::AdoptAnchor() {
     optimizable_flight_plan->flight_plan
         ->Rebase(Displacement<Barycentric>{},
                  Velocity<Barycentric>{},
-                 t,
+                 epoch,
                  subsystem_,
                  anchor_)
         .IgnoreError();
@@ -2172,11 +2036,6 @@ std::atomic_bool Vessel::synchronous_(false);
 bool Vessel::disallow_leibniz_conversion_for_testing_ = false;
 
 std::int64_t Vessel::max_points_to_serialize_for_testing_ = 20'000;
-
-// While anchored in the void, a vessel whose coordinates grow beyond this
-// bound (under thrust), or whose anchor's affine term grows beyond it (a long
-// coast), re-anchors, keeping the local ULP at ~0.2 mm.
-Length Vessel::re_anchor_bound_for_testing_ = 1e12 * Metre;
 
 }  // namespace internal
 }  // namespace _vessel

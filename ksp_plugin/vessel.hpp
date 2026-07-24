@@ -113,17 +113,20 @@ class Vessel {
   // positions of the trajectories of this vessel are represented.
   virtual int subsystem() const;
 
-  // Maintains the two representation invariants of an interstellar system.
-  // Dominance: if another subsystem gravitationally dominates the vessel —
-  // its μ/d² exceeds that of the current subsystem by a hysteresis margin —
-  // retags the vessel (and its pile-up and flight plans) to the dominant
-  // subsystem via `RebaseTo`.  Uniform representation: adopts or renews an
-  // anchor whenever the represented coordinates or the anchor's affine term
-  // exceed the re-anchor bound, in the void and in a star's domain alike, so
-  // that the ULP of the representation stays sub-millimetre everywhere.
-  // Returns true if either changed.  Must not be called while the pile-ups
-  // are being advanced.
-  virtual bool RebaseIfNeeded();
+  // Applies a placement change decided and already executed by this vessel's
+  // pile-up: translates the vessel's own trajectory by
+  // `displacement + velocity_offset * (t - epoch)`, retags it into `subsystem`
+  // under `anchor`, and folds the change into its flight plans (the raw
+  // subsystem conversion on a retag, an anchor-gap refresh otherwise).  Does
+  // NOT touch the parts or the pile-up: the pile-up has already moved itself
+  // and retagged the shared parts.  Must not be called while the pile-ups are
+  // being advanced.
+  virtual void ApplyPlacementChange(
+      Displacement<Barycentric> const& displacement,
+      Velocity<Barycentric> const& velocity_offset,
+      Instant const& epoch,
+      int subsystem,
+      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
   // Re-expresses all the trajectories of this vessel (and those of its parts,
   // pile-up and flight plans) relative to the local origin of the given
@@ -143,12 +146,6 @@ class Vessel {
   // Re-expresses this vessel relative to its subsystem's origin, dropping the
   // anchor.  Does nothing if the vessel is not anchored.
   virtual void DropAnchor();
-
-  // Adopts an anchor at the head of the trajectory, moving with it (composing
-  // with any current anchor): the anchored coordinates and velocity start at
-  // zero.  Also refreshes the placement of any flight plan whose own anchor
-  // has drifted beyond the refresh margin from the new one.
-  virtual void AdoptAnchor();
 
   // Re-expresses this vessel under the given anchor (or unanchored, for
   // `nullopt`).  The offsets difference exactly on the sector lattice, so
@@ -390,12 +387,6 @@ class Vessel {
   // the drop path with a short trajectory instead of the ~20'000 points it
   // otherwise requires.
   static std::int64_t max_points_to_serialize_for_testing_;
-
-  // The bound on the anchored coordinates and on the anchor's affine term
-  // beyond which a vessel re-anchors; see `RebaseIfNeeded`.  A mutable static
-  // so that tests can lower it to exercise the re-anchor fold with a short
-  // coast instead of the years it otherwise requires.
-  static Length re_anchor_bound_for_testing_;
 
  protected:
   // For mocking.
