@@ -733,9 +733,9 @@ PileUp::PlacementChange PileUp::AdoptAnchorAtPresentState(Instant const& t) {
   }
   LOG(INFO) << "Pile up at " << this << " adopts an anchor";
   Rebase(translation, -velocity_offset, t, subsystem_, new_anchor);
-  // Retag the parts by the same offset (the retag half of
-  // `Vessel::TranslateParts`, called with `(translation, -velocity_offset)`;
-  // its `conversion_motion` velocity is thus `velocity_offset`).
+  // Retag the parts by the same offset: the conversion translates their rigid
+  // motions by `translation` and boosts them by `velocity_offset`, keeping
+  // them consistent with the new anchor.
   RigidMotion<Barycentric, Barycentric> const conversion_motion(
       RigidTransformation<Barycentric, Barycentric>(
           Barycentric::origin,

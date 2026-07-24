@@ -31,9 +31,7 @@
 #include "geometry/orthogonal_map.hpp"
 #include "geometry/space_transformations.hpp"
 #include "ksp_plugin/integrators.hpp"
-#include "numerics/double_precision.hpp"
 #include "physics/rigid_motion.hpp"
-#include "physics/sector.hpp"
 #include "quantities/named_quantities.hpp"
 #include "testing_utilities/make_not_null.hpp"
 
@@ -50,9 +48,7 @@ using namespace principia::geometry::_barycentre_calculator;
 using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_space_transformations;
 using namespace principia::ksp_plugin::_integrators;
-using namespace principia::numerics::_double_precision;
 using namespace principia::physics::_rigid_motion;
-using namespace principia::physics::_sector;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_make_not_null;
@@ -160,152 +156,8 @@ int Vessel::subsystem() const {
   return subsystem_;
 }
 
-void Vessel::RebaseTo(int const subsystem) {
-  if (trajectory_.empty() || subsystem == subsystem_) {
-    return;
-  }
-  // A copy, not a reference: the translation below rebuilds the timeline that
-  // `back()` points into.
-  Instant const t = trajectory_.back().time;
-  // The origins move relative to each other, so the re-expression is affine
-  // in time: each point of each trajectory is translated at its own time.
-  Displacement<Barycentric> const displacement =
-      ephemeris_->subsystem_conversion(subsystem_, subsystem, t);
-  Velocity<Barycentric> const velocity_offset =
-      ephemeris_->subsystem_velocity_conversion(subsystem_, subsystem);
-  LOG(INFO) << "Rebasing vessel " << ShortDebugString() << " from subsystem "
-            << subsystem_ << " to subsystem " << subsystem;
-  if (anchor_.has_value()) {
-    // Fold the subsystem conversion into the anchor instead of translating
-    // the timeline: the conversion is affine in time and so is the anchor,
-    // so re-expressing the anchor at its own epoch is exact algebra —
-    // new.OffsetAt(τ) = old.OffsetAt(τ) + conversion(τ) for all τ — and the
-    // anchored coordinates (the trajectory, the parts, the pile-up) stay
-    // bit-for-bit untouched.  Translating the points instead would round
-    // every one of them at the ULP of the inter-subsystem distance (tens of
-    // metres in the void — the staging-fling class of damage).  The
-    // conversion itself is rounded at that ULP, which shifts the *absolute*
-    // placement once, as a common mode across the whole representation; the
-    // relative geometry is what the anchor machinery protects.
-    Displacement<Barycentric> const conversion_at_epoch =
-        displacement - velocity_offset * (t - anchor_->epoch);
-    SectorDisplacement<Barycentric> const split =
-        SectorDisplacement<Barycentric>::Split(conversion_at_epoch);
-    // The cells add exactly; the local parts accumulate through `TwoSum` and
-    // the residual is folded back after the (exact) re-centring, mirroring
-    // the re-anchor path of `AdoptAnchor` so that the two ways of moving an
-    // anchor round identically.
-    DoublePrecision<Displacement<Barycentric>> const local =
-        TwoSum(anchor_->offset.local, split.local);
-    Ephemeris<Barycentric>::Anchor new_anchor{
-        .offset = {.cell = anchor_->offset.cell + split.cell,
-                   .local = local.value},
-        .velocity = anchor_->velocity + velocity_offset,
-        .epoch = anchor_->epoch};
-    new_anchor.offset.Recenter();
-    new_anchor.offset += local.error;
-    {
-      absl::MutexLock l(&lock_);
-      subsystem_ = subsystem;
-      anchor_ = new_anchor;
-    }
-    // The parts' rigid motions are valid numbers in the preserved
-    // representation; only their tags change.
-    ForAllParts([this](Part& part) {
-      part.set_subsystem(subsystem_);
-      part.set_anchor(anchor_);
-    });
-    PileUp* pile_up = nullptr;
-    ForSomePart([&pile_up](Part& part) {
-      pile_up = part.containing_pile_up();
-    });
-    if (pile_up != nullptr && pile_up->subsystem() != subsystem_) {
-      pile_up->Rebase(Displacement<Barycentric>{},
-                      Velocity<Barycentric>{},
-                      t,
-                      subsystem_,
-                      anchor_);
-    }
-    for (auto& flight_plan : flight_plans_) {
-      if (auto* const optimizable_flight_plan =
-              std::get_if<OptimizableFlightPlan>(&flight_plan)) {
-        if (optimizable_flight_plan->optimization_driver != nullptr) {
-          optimizable_flight_plan->optimization_driver->Interrupt();
-        }
-        // The flight plan folds the delta between its old anchor and the
-        // composed anchor into the translation itself, which cancels the
-        // subsystem conversion to the composition rounding.
-        optimizable_flight_plan->flight_plan
-            ->Rebase(displacement, velocity_offset, t, subsystem_, anchor_)
-            .IgnoreError();
-      }
-    }
-    return;
-  }
-  {
-    // `AwaitReanimation` merges into `trajectory_` under `lock_`, and the
-    // translation rewrites all of its points.
-    absl::MutexLock l(&lock_);
-    trajectory_.Translate(displacement, velocity_offset, t);
-    subsystem_ = subsystem;
-  }
-  // The parts' rigid motions are expressed in the old representation; keep
-  // them consistent with their subsystem tag.  For piled-up parts they are
-  // regenerated from the (rebased) pile-up trajectory at the next advance, but
-  // between pile-ups — a docking merge constructs the new pile-up directly
-  // from these motions — the parts must carry the translation themselves.
-  RigidMotion<Barycentric, Barycentric> const conversion_motion(
-      RigidTransformation<Barycentric, Barycentric>(
-          Barycentric::origin,
-          Barycentric::origin + displacement,
-          OrthogonalMap<Barycentric, Barycentric>::Identity()),
-      Barycentric::nonrotating,
-      -velocity_offset);
-  ForAllParts([this, &conversion_motion](Part& part) {
-    part.set_subsystem(subsystem_);
-    part.set_rigid_motion(conversion_motion * part.rigid_motion());
-  });
-  PileUp* pile_up = nullptr;
-  ForSomePart([&pile_up](Part& part) {
-    pile_up = part.containing_pile_up();
-  });
-  if (pile_up != nullptr && pile_up->subsystem() != subsystem_) {
-    pile_up->Rebase(displacement, velocity_offset, t, subsystem_, anchor_);
-  }
-  for (auto& flight_plan : flight_plans_) {
-    if (auto* const optimizable_flight_plan =
-            std::get_if<OptimizableFlightPlan>(&flight_plan)) {
-      // Any optimization in progress operates on a copy of the flight plan in
-      // the old representation; discard it.
-      if (optimizable_flight_plan->optimization_driver != nullptr) {
-        optimizable_flight_plan->optimization_driver->Interrupt();
-      }
-      optimizable_flight_plan->flight_plan
-          ->Rebase(displacement, velocity_offset, t, subsystem_, anchor_)
-          .IgnoreError();
-    }
-  }
-}
-
 std::optional<Ephemeris<Barycentric>::Anchor> const& Vessel::anchor() const {
   return anchor_;
-}
-
-void Vessel::DropAnchor() {
-  if (!anchor_.has_value() || trajectory_.empty()) {
-    return;
-  }
-  // Value copies: the translations rebuild the timeline.
-  Instant const t = trajectory_.back().time;
-  Displacement<Barycentric> const displacement = anchor_->OffsetAt(t);
-  Velocity<Barycentric> const velocity_offset = anchor_->velocity;
-  LOG(INFO) << "Vessel " << ShortDebugString() << " drops its anchor";
-  {
-    absl::MutexLock l(&lock_);
-    trajectory_.Translate(displacement, velocity_offset, t);
-    anchor_.reset();
-  }
-  TranslateParts(displacement, velocity_offset, t);
 }
 
 void Vessel::ApplyPlacementChange(
@@ -362,7 +214,7 @@ void Vessel::ApplyPlacementChange(
   Length const flight_plan_rebase_bound =
       64 * PileUp::re_anchor_bound_for_testing_;
   for (auto& flight_plan : flight_plans_) {
-    // Lazily-deserialized plans are skipped, as in `RebaseTo`: they are
+    // Lazily-deserialized plans are skipped, as on a subsystem retag: they are
     // re-expressed in the vessel's current placement when they materialize.
     auto* const optimizable_flight_plan =
         std::get_if<OptimizableFlightPlan>(&flight_plan);
@@ -392,24 +244,6 @@ void Vessel::ApplyPlacementChange(
   }
 }
 
-void Vessel::ReanchorTo(
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
-  if (anchor_ == anchor || trajectory_.empty()) {
-    return;
-  }
-  // Value copies: the translations rebuild the timeline.
-  Instant const t = trajectory_.back().time;
-  auto const [displacement, velocity_offset] =
-      Ephemeris<Barycentric>::Anchor::Conversion(anchor_, anchor, t);
-  LOG(INFO) << "Vessel " << ShortDebugString() << " re-anchors";
-  {
-    absl::MutexLock l(&lock_);
-    trajectory_.Translate(displacement, velocity_offset, t);
-    anchor_ = anchor;
-  }
-  TranslateParts(displacement, velocity_offset, t);
-}
-
 bool Vessel::TryInheritPlacement(
     int const subsystem,
     std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
@@ -419,35 +253,6 @@ bool Vessel::TryInheritPlacement(
   subsystem_ = subsystem;
   anchor_ = anchor;
   return true;
-}
-
-void Vessel::TranslateParts(
-    Displacement<Barycentric> const& displacement,
-    Velocity<Barycentric> const& velocity_offset,
-    Instant const& t) {
-  // Flight plans and predictions are represented relative to the subsystem
-  // origin, not to the anchor, so they are unaffected here.
-  RigidMotion<Barycentric, Barycentric> const conversion_motion(
-      RigidTransformation<Barycentric, Barycentric>(
-          Barycentric::origin,
-          Barycentric::origin + displacement,
-          OrthogonalMap<Barycentric, Barycentric>::Identity()),
-      Barycentric::nonrotating,
-      -velocity_offset);
-  ForAllParts([this, &conversion_motion](Part& part) {
-    part.set_anchor(anchor_);
-    part.set_rigid_motion(conversion_motion * part.rigid_motion());
-  });
-  PileUp* pile_up = nullptr;
-  ForSomePart([&pile_up](Part& part) {
-    pile_up = part.containing_pile_up();
-  });
-  if (pile_up == nullptr) {
-    return;
-  }
-  // The pile-up is in this vessel's old placement, so this vessel's own
-  // translation moves it, bit for bit the same as the parts.
-  pile_up->Rebase(displacement, velocity_offset, t, subsystem_, anchor_);
 }
 
 void Vessel::set_parent(not_null<Celestial const*> const parent) {

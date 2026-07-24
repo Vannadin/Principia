@@ -128,33 +128,11 @@ class Vessel {
       int subsystem,
       std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
-  // Re-expresses all the trajectories of this vessel (and those of its parts,
-  // pile-up and flight plans) relative to the local origin of the given
-  // subsystem.  On an anchored vessel the subsystem conversion is folded
-  // into the anchor, leaving the represented coordinates bit-for-bit
-  // untouched; on an unanchored vessel each point is translated at its own
-  // time.  Does nothing if the vessel is already represented in that
-  // subsystem.  Must not be called while the pile-ups are being advanced.
-  virtual void RebaseTo(int subsystem);
-
   // The anchor further displacing the representation of this vessel while it
   // coasts in the force-free inter-subsystem void, if any.  A loaded vessel
   // may be anchored: the loaded paths are placement-aware and convert at the
   // World boundary.
   virtual std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
-
-  // Re-expresses this vessel relative to its subsystem's origin, dropping the
-  // anchor.  Does nothing if the vessel is not anchored.
-  virtual void DropAnchor();
-
-  // Re-expresses this vessel under the given anchor (or unanchored, for
-  // `nullopt`).  The offsets difference exactly on the sector lattice, so
-  // re-expressing the vessels of a pile-up under one shared anchor preserves
-  // their relative geometry where dropping the anchors would round each
-  // vessel at the ULP of the void distance.  The anchor must belong to this
-  // vessel's subsystem.  Does nothing if the vessel is already so anchored.
-  virtual void ReanchorTo(
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
   // Adopts the given placement — subsystem and anchor — on a vessel that has
   // no trajectory, parts, or anchor yet, so that its parts are inserted
@@ -506,17 +484,6 @@ class Vessel {
 
   LazilyDeserializedFlightPlan& selected_flight_plan();
   LazilyDeserializedFlightPlan const& selected_flight_plan() const;
-
-  // Translates the rigid motions of the parts by the given affine offset,
-  // retagging them with the current anchor, and moves the containing pile-up
-  // by the same offset.  The pile-up sits in this vessel's old placement:
-  // re-anchors are decided once per pile-up (`PileUp::RebaseIfNeeded`), and
-  // the merge-unification loop never moves one pile-up through two member
-  // vessels in a tick, so the translations cannot compound.
-  void TranslateParts(
-      Displacement<Barycentric> const& displacement,
-      Velocity<Barycentric> const& velocity_offset,
-      Instant const& t);
 
   GUID const guid_;
   std::string name_;
