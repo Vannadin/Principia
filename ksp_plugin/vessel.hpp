@@ -160,21 +160,29 @@ class Vessel {
       std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
   // Adopts the given placement — subsystem and anchor — on a vessel that has
-  // no trajectory, parts, or anchor yet — a vessel freshly created to receive
-  // the parts of a split — so that the transferred parts keep their
-  // representation instead of being rounded through a void-scale absolute.
-  // The fresh vessel's own subsystem comes from its stock parent celestial,
-  // which in the dominance-hysteresis band disagrees with the splitting
-  // vessel's, so the subsystem is inherited along with the anchor.  Returns
-  // false (and does nothing) if this vessel already has state of its own.
+  // no trajectory, parts, or anchor yet, so that its parts are inserted
+  // through that placement instead of being rounded through a void-scale
+  // absolute.  `AddPart` derives a fresh vessel's placement from the part it
+  // receives; this remains the only channel for a vessel whose parts are
+  // inserted fresh — an EVA kerbal or a packed newborn — where no part
+  // carries the parent vessel's placement and only the adapter knows the
+  // lineage.  The fresh vessel's own subsystem comes from its stock parent
+  // celestial, which in the dominance-hysteresis band disagrees with the
+  // parent vessel's, so the subsystem is inherited along with the anchor.
+  // Returns false (and does nothing) if this vessel already has state of its
+  // own.
   virtual bool TryInheritPlacement(
       int subsystem,
       std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
 
-  // Adds the given part to this vessel.  Note that this does not add the part
-  // to the set of kept parts, and that unless `KeepPart` is called, the part
-  // will be removed by the next call to `FreeParts`.
-  virtual void AddPart(not_null<std::unique_ptr<Part>> part);
+  // Adds the given part to this vessel.  The part carries its placement: a
+  // vessel with no state of its own adopts it (see `TryInheritPlacement`);
+  // otherwise a part arriving in another placement — a transfer between
+  // docked vessels — is re-expressed at `t` in this vessel's (`t` is unused
+  // when the placements already agree).  Note that this does not add the
+  // part to the set of kept parts, and that unless `KeepPart` is called, the
+  // part will be removed by the next call to `FreeParts`.
+  virtual void AddPart(not_null<std::unique_ptr<Part>> part, Instant const& t);
   // Removes and returns the part with the given ID.  This may empty `parts_`,
   // as happens when a vessel ceases to exist while loaded.  Note that in that
   // case `FreeParts` must not be called.

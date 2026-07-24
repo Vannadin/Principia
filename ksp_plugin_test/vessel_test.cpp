@@ -132,8 +132,8 @@ class VesselTest : public testing::Test {
         /*deletion_callback=*/nullptr);
     p1_ = p1.get();
     p2_ = p2.get();
-    vessel_.AddPart(std::move(p1));
-    vessel_.AddPart(std::move(p2));
+    vessel_.AddPart(std::move(p1), t0_);
+    vessel_.AddPart(std::move(p2), t0_);
   }
 
   bool IsCollapsible() const {

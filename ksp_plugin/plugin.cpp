@@ -557,32 +557,12 @@ void Plugin::InsertOrKeepLoadedPart(
     not_null<Vessel*> const current_vessel = associated_vessel;
     if (vessel == current_vessel) {
     } else {
-      int const previous_subsystem = current_vessel->subsystem();
-      std::optional<Ephemeris<Barycentric>::Anchor> const previous_anchor =
-          current_vessel->anchor();
       associated_vessel = vessel;
-      // A vessel freshly created to receive the parts of a split inherits
-      // the placement — subsystem and anchor — of the vessel they come from,
-      // so that the transfer below is the identity: rounding the parts
-      // through a void-scale absolute would scatter the separating vessels.
-      // The fresh vessel's own subsystem comes from its stock parent
-      // celestial, which in the dominance-hysteresis band disagrees with the
-      // splitting vessel's — requiring them to match would (and did) defeat
-      // the inheritance exactly where it protects.
-      vessel->TryInheritPlacement(previous_subsystem, previous_anchor);
-      vessel->AddPart(current_vessel->ExtractPart(part_id));
-      if (previous_subsystem != vessel->subsystem() ||
-          previous_anchor != vessel->anchor()) {
-        // The part's rigid motion is expressed in its previous vessel's
-        // placement; `AddPart` retagged the part, so keep the representation
-        // consistent with the tag.
-        not_null<Part*> const transferred_part = vessel->part(part_id);
-        transferred_part->set_rigid_motion(
-            PlacementConversionMotion({previous_subsystem, previous_anchor},
-                                      {vessel->subsystem(), vessel->anchor()},
-                                      previous_time) *
-            transferred_part->rigid_motion());
-      }
+      // The part carries its placement: a vessel freshly created to receive
+      // the parts of a split derives its placement from them, so that the
+      // transfer is the identity — rounding the parts through a void-scale
+      // absolute would scatter the separating vessels.
+      vessel->AddPart(current_vessel->ExtractPart(part_id), previous_time);
     }
   } else {
     AddPart(vessel,
@@ -2363,7 +2343,12 @@ void Plugin::AddPart(not_null<Vessel*> const vessel,
                                          name,
                                          std::forward<Args>(args)...,
                                          std::move(deletion_callback));
-  vessel->AddPart(std::move(part));
+  // The callers compute a fresh part's degrees of freedom in the vessel's own
+  // placement; tag it accordingly before handing it over, so that the
+  // conversion in `Vessel::AddPart` never fires here (its `t` is unused).
+  part->set_subsystem(vessel->subsystem());
+  part->set_anchor(vessel->anchor());
+  vessel->AddPart(std::move(part), current_time_);
 }
 
 bool Plugin::is_loaded(not_null<Vessel*> vessel) const {

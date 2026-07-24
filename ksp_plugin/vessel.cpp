@@ -613,9 +613,28 @@ void Vessel::set_parent(not_null<Celestial const*> const parent) {
   parent_ = parent;
 }
 
-void Vessel::AddPart(not_null<std::unique_ptr<Part>> part) {
+void Vessel::AddPart(not_null<std::unique_ptr<Part>> part, Instant const& t) {
   LOG(INFO) << "Adding part " << part->ShortDebugString() << " to vessel "
             << ShortDebugString();
+  if (!TryInheritPlacement(part->subsystem(), part->anchor()) &&
+      (part->subsystem() != subsystem_ || part->anchor() != anchor_)) {
+    // A part transferred from a vessel in another placement — its tags,
+    // which always match the owning vessel's placement, carry the donor's:
+    // re-express its rigid motion in this vessel's, consistently with the
+    // retag below.
+    auto const [displacement, velocity_offset] =
+        ephemeris_->placement_conversion({part->subsystem(), part->anchor()},
+                                         {subsystem_, anchor_},
+                                         t);
+    RigidMotion<Barycentric, Barycentric> const conversion_motion(
+        RigidTransformation<Barycentric, Barycentric>(
+            Barycentric::origin,
+            Barycentric::origin + displacement,
+            OrthogonalMap<Barycentric, Barycentric>::Identity()),
+        Barycentric::nonrotating,
+        -velocity_offset);
+    part->set_rigid_motion(conversion_motion * part->rigid_motion());
+  }
   part->set_subsystem(subsystem_);
   part->set_anchor(anchor_);
   parts_.emplace(part->part_id(), std::move(part));
