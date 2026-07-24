@@ -81,6 +81,7 @@ internal class OnRailsBurner {
     // every frame—so they are cleared rather than reallocated.
     drains_.Clear();
     drain_rates_.Clear();
+    harvested_engines_.Clear();
     foreach (Part part in vessel.parts) {
       foreach (PartModule module in part.Modules) {
         if (!(module is ModuleEngines engine) ||
@@ -144,6 +145,10 @@ internal class OnRailsBurner {
           drain_rates_.TryGetValue(propellant.id, out double total_rate);
           drain_rates_[propellant.id] = total_rate + rate;
         }
+        harvested_engines_.Add(new HarvestedEngine{
+            engine = engine,
+            thrust = (float)engine_thrust,
+            saved_final_thrust = engine.finalThrust});
         total_thrust += engine_thrust;
         total_mass_flow += engine_mass_flow;
       }
@@ -188,18 +193,30 @@ internal class OnRailsBurner {
     // The burn is only physical if the vessel could actually hold its
     // attitude: the net engine torque about the centre of mass must lie
     // within the attitude-control authority, and control must be powered.
+    // Stock computes the gimbal authority from `finalThrust`, which is 0 on
+    // rails: shim the harvested thrust in around the census, so that a
+    // gimballed engine reports the authority it would hold unpacked.
     Vector3d control_authority = Vector3d.zero;  // Vessel axes, kN m.
-    foreach (Part part in vessel.parts) {
-      foreach (PartModule module in part.Modules) {
-        if (module is ITorqueProvider torque_provider) {
-          torque_provider.GetPotentialTorque(
-              out UnityEngine.Vector3 positive,
-              out UnityEngine.Vector3 negative);
-          control_authority += new Vector3d(
-              Math.Max(Math.Abs(positive.x), Math.Abs(negative.x)),
-              Math.Max(Math.Abs(positive.y), Math.Abs(negative.y)),
-              Math.Max(Math.Abs(positive.z), Math.Abs(negative.z)));
+    try {
+      foreach (HarvestedEngine harvested in harvested_engines_) {
+        harvested.engine.finalThrust = harvested.thrust;
+      }
+      foreach (Part part in vessel.parts) {
+        foreach (PartModule module in part.Modules) {
+          if (module is ITorqueProvider torque_provider) {
+            torque_provider.GetPotentialTorque(
+                out UnityEngine.Vector3 positive,
+                out UnityEngine.Vector3 negative);
+            control_authority += new Vector3d(
+                Math.Max(Math.Abs(positive.x), Math.Abs(negative.x)),
+                Math.Max(Math.Abs(positive.y), Math.Abs(negative.y)),
+                Math.Max(Math.Abs(positive.z), Math.Abs(negative.z)));
+          }
         }
+      }
+    } finally {
+      foreach (HarvestedEngine harvested in harvested_engines_) {
+        harvested.engine.finalThrust = harvested.saved_final_thrust;
       }
     }
     Vector3d vessel_torque =
@@ -318,11 +335,19 @@ internal class OnRailsBurner {
     public ResourceFlowMode flow_mode;
   }
 
+  private struct HarvestedEngine {
+    public ModuleEngines engine;
+    public float thrust;              // kN, this frame's harvested thrust.
+    public float saved_final_thrust;  // Restored after the authority census.
+  }
+
   // Reused across frames to avoid per-frame heap allocation during warp;
   // cleared at the start of `HandleWarpFrame`.
   private readonly List<PropellantDrain> drains_ = new List<PropellantDrain>();
   private readonly Dictionary<int, double> drain_rates_ =
       new Dictionary<int, double>();
+  private readonly List<HarvestedEngine> harvested_engines_ =
+      new List<HarvestedEngine>();
 
   private static bool? enabled_;
   private bool warp_stop_message_latched_ = false;
