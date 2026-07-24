@@ -728,73 +728,16 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
     }
   }
 
-  // Colliding (docking) vessels may hold representations in different
-  // subsystems: the rebase is only evaluated for unloaded vessels, and its
-  // dominance hysteresis leaves a band of the inter-star void where the
-  // subsystem is set by approach history rather than by position.  The
-  // pile-ups constructed below require a single representation, so rebase
-  // every vessel of a subset to the subsystem of the subset that carries the
-  // largest part mass.
-  if (ephemeris_->number_of_subsystems() > 1) {
-    std::map<Subset<Part>::Properties const*, std::vector<not_null<Vessel*>>>
-        vessels_by_subset;
-    for (auto const& [_, vessel] : vessels_) {
-      vessel->ForSomePart([&vessel = vessel,
-                           &vessels_by_subset](Part& first_part) {
-        vessels_by_subset[&Subset<Part>::Find(first_part).properties()]
-            .push_back(vessel.get());
-      });
-    }
-    for (auto const& [_, subset_vessels] : vessels_by_subset) {
-      // Unify the subsystem first (mass vote): `RebaseTo` folds the
-      // conversion into each vessel's anchor, so a cross-subsystem docking
-      // keeps every vessel's representation — and the mm-scale geometry of
-      // its parts — bit-for-bit intact.
-      std::map<int, Mass> mass_by_subsystem;
-      for (not_null<Vessel*> const vessel : subset_vessels) {
-        Mass& subsystem_mass = mass_by_subsystem[vessel->subsystem()];
-        vessel->ForAllParts([&subsystem_mass](Part const& part) {
-          subsystem_mass += part.mass();
-        });
-      }
-      if (mass_by_subsystem.size() > 1) {
-        int target_subsystem = mass_by_subsystem.begin()->first;
-        Mass target_mass = mass_by_subsystem.begin()->second;
-        for (auto const& [subsystem, mass] : mass_by_subsystem) {
-          if (mass > target_mass) {
-            target_subsystem = subsystem;
-            target_mass = mass;
-          }
-        }
-        for (not_null<Vessel*> const vessel : subset_vessels) {
-          vessel->RebaseTo(target_subsystem);
-        }
-      }
-      if (subset_vessels.size() > 1) {
-        // The pile-up constructed below requires a single representation:
-        // re-express every vessel of the subset — now all in one subsystem —
-        // under one anchor.  The offsets difference exactly on the sector
-        // lattice, whereas dropping the anchors would round each vessel at
-        // the ULP of the void distance and scatter the relative geometry of
-        // the subset (a staging separation in the deep void used to fling
-        // the pieces apart).  Load-bearing invariants: the trajectories are
-        // nonempty (the `CreateTrajectoryIfNeeded` loop above ran, so
-        // `ReanchorTo` never declines to unify), and vessels still sharing
-        // last tick's pile-up hold equal anchors (a fresh split inherits; so
-        // the `ReanchorTo`s below no-op on it rather than rebasing it once
-        // per vessel).
-        std::optional<Ephemeris<Barycentric>::Anchor> target_anchor;
-        for (not_null<Vessel*> const vessel : subset_vessels) {
-          if (vessel->anchor().has_value()) {
-            target_anchor = vessel->anchor();
-            break;
-          }
-        }
-        for (not_null<Vessel*> const vessel : subset_vessels) {
-          vessel->ReanchorTo(target_anchor);
-        }
-      }
-    }
+  // Parts carry their vessel's placement — `AddPart` retags on arrival, and a
+  // pile-up retag is replayed onto its vessels — so the divergence that the
+  // pile-up constructors below reconcile can only occur across vessel
+  // boundaries.  A part disagreeing with its own vessel is a programming
+  // error that the reconcile would otherwise silently absorb.
+  for (auto const& [_, vessel] : vessels_) {
+    vessel->ForAllParts([&vessel = vessel](Part& part) {
+      DCHECK_EQ(part.subsystem(), vessel->subsystem());
+      DCHECK(part.anchor() == vessel->anchor());
+    });
   }
 
   // We only need to collect one part per vessel, since the other parts are in
@@ -810,6 +753,36 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
           history_fixed_step_parameters_,
           ephemeris_.get());
     });
+  }
+
+  // Each pile-up chose one representation as it was constructed; align every
+  // member vessel onto its pile-up's, or the next advance would append
+  // pile-up-derived points into a trajectory still expressed in the old
+  // placement.  A no-op on agreeing, reused, or single-vessel pile-ups;
+  // `vessel_time` is the vessel's trajectory back time, exactly as the
+  // Collect loop above computes it.
+  for (auto* const pile_up : pile_ups_) {
+    VesselSet aligned;
+    for (not_null<Part*> const part : pile_up->parts()) {
+      not_null<Vessel*> const vessel =
+          FindOrDie(part_id_to_vessel_, part->part_id());
+      if (aligned.insert(vessel).second &&
+          (vessel->subsystem() != pile_up->subsystem() ||
+           vessel->anchor() != pile_up->anchor())) {
+        Instant const vessel_time =
+            is_loaded(vessel) ? current_time_ - Δt : current_time_;
+        auto const [displacement, velocity_offset] =
+            ephemeris_->placement_conversion(
+                {vessel->subsystem(), vessel->anchor()},
+                {pile_up->subsystem(), pile_up->anchor()},
+                vessel_time);
+        vessel->ApplyPlacementChange(displacement,
+                                     velocity_offset,
+                                     vessel_time,
+                                     pile_up->subsystem(),
+                                     pile_up->anchor());
+      }
+    }
   }
 
   // Now that the composition of the vessels is known, as well as their

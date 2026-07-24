@@ -18,8 +18,10 @@
 #include "geometry/frame.hpp"
 #include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
+#include "geometry/orthogonal_map.hpp"
 #include "geometry/quaternion.hpp"
 #include "geometry/space.hpp"
+#include "geometry/space_transformations.hpp"
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "integrators/embedded_explicit_runge_kutta_nyström_integrator.hpp"
@@ -36,6 +38,7 @@
 #include "physics/massive_body.hpp"
 #include "physics/mock_ephemeris.hpp"
 #include "physics/rigid_motion.hpp"
+#include "physics/sector.hpp"
 #include "physics/tensors.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/quantities.hpp"
@@ -55,14 +58,17 @@ using ::testing::Lt;
 using ::testing::MockFunction;
 using ::testing::Return;
 using ::testing::ReturnRef;
+using ::testing::Truly;
 using ::testing::_;
 using namespace principia::astronomy::_epoch;
 using namespace principia::base::_not_null;
 using namespace principia::geometry::_frame;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
+using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_quaternion;
 using namespace principia::geometry::_space;
+using namespace principia::geometry::_space_transformations;
 using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_methods;
 using namespace principia::integrators::_symplectic_runge_kutta_nyström_integrator;  // NOLINT
@@ -78,6 +84,7 @@ using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_mock_ephemeris;
 using namespace principia::physics::_rigid_motion;
+using namespace principia::physics::_sector;
 using namespace principia::physics::_tensors;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
@@ -1073,6 +1080,165 @@ TEST_F(PileUpTest, AnchoredRebaseFoldsConversionIntoAnchor) {
       pile_up.trajectory().back().degrees_of_freedom.position() +
       pile_up.anchor()->OffsetAt(t2);
   EXPECT_THAT((true_after - true_before).Norm(), Lt(1 * Milli(Metre)));
+}
+
+// The construction reconcile that replaces the plugin's pre-collect merge
+// unification: parts docking from distinct subsystems are voted onto the
+// heaviest subsystem (mass beats index, ties break toward the smallest index)
+// and the divergent parts are re-expressed there through `placement_conversion`
+// while their geometry is preserved; an all-agree pile-up takes the
+// byte-identical early-out.
+TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
+  // p1_ (1 kg, subsystem 0, unanchored) docks with the heavier p2_ (2 kg,
+  // subsystem 1, anchored): the vote adopts subsystem 1 — the higher index —
+  // and p2_'s anchor, and only the divergent p1_ is converted.
+  MockEphemeris<Barycentric> ephemeris;
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({1e15 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = Velocity<Barycentric>(),
+      .epoch = J2000};
+  p2_.set_subsystem(1);
+  p2_.set_anchor(anchor);
+
+  // The known conversion the vote applies to p1_, and the rigid motion it must
+  // produce (built exactly as the constructor does).
+  Displacement<Barycentric> const conversion_displacement(
+      {7 * Metre, -5 * Metre, 3 * Metre});
+  Velocity<Barycentric> const conversion_velocity(
+      {2 * Metre / Second, 4 * Metre / Second, -6 * Metre / Second});
+  auto const from_p1 =
+      [](Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
+        return placement.subsystem == 0 && !placement.anchor.has_value();
+      };
+  auto const to_target =
+      [&anchor](Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
+        return placement.subsystem == 1 && placement.anchor == anchor;
+      };
+  EXPECT_CALL(ephemeris,
+              placement_conversion(Truly(from_p1), Truly(to_target), J2000))
+      .WillOnce(Return(std::make_pair(conversion_displacement,
+                                      conversion_velocity)));
+  RigidMotion<Barycentric, Barycentric> const conversion_motion(
+      RigidTransformation<Barycentric, Barycentric>(
+          Barycentric::origin,
+          Barycentric::origin + conversion_displacement,
+          OrthogonalMap<Barycentric, Barycentric>::Identity()),
+      Barycentric::nonrotating,
+      -conversion_velocity);
+  auto const p1_rigid_motion_before = p1_.rigid_motion();
+  auto const p2_rigid_motion_before = p2_.rigid_motion();
+  auto const p1_expected =
+      (conversion_motion * p1_rigid_motion_before)(
+          {RigidPart::origin, RigidPart::unmoving});
+
+  TestablePileUp pile_up({&p1_, &p2_}, J2000,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         /*deletion_callback=*/nullptr);
+
+  // The heavier subsystem wins the vote and its part's anchor is adopted.
+  EXPECT_EQ(1, pile_up.subsystem());
+  ASSERT_TRUE(pile_up.anchor().has_value());
+  EXPECT_EQ(anchor, *pile_up.anchor());
+
+  // p1_ is retagged and its rigid motion converted; p2_ is left untouched.
+  EXPECT_EQ(1, p1_.subsystem());
+  ASSERT_TRUE(p1_.anchor().has_value());
+  EXPECT_EQ(anchor, *p1_.anchor());
+  auto const p1_actual =
+      p1_.rigid_motion()({RigidPart::origin, RigidPart::unmoving});
+  EXPECT_EQ(p1_expected.position(), p1_actual.position());
+  EXPECT_EQ(p1_expected.velocity(), p1_actual.velocity());
+  auto const p2_actual =
+      p2_.rigid_motion()({RigidPart::origin, RigidPart::unmoving});
+  EXPECT_EQ(p2_rigid_motion_before(
+                {RigidPart::origin, RigidPart::unmoving}).position(),
+            p2_actual.position());
+  EXPECT_EQ(p2_rigid_motion_before(
+                {RigidPart::origin, RigidPart::unmoving}).velocity(),
+            p2_actual.velocity());
+
+  // The conversion is a rigid motion, so the parts' relative geometry is
+  // preserved: their separation in the pile-up frame equals the separation of
+  // their converted Barycentric positions.
+  EXPECT_EQ(2u, pile_up.actual_part_rigid_motion().size());
+  Length const separation_barycentric =
+      (p1_expected.position() - p2_actual.position()).Norm();
+  Length const separation_pile_up =
+      (pile_up.actual_part_rigid_motion().at(&p1_)(
+           {RigidPart::origin, RigidPart::unmoving}).position() -
+       pile_up.actual_part_rigid_motion().at(&p2_)(
+           {RigidPart::origin, RigidPart::unmoving}).position()).Norm();
+  EXPECT_THAT(separation_pile_up, AlmostEquals(separation_barycentric, 0, 8));
+
+  // A tie in the mass vote breaks toward the smallest subsystem index.
+  MockEphemeris<Barycentric> tie_ephemeris;
+  auto const anchorless =
+      [](int const subsystem) {
+        return [subsystem](
+            Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
+          return placement.subsystem == subsystem &&
+                 !placement.anchor.has_value();
+        };
+      };
+  EXPECT_CALL(tie_ephemeris,
+              placement_conversion(
+                  Truly(anchorless(1)), Truly(anchorless(0)), _))
+      .WillOnce(Return(std::make_pair(Displacement<Barycentric>{},
+                                      Velocity<Barycentric>{})));
+  Part pa(121, "pa", mass1_, EccentricPart::origin, inertia_tensor1_,
+          RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+              p1_dof_),
+          /*deletion_callback=*/nullptr);
+  Part pb(122, "pb", mass1_, EccentricPart::origin, inertia_tensor1_,
+          RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+              p2_dof_),
+          /*deletion_callback=*/nullptr);
+  pb.set_subsystem(1);
+  TestablePileUp tie_pile_up({&pa, &pb}, J2000,
+                             DefaultPsychohistoryParameters(),
+                             DefaultHistoryParameters(),
+                             &tie_ephemeris,
+                             /*deletion_callback=*/nullptr);
+  EXPECT_EQ(0, tie_pile_up.subsystem());
+
+  // The all-agree path is a byte-identical early-out: no conversion is
+  // requested and the parts' rigid motions are untouched.
+  MockEphemeris<Barycentric> agree_ephemeris;
+  EXPECT_CALL(agree_ephemeris, placement_conversion(_, _, _)).Times(0);
+  Part pc(123, "pc", mass1_, EccentricPart::origin, inertia_tensor1_,
+          RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+              p1_dof_),
+          /*deletion_callback=*/nullptr);
+  Part pd(124, "pd", mass2_, EccentricPart::origin, inertia_tensor2_,
+          RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+              p2_dof_),
+          /*deletion_callback=*/nullptr);
+  auto const pc_before =
+      pc.rigid_motion()({RigidPart::origin, RigidPart::unmoving});
+  auto const pd_before =
+      pd.rigid_motion()({RigidPart::origin, RigidPart::unmoving});
+  TestablePileUp agree_pile_up({&pc, &pd}, J2000,
+                               DefaultPsychohistoryParameters(),
+                               DefaultHistoryParameters(),
+                               &agree_ephemeris,
+                               /*deletion_callback=*/nullptr);
+  EXPECT_EQ(0, agree_pile_up.subsystem());
+  EXPECT_FALSE(agree_pile_up.anchor().has_value());
+  EXPECT_EQ(pc_before.position(),
+            pc.rigid_motion()(
+                {RigidPart::origin, RigidPart::unmoving}).position());
+  EXPECT_EQ(pc_before.velocity(),
+            pc.rigid_motion()(
+                {RigidPart::origin, RigidPart::unmoving}).velocity());
+  EXPECT_EQ(pd_before.position(),
+            pd.rigid_motion()(
+                {RigidPart::origin, RigidPart::unmoving}).position());
+  EXPECT_EQ(pd_before.velocity(),
+            pd.rigid_motion()(
+                {RigidPart::origin, RigidPart::unmoving}).velocity());
 }
 
 }  // namespace ksp_plugin

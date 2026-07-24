@@ -5,6 +5,7 @@
 #include <future>
 #include <iterator>
 #include <list>
+#include <map>
 #include <optional>
 #include <memory>
 #include <utility>
@@ -87,17 +88,52 @@ PileUp::PileUp(
       history_(trajectory_.segments().begin()),
       deletion_callback_(std::move(deletion_callback)) {
   LOG(INFO) << "Constructing pile up at " << this;
-  subsystem_ = parts_.front()->subsystem();
-  anchor_ = parts_.front()->anchor();
+  // Docking parts may hold representations in distinct subsystems: the rebase
+  // runs only for unloaded vessels and its hysteresis leaves a void band where
+  // the subsystem follows approach history.  The pile-up needs one
+  // representation, so vote for the subsystem carrying the largest part mass
+  // (smallest index breaks a tie) and reconcile the parts onto it.
+  std::map<int, Mass> mass_by_subsystem;
+  for (not_null<Part*> const part : parts_) {
+    mass_by_subsystem[part->subsystem()] += part->mass();
+  }
+  subsystem_ = mass_by_subsystem.begin()->first;
+  Mass target_mass = mass_by_subsystem.begin()->second;
+  for (auto const& [subsystem, mass] : mass_by_subsystem) {
+    if (mass > target_mass) {
+      subsystem_ = subsystem;
+      target_mass = mass;
+    }
+  }
+  // The anchor of the first part already in the target subsystem: always
+  // present, and natively valid, so it needs no folding.
+  for (not_null<Part*> const part : parts_) {
+    if (part->subsystem() == subsystem_) {
+      anchor_ = part->anchor();
+      break;
+    }
+  }
   MechanicalSystem<Barycentric, NonRotatingPileUp> mechanical_system;
   for (not_null<Part*> const part : parts_) {
-    // Parts in contact are aeons away from a subsystem boundary, so their
-    // vessels must all have rebased consistently; the plugin reconciles the
-    // representations (subsystem and anchor) before collecting the pile-ups.
-    CHECK_EQ(part->subsystem(), subsystem_)
-        << "Pile up with parts in distinct subsystems";
-    CHECK(part->anchor() == anchor_)
-        << "Pile up with parts in distinct anchors";
+    if (part->subsystem() != subsystem_ || part->anchor() != anchor_) {
+      // A part from a vessel in another placement carries the donor's tags:
+      // re-express its rigid motion in the pile-up's, consistently with the
+      // retag below.
+      auto const [displacement, velocity_offset] =
+          ephemeris_->placement_conversion({part->subsystem(), part->anchor()},
+                                           {subsystem_, anchor_},
+                                           t);
+      RigidMotion<Barycentric, Barycentric> const conversion_motion(
+          RigidTransformation<Barycentric, Barycentric>(
+              Barycentric::origin,
+              Barycentric::origin + displacement,
+              OrthogonalMap<Barycentric, Barycentric>::Identity()),
+          Barycentric::nonrotating,
+          -velocity_offset);
+      part->set_rigid_motion(conversion_motion * part->rigid_motion());
+      part->set_subsystem(subsystem_);
+      part->set_anchor(anchor_);
+    }
     mechanical_system.AddRigidBody(
         part->rigid_motion(), part->mass(), part->inertia_tensor());
   }
