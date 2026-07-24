@@ -508,17 +508,15 @@ class Vessel {
   LazilyDeserializedFlightPlan const& selected_flight_plan() const;
 
   // Translates the rigid motions of the parts by the given affine offset,
-  // retagging them with the current anchor.  The containing pile-up follows:
-  // by the same offset when it sits in this vessel's old placement
-  // (`old_anchor`, the anchor before the change), and otherwise — a co-piled
-  // vessel moved the shared pile-up earlier in the same tick — by the
-  // conversion from the pile-up's own placement, so that translations never
-  // compound.
+  // retagging them with the current anchor, and moves the containing pile-up
+  // by the same offset.  The pile-up sits in this vessel's old placement:
+  // re-anchors are decided once per pile-up (`PileUp::RebaseIfNeeded`), and
+  // the merge-unification loop never moves one pile-up through two member
+  // vessels in a tick, so the translations cannot compound.
   void TranslateParts(
       Displacement<Barycentric> const& displacement,
       Velocity<Barycentric> const& velocity_offset,
-      Instant const& t,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& old_anchor);
+      Instant const& t);
 
   GUID const guid_;
   std::string name_;
