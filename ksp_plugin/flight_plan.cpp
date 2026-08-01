@@ -67,8 +67,7 @@ FlightPlan::FlightPlan(
     Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters,
     Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
         generalized_adaptive_step_parameters,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> anchor)
+    Ephemeris<Barycentric>::SubsystemPlacement placement)
     : initial_mass_(initial_mass),
       initial_time_(initial_time),
       initial_degrees_of_freedom_(initial_degrees_of_freedom),
@@ -77,8 +76,7 @@ FlightPlan::FlightPlan(
       adaptive_step_parameters_(std::move(adaptive_step_parameters)),
       generalized_adaptive_step_parameters_(
           std::move(generalized_adaptive_step_parameters)),
-      subsystem_(subsystem),
-      anchor_(std::move(anchor)) {
+      placement_(std::move(placement)) {
   CHECK(desired_final_time_ >= initial_time_);
   MakeProlongator(desired_final_time_);
 
@@ -101,8 +99,7 @@ FlightPlan::FlightPlan(FlightPlan const& other)
       ephemeris_(other.ephemeris_),
       desired_final_time_(other.desired_final_time_),
       anomalous_segments_(other.anomalous_segments_),
-      subsystem_(other.subsystem_),
-      anchor_(other.anchor_),
+      placement_(other.placement_),
       manœuvres_(other.manœuvres_),
       analysis_is_enabled_(other.analysis_is_enabled_),
       adaptive_step_parameters_(other.adaptive_step_parameters_),
@@ -149,13 +146,9 @@ Instant FlightPlan::desired_final_time() const {
   return desired_final_time_;
 }
 
-int FlightPlan::subsystem() const {
-  return subsystem_;
-}
-
-std::optional<Ephemeris<Barycentric>::Anchor> const& FlightPlan::anchor()
+Ephemeris<Barycentric>::SubsystemPlacement const& FlightPlan::placement()
     const {
-  return anchor_;
+  return placement_;
 }
 
 Ephemeris<Barycentric> const& FlightPlan::ephemeris() const {
@@ -349,8 +342,7 @@ void FlightPlan::EnableAnalysis(bool const enabled) {
           coast_analysers_[index / 2]->RequestAnalysis(
               {.first_time = first_time,
                .first_degrees_of_freedom = first_degrees_of_freedom,
-               .subsystem = subsystem_,
-               .anchor = anchor_,
+               .placement = placement_,
                .mission_duration = coast->back().time - first_time,
                .extended_mission_duration = desired_final_time_ - first_time});
         }
@@ -379,11 +371,11 @@ void FlightPlan::WriteToMessage(
   for (auto const& manœuvre : manœuvres_) {
     manœuvre.WriteToMessage(message->add_manoeuvre());
   }
-  if (subsystem_ != 0) {
-    message->set_subsystem(subsystem_);
+  if (placement_.subsystem != 0) {
+    message->set_subsystem(placement_.subsystem);
   }
-  if (anchor_.has_value()) {
-    anchor_->WriteToMessage(message->mutable_anchor());
+  if (placement_.anchor.has_value()) {
+    placement_.anchor->WriteToMessage(message->mutable_anchor());
   }
 }
 
@@ -432,8 +424,7 @@ std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
       ephemeris,
       *adaptive_step_parameters,
       *generalized_adaptive_step_parameters,
-      message.subsystem(),
-      anchor);
+      Ephemeris<Barycentric>::SubsystemPlacement(message.subsystem(), anchor));
 
   for (int i = 0; i < message.manoeuvre_size(); ++i) {
     auto const& manoeuvre = message.manoeuvre(i);
@@ -478,14 +469,15 @@ absl::Status FlightPlan::Rebase(
     Displacement<Barycentric> const& displacement_at_epoch,
     Velocity<Barycentric> const& velocity_offset,
     Instant const& epoch,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
   // The subsystem re-expression is supplied by the caller in
   // `displacement_at_epoch`/`velocity_offset`; add the delta between the old
-  // (`anchor_`) and new (`anchor`) anchors so that an anchored flight plan is
-  // re-expressed consistently.  A nullopt anchor contributes the zero offset.
+  // (`placement_.anchor`) and new (`placement.anchor`) anchors so that an
+  // anchored flight plan is re-expressed consistently.  A nullopt anchor
+  // contributes the zero offset.
   auto const [anchor_displacement, anchor_velocity] =
-      Ephemeris<Barycentric>::Anchor::Conversion(anchor_, anchor, epoch);
+      Ephemeris<Barycentric>::Anchor::Conversion(placement_.anchor,
+                                                 placement.anchor, epoch);
   Displacement<Barycentric> const total_displacement =
       displacement_at_epoch + anchor_displacement;
   Velocity<Barycentric> const total_velocity =
@@ -494,8 +486,7 @@ absl::Status FlightPlan::Rebase(
       initial_degrees_of_freedom_.position() + total_displacement +
           total_velocity * (initial_time_ - epoch),
       initial_degrees_of_freedom_.velocity() + total_velocity);
-  subsystem_ = subsystem;
-  anchor_ = anchor;
+  placement_ = placement;
   // `RecomputeAllSegments` retains the first point of the first coasting
   // segment and flows from it; translate the trajectory so that the
   // recomputation starts from the rebased initial state.
@@ -549,7 +540,7 @@ absl::Status FlightPlan::BurnSegment(
                              final_time,
                              adaptive_step_parameters_,
                              max_ephemeris_steps,
-                             {subsystem_, anchor_});
+                             placement_);
     } else {
       return ephemeris_->FlowWithAdaptiveStep(
                              &trajectory_,
@@ -557,7 +548,7 @@ absl::Status FlightPlan::BurnSegment(
                              final_time,
                              generalized_adaptive_step_parameters_,
                              max_ephemeris_steps,
-                             {subsystem_, anchor_});
+                             placement_);
     }
   } else {
     return absl::OkStatus();
@@ -581,7 +572,7 @@ absl::Status FlightPlan::CoastSegment(
                          desired_final_time,
                          adaptive_step_parameters_,
                          max_ephemeris_steps,
-                         {subsystem_, anchor_});
+                         placement_);
 }
 
 absl::Status FlightPlan::ComputeSegments(
@@ -605,11 +596,11 @@ absl::Status FlightPlan::ComputeSegments(
       if (status.ok()) {
         manœuvre.set_coasting_trajectory(
             coast,
-            ephemeris_->subsystem_conversion(subsystem_,
+            ephemeris_->subsystem_conversion(placement_.subsystem,
                                              manœuvre.frame()->subsystem(),
                                              manœuvre.initial_time()),
             ephemeris_->subsystem_velocity_conversion(
-                subsystem_, manœuvre.frame()->subsystem()));
+                placement_.subsystem, manœuvre.frame()->subsystem()));
       } else {
         overall_status.Update(status);
         anomalous_segments_ = 1;
@@ -624,8 +615,7 @@ absl::Status FlightPlan::ComputeSegments(
         analyser->RequestAnalysis(
             {.first_time = first_time,
              .first_degrees_of_freedom = first_degrees_of_freedom,
-             .subsystem = subsystem_,
-             .anchor = anchor_,
+             .placement = placement_,
              .mission_duration = coast->back().time - first_time,
              .extended_mission_duration = desired_final_time_ - first_time});
       }
@@ -663,8 +653,7 @@ absl::Status FlightPlan::ComputeSegments(
       analyser->RequestAnalysis(
           {.first_time = first_time,
            .first_degrees_of_freedom = first_degrees_of_freedom,
-           .subsystem = subsystem_,
-           .anchor = anchor_,
+           .placement = placement_,
            .mission_duration = desired_final_time_ - first_time});
     }
     absl::Status const status = CoastSegment(desired_final_time_,

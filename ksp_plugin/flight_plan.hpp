@@ -43,10 +43,9 @@ class FlightPlan {
   // trajectories are computed using the given parameters by the given
   // `ephemeris`.  The flight plan contains a single coast which, if possible
   // ends at `desired_final_time`.
-  // `subsystem` is the subsystem in whose representation
-  // `initial_degrees_of_freedom` (and hence the whole plan) is expressed, and
-  // `anchor` further displaces that representation when the vessel is anchored
-  // in the force-free void; both are sourced from the vessel.
+  // `placement` is the placement — subsystem and anchor — in whose
+  // representation `initial_degrees_of_freedom` (and hence the whole plan) is
+  // expressed; it is sourced from the vessel.
   FlightPlan(Mass const& initial_mass,
              Instant const& initial_time,
              DegreesOfFreedom<Barycentric> const& initial_degrees_of_freedom,
@@ -56,16 +55,15 @@ class FlightPlan {
                  adaptive_step_parameters,
              Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
                  generalized_adaptive_step_parameters,
-             int subsystem = 0,
-             std::optional<Ephemeris<Barycentric>::Anchor> anchor =
-                 std::nullopt);
+             Ephemeris<Barycentric>::SubsystemPlacement placement =
+                 Ephemeris<Barycentric>::SubsystemPlacement::Stock());
 
   explicit FlightPlan(FlightPlan const& other);
 
   virtual ~FlightPlan() = default;
 
   // Re-expresses this flight plan relative to the local origin of the given
-  // `subsystem` and `anchor`, by translating its initial degrees of freedom by
+  // `placement`, by translating its initial degrees of freedom by
   // `displacement_at_epoch + velocity_offset * (initial_time() - epoch)` in
   // position and by `velocity_offset` in velocity (the subsystem re-expression,
   // supplied by the caller), further translated by the delta between the old
@@ -74,20 +72,15 @@ class FlightPlan {
       Displacement<Barycentric> const& displacement_at_epoch,
       Velocity<Barycentric> const& velocity_offset,
       Instant const& epoch,
-      int subsystem,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
-          std::nullopt);
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement);
 
   // Construction parameters.
   virtual Instant initial_time() const;
   virtual Instant desired_final_time() const;
 
-  // The subsystem in whose representation this flight plan is expressed.
-  virtual int subsystem() const;
-
-  // The anchor further displacing the representation of this flight plan;
-  // absent when the vessel was unanchored at creation or rebase.
-  virtual std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
+  // The placement — subsystem and anchor — in whose representation this flight
+  // plan is expressed.
+  virtual Ephemeris<Barycentric>::SubsystemPlacement const& placement() const;
 
   // The ephemeris used to compute this flight plan.
   virtual Ephemeris<Barycentric> const& ephemeris() const;
@@ -301,13 +294,12 @@ class FlightPlan {
   Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters_;
   Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters
       generalized_adaptive_step_parameters_;
-  int subsystem_ = 0;
-  // The anchor further displacing this flight plan's representation while its
-  // vessel coasts in the force-free inter-subsystem void; absent when
-  // unanchored.  Sourced from the vessel like `subsystem_`; without it the
-  // integrator reads the near-origin anchored coordinates as subsystem-relative
-  // and the plan plunges into the home star.
-  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
+  // The placement in whose representation this flight plan is expressed.
+  // Sourced from the vessel; without the anchor the integrator reads the
+  // near-origin anchored coordinates as subsystem-relative and the plan plunges
+  // into the home star.
+  Ephemeris<Barycentric>::SubsystemPlacement placement_ =
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock();
 };
 
 }  // namespace internal

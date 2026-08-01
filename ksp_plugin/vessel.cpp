@@ -191,8 +191,7 @@ void Vessel::ApplyPlacementChange(
           optimizable_flight_plan->optimization_driver->Interrupt();
         }
         optimizable_flight_plan->flight_plan
-            ->Rebase(conversion, velocity_conversion, epoch,
-                     placement_.subsystem, placement_.anchor)
+            ->Rebase(conversion, velocity_conversion, epoch, placement_)
             .IgnoreError();
       }
     }
@@ -218,8 +217,8 @@ void Vessel::ApplyPlacementChange(
     }
     auto const [gap, gap_velocity] =
         Ephemeris<Barycentric>::Anchor::Conversion(
-            optimizable_flight_plan->flight_plan->anchor(), placement_.anchor,
-            epoch);
+            optimizable_flight_plan->flight_plan->placement().anchor,
+            placement_.anchor, epoch);
     if (gap.Norm²() <= flight_plan_rebase_bound * flight_plan_rebase_bound) {
       continue;
     }
@@ -234,8 +233,7 @@ void Vessel::ApplyPlacementChange(
         ->Rebase(Displacement<Barycentric>{},
                  Velocity<Barycentric>{},
                  epoch,
-                 placement_.subsystem,
-                 placement_.anchor)
+                 placement_)
         .IgnoreError();
   }
 }
@@ -461,7 +459,7 @@ bool Vessel::UpdateFlightPlanFromOptimization() {
   std::shared_ptr const last_flight_plan =
       optimization_driver->last_flight_plan();
   if (flight_plan != last_flight_plan &&
-      last_flight_plan->subsystem() == placement_.subsystem) {
+      last_flight_plan->placement().subsystem == placement_.subsystem) {
     flight_plan = last_flight_plan;
     return true;
   }
@@ -477,16 +475,16 @@ void Vessel::ReadFlightPlanFromMessage() {
     auto flight_plan = FlightPlan::ReadFromMessage(message, ephemeris_);
     // The vessel may have been rebased while this flight plan was lazily held
     // in its serialized form.
-    if (flight_plan->subsystem() != placement_.subsystem) {
+    if (flight_plan->placement().subsystem != placement_.subsystem) {
       flight_plan->Rebase(ephemeris_->subsystem_conversion(
-                              flight_plan->subsystem(),
+                              flight_plan->placement().subsystem,
                               placement_.subsystem,
                               flight_plan->initial_time()),
                           ephemeris_->subsystem_velocity_conversion(
-                              flight_plan->subsystem(), placement_.subsystem),
+                              flight_plan->placement().subsystem,
+                              placement_.subsystem),
                           flight_plan->initial_time(),
-                          placement_.subsystem,
-                          placement_.anchor).IgnoreError();
+                          placement_).IgnoreError();
     }
     selected_flight_plan() = OptimizableFlightPlan{
         .flight_plan = std::move(flight_plan),
@@ -670,8 +668,7 @@ void Vessel::CreateFlightPlan(
           ephemeris_,
           flight_plan_adaptive_step_parameters,
           flight_plan_generalized_adaptive_step_parameters,
-          placement_.subsystem,
-          placement_.anchor),
+          placement_),
       .optimization_driver = nullptr});
   selected_flight_plan_index_ = flight_plans_.size() - 1;
 }
@@ -739,7 +736,8 @@ absl::Status Vessel::RebaseFlightPlan(Mass const& initial_mass) {
       ephemeris_,
       original_flight_plan->adaptive_step_parameters(),
       original_flight_plan->generalized_adaptive_step_parameters(),
-      placement_.subsystem);
+      Ephemeris<Barycentric>::SubsystemPlacement(placement_.subsystem,
+                                                 std::nullopt));
   for (int i = first_manœuvre_kept;
        i < original_flight_plan->number_of_manœuvres();
        ++i) {
@@ -812,8 +810,7 @@ void Vessel::RequestOrbitAnalysis(Time const& mission_duration) {
   orbit_analyser_->RequestAnalysis(
       {.first_time = psychohistory_->back().time,
        .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
-       .subsystem = placement_.subsystem,
-       .anchor = placement_.anchor,
+       .placement = placement_,
        .mission_duration = mission_duration});
 }
 

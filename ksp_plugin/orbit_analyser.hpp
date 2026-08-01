@@ -107,14 +107,11 @@ class OrbitAnalyser {
   struct Parameters {
     Instant first_time;
     DegreesOfFreedom<Barycentric> first_degrees_of_freedom;
-    // The subsystem in whose representation `first_degrees_of_freedom` is
-    // expressed.
-    int subsystem = 0;
-    // The anchor further displacing that representation while the vessel coasts
-    // in the force-free inter-subsystem void; absent when unanchored.  Passed
-    // to the flow so the integration does not read the anchored coordinates as
-    // subsystem-relative.
-    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
+    // The placement in whose representation `first_degrees_of_freedom` is
+    // expressed.  The anchor is passed to the flow so the integration does not
+    // read the anchored coordinates as subsystem-relative.
+    Ephemeris<Barycentric>::SubsystemPlacement placement =
+        Ephemeris<Barycentric>::SubsystemPlacement::Stock();
     Time mission_duration;
     // The analyser may compute the trajectory up to `extended_mission_duration`
     // to ensure that at least one revolution is analysed.

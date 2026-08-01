@@ -372,7 +372,7 @@ XYZ __cdecl principia__FlightPlanGetManoeuvreInitialPlottedVelocity(
   // the sector lattice against a target-vessel frame.
   auto const [conversion_displacement, conversion_velocity] =
       flight_plan.ephemeris().placement_conversion(
-          {flight_plan.subsystem(), flight_plan.anchor()},
+          flight_plan.placement(),
           plugin->renderer().GetPlottingFrame()->placement(),
           t);
   DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom = {
@@ -555,7 +555,7 @@ void __cdecl principia__FlightPlanRenderedApsides(
         max_points,
         segment_rendered_apoapsides,
         segment_rendered_periapsides,
-        {vessel_flight_plan.subsystem(), vessel_flight_plan.anchor()});
+        vessel_flight_plan.placement());
     rendered_apoapsides.merge(std::move(segment_rendered_apoapsides));
     rendered_periapsides.merge(std::move(segment_rendered_periapsides));
   }
@@ -589,7 +589,7 @@ void __cdecl principia__FlightPlanRenderedClosestApproaches(
         FromXYZ<Position<World>>(sun_world_position),
         max_points,
         segment_rendered_closest_approaches,
-        {vessel_flight_plan.subsystem(), vessel_flight_plan.anchor()});
+        vessel_flight_plan.placement());
     rendered_closest_approaches.merge(
         std::move(segment_rendered_closest_approaches));
   }
@@ -624,7 +624,7 @@ void __cdecl principia__FlightPlanRenderedNodes(Plugin const* const plugin,
         max_points,
         segment_rendered_ascending,
         segment_rendered_descending,
-        {vessel_flight_plan.subsystem(), vessel_flight_plan.anchor()});
+        vessel_flight_plan.placement());
     std::move(segment_rendered_ascending.begin(),
               segment_rendered_ascending.end(),
               std::back_inserter(rendered_ascending));
@@ -665,7 +665,7 @@ Iterator* __cdecl principia__FlightPlanRenderedSegment(
           segment->end(),
           FromXYZ<Position<World>>(sun_world_position),
           plugin->PlanetariumRotation(),
-          {vessel_flight_plan.subsystem(), vessel_flight_plan.anchor()});
+          vessel_flight_plan.placement());
   if (index % 2 == 1 && !rendered_trajectory.empty() &&
       rendered_trajectory.front().time != segment->front().time) {
     // TODO(egg): this is ugly; we should centralize rendering.

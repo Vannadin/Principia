@@ -166,7 +166,7 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        {vessel.flight_plan().subsystem(), std::nullopt},
+        {vessel.flight_plan().placement().subsystem, std::nullopt},
         &anchor_coordinates);
   }
   *anchor = ToXYZ(anchor_coordinates);

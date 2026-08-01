@@ -1,6 +1,7 @@
 #include "ksp_plugin/orbit_analyser.hpp"
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -284,7 +285,7 @@ TEST_F(OrbitAnalyserTest, InterstellarStarOrbit) {
   analyser.RequestAnalysis(
       {.first_time = t0,
        .first_degrees_of_freedom = first_degrees_of_freedom,
-       .subsystem = 1,
+       .placement = {1, std::nullopt},
        .mission_duration = 2 * keplerian_period});
   for (int i = 0; i < 30'000 && analyser.analysis() == nullptr; ++i) {
     absl::SleepFor(absl::Milliseconds(10));
@@ -345,8 +346,7 @@ TEST_F(OrbitAnalyserTest, AnchoredVoidCruiserHasNoPrimary) {
   analyser.RequestAnalysis(
       {.first_time = t0,
        .first_degrees_of_freedom = first_degrees_of_freedom,
-       .subsystem = 0,
-       .anchor = anchor,
+       .placement = {0, anchor},
        .mission_duration = 1 * Day});
   for (int i = 0; i < 6000 && analyser.analysis() == nullptr; ++i) {
     absl::SleepFor(absl::Milliseconds(10));
@@ -411,8 +411,7 @@ TEST_F(OrbitAnalyserTest, AnchoredOrbitAtRemoteStar) {
   analyser.RequestAnalysis(
       {.first_time = t0,
        .first_degrees_of_freedom = first_degrees_of_freedom,
-       .subsystem = 0,
-       .anchor = anchor,
+       .placement = {0, anchor},
        .mission_duration = 2 * keplerian_period});
   for (int i = 0; i < 6000 && analyser.analysis() == nullptr; ++i) {
     absl::SleepFor(absl::Milliseconds(10));

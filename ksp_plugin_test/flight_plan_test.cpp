@@ -3,6 +3,7 @@
 #include <chrono>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 #include <thread>
@@ -550,11 +551,12 @@ TEST_F(FlightPlanTest, Rebase) {
       flight_plan_->GetAllSegments().front().time;
   DegreesOfFreedom<Barycentric> const previous_front_degrees_of_freedom =
       flight_plan_->GetAllSegments().front().degrees_of_freedom;
-  EXPECT_OK(flight_plan_->Rebase(displacement,
-                                 /*velocity_offset=*/Barycentric::unmoving,
-                                 /*epoch=*/flight_plan_->initial_time(),
-                                 /*subsystem=*/0));
-  EXPECT_EQ(0, flight_plan_->subsystem());
+  EXPECT_OK(flight_plan_->Rebase(
+      displacement,
+      /*velocity_offset=*/Barycentric::unmoving,
+      /*epoch=*/flight_plan_->initial_time(),
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock()));
+  EXPECT_EQ(0, flight_plan_->placement().subsystem);
 
   // The recomputed flight plan must start from the translated initial state.
   auto const& front = flight_plan_->GetAllSegments().front();
@@ -670,7 +672,7 @@ TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
   // Reference: computed entirely in subsystem 0.
   auto const reference_flight_plan = make_flight_plan();
   EXPECT_OK(reference_flight_plan->Insert(make_normal_burn(), 0));
-  ASSERT_EQ(0, reference_flight_plan->subsystem());
+  ASSERT_EQ(0, reference_flight_plan->placement().subsystem);
   Velocity<Barycentric> const reference_velocity =
       reference_flight_plan->GetSegment(1)
           ->back().degrees_of_freedom.velocity();
@@ -684,8 +686,8 @@ TEST_F(FlightPlanTest, RebaseAcrossSubsystems) {
                                       rebased_flight_plan->initial_time()),
       ephemeris->subsystem_velocity_conversion(/*s1=*/0, /*s2=*/1),
       /*epoch=*/rebased_flight_plan->initial_time(),
-      /*subsystem=*/1));
-  ASSERT_EQ(1, rebased_flight_plan->subsystem());
+      {/*subsystem=*/1, std::nullopt}));
+  ASSERT_EQ(1, rebased_flight_plan->placement().subsystem);
   Velocity<Barycentric> const rebased_velocity =
       rebased_flight_plan->GetSegment(1)
           ->back().degrees_of_freedom.velocity();

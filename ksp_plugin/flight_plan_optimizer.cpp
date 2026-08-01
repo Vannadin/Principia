@@ -560,9 +560,11 @@ FlightPlanOptimizer::EvaluateClosestPeriapsis(
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
       flight_plan_->ephemeris().subsystem_conversion(
-          celestial.subsystem(), flight_plan_->subsystem(), begin_time),
+          celestial.subsystem(),
+          flight_plan_->placement().subsystem,
+          begin_time),
       flight_plan_->ephemeris().subsystem_velocity_conversion(
-          celestial.subsystem(), flight_plan_->subsystem()),
+          celestial.subsystem(), flight_plan_->placement().subsystem),
       begin_time);
   auto const& vessel_trajectory = flight_plan_->GetAllSegments();
 
@@ -666,9 +668,9 @@ Length FlightPlanOptimizer::EvaluateDistanceToCelestialWithReplacement(
   TranslatedTrajectory<Barycentric> const celestial_trajectory(
       celestial.trajectory(),
       flight_plan_->ephemeris().subsystem_conversion(
-          celestial.subsystem(), flight_plan_->subsystem(), time),
+          celestial.subsystem(), flight_plan_->placement().subsystem, time),
       flight_plan_->ephemeris().subsystem_velocity_conversion(
-          celestial.subsystem(), flight_plan_->subsystem()),
+          celestial.subsystem(), flight_plan_->placement().subsystem),
       time);
   return (degrees_of_freedom.position() -
           celestial_trajectory.EvaluatePosition(time)).Norm();
@@ -728,14 +730,14 @@ Angle FlightPlanOptimizer::EvaluateRelativeInclinationWithReplacement(
   DegreesOfFreedom<Barycentric> converted_degrees_of_freedom =
       barycentric_degrees_of_freedom;
   if (int const frame_subsystem = frame.subsystem();
-      frame_subsystem != flight_plan_->subsystem()) {
+      frame_subsystem != flight_plan_->placement().subsystem) {
     converted_degrees_of_freedom = {
         converted_degrees_of_freedom.position() +
             flight_plan_->ephemeris().subsystem_conversion(
-                flight_plan_->subsystem(), frame_subsystem, time),
+                flight_plan_->placement().subsystem, frame_subsystem, time),
         converted_degrees_of_freedom.velocity() +
             flight_plan_->ephemeris().subsystem_velocity_conversion(
-                flight_plan_->subsystem(), frame_subsystem)};
+                flight_plan_->placement().subsystem, frame_subsystem)};
   }
   auto const navigation_degrees_of_freedom =
       frame.ToThisFrameAtTime(time)(converted_degrees_of_freedom);

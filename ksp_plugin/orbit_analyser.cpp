@@ -165,7 +165,7 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
     // time, so they compose into the epoch/velocity pair below.
     auto const [conversion_at_epoch, velocity_conversion] =
         ephemeris_->placement_conversion(
-            {parameters.subsystem, parameters.anchor},
+            parameters.placement,
             {primary_centred.subsystem(), std::nullopt},
             parameters.first_time);
     auto const status_or_primary_centred_trajectory =
@@ -244,11 +244,12 @@ absl::Status OrbitAnalyser::FindBodyWithSmallestOsculatingPeriod(
   // home star and the primary be selected there.
   DegreesOfFreedom<Barycentric> first_degrees_of_freedom =
       parameters.first_degrees_of_freedom;
-  if (parameters.anchor.has_value()) {
+  if (parameters.placement.anchor.has_value()) {
     first_degrees_of_freedom = {
         first_degrees_of_freedom.position() +
-            parameters.anchor->OffsetAt(parameters.first_time),
-        first_degrees_of_freedom.velocity() + parameters.anchor->velocity};
+            parameters.placement.anchor->OffsetAt(parameters.first_time),
+        first_degrees_of_freedom.velocity() +
+            parameters.placement.anchor->velocity};
   }
   for (auto const body : ephemeris_->bodies()) {
     RETURN_IF_STOPPED;
@@ -257,15 +258,15 @@ absl::Status OrbitAnalyser::FindBodyWithSmallestOsculatingPeriod(
         ephemeris_->trajectory(body)->EvaluateDegreesOfFreedom(
             parameters.first_time);
     if (int const body_subsystem = ephemeris_->subsystem_of_body(body);
-        body_subsystem != parameters.subsystem) {
+        body_subsystem != parameters.placement.subsystem) {
       relative_degrees_of_freedom = {
           relative_degrees_of_freedom.displacement() +
-              ephemeris_->subsystem_conversion(parameters.subsystem,
+              ephemeris_->subsystem_conversion(parameters.placement.subsystem,
                                                body_subsystem,
                                                parameters.first_time),
           relative_degrees_of_freedom.velocity() +
-              ephemeris_->subsystem_velocity_conversion(parameters.subsystem,
-                                                        body_subsystem)};
+              ephemeris_->subsystem_velocity_conversion(
+                  parameters.placement.subsystem, body_subsystem)};
     }
     auto const initial_osculating_elements =
         KeplerOrbit<Barycentric>{
@@ -297,7 +298,7 @@ absl::Status OrbitAnalyser::FlowWithProgressBar(
       trajectories,
       Ephemeris<Barycentric>::NoIntrinsicAccelerations,
       analysed_trajectory_parameters_,
-      {{parameters.subsystem, parameters.anchor}});
+      {parameters.placement});
   RETURN_IF_STOPPED;
 
   constexpr double progress_bar_steps = 0x1p10;

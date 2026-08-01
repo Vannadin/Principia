@@ -4232,7 +4232,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   // that re-expresses it in the vessel's current subsystem.
   plugin2->GetVessel(vessel_guid)->ReadFlightPlanFromMessage();
   auto const& flight_plan = plugin2->GetVessel(vessel_guid)->flight_plan();
-  EXPECT_EQ(subsystem_b, flight_plan.subsystem());
+  EXPECT_EQ(subsystem_b, flight_plan.placement().subsystem);
   ASSERT_EQ(1, flight_plan.number_of_segments());
   auto const coast = flight_plan.GetSegment(0);
   EXPECT_THAT((coast->back().degrees_of_freedom.velocity() -
@@ -4262,7 +4262,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
             all_segments.end(),
             World::origin,
             plugin2->PlanetariumRotation(),
-            {flight_plan.subsystem(), flight_plan.anchor()});
+            flight_plan.placement());
     return (rendered.back().degrees_of_freedom.position() - World::origin)
         .Norm();
   };
@@ -4279,7 +4279,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
         plugin2->renderer().RenderBarycentricTrajectoryInPlotting(
             all_segments.begin(),
             all_segments.end(),
-            {flight_plan.subsystem(), flight_plan.anchor()});
+            flight_plan.placement());
     EXPECT_THAT((rendered.back().degrees_of_freedom.position() -
                  Navigation::origin).Norm(),
                 AbsoluteErrorFrom(expected_distance_from_b, Lt(1e6 * Metre)));
@@ -4324,7 +4324,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
           vertices.push_back(vertex);
         },
         /*max_points=*/10'000,
-        {flight_plan.subsystem(), flight_plan.anchor()},
+        flight_plan.placement(),
         &anchor);
     // Seen from a star-B-centred camera the void-distant plan subtends a tiny
     // angle, so the adaptive sampling emits only the two endpoints — which

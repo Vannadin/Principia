@@ -234,7 +234,7 @@ TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
                            10 * Kilogram,
                            DefaultPredictionParameters(),
                            DefaultBurnParameters());
-  EXPECT_FALSE(vessel_.flight_plan().anchor().has_value());
+  EXPECT_FALSE(vessel_.flight_plan().placement().anchor.has_value());
 
   // First adoption: the gap between the plan's placement (unanchored) and the
   // new anchor is 4e9 m, within the 64-bound margin — the plan keeps its
@@ -244,7 +244,7 @@ TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
                                t0_,
                                {/*subsystem=*/0, anchor_at(4e9 * Metre, t0_)});
   ASSERT_TRUE(vessel_.placement().anchor.has_value());
-  EXPECT_FALSE(vessel_.flight_plan().anchor().has_value());
+  EXPECT_FALSE(vessel_.flight_plan().placement().anchor.has_value());
 
   // The vessel drifts far from its anchor and re-anchors; the gap now exceeds
   // the margin and the plan is rebased onto the vessel's fresh anchor.
@@ -254,8 +254,9 @@ TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
       t0_ + 1 * Second,
       {/*subsystem=*/0, anchor_at(1e11 * Metre, t0_ + 1 * Second)});
   ASSERT_TRUE(vessel_.placement().anchor.has_value());
-  ASSERT_TRUE(vessel_.flight_plan().anchor().has_value());
-  EXPECT_EQ(*vessel_.placement().anchor, *vessel_.flight_plan().anchor());
+  ASSERT_TRUE(vessel_.flight_plan().placement().anchor.has_value());
+  EXPECT_EQ(*vessel_.placement().anchor,
+            *vessel_.flight_plan().placement().anchor);
 }
 
 TEST_F(VesselTest, KeepAndFreeParts) {
