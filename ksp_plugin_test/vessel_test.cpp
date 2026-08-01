@@ -259,6 +259,56 @@ TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
             *vessel_.flight_plan().placement().anchor);
 }
 
+// Rebasing a flight plan rebuilds it from the backstory, whose coordinates
+// are expressed in the vessel's placement; the new plan must carry that
+// placement.  It used to be created anchorless, misreading an anchored
+// vessel's near-origin coordinates as subsystem-relative.
+TEST_F(VesselTest, RebaseFlightPlanKeepsPlacement) {
+  EXPECT_CALL(ephemeris_, t_min())
+      .WillRepeatedly(Return(t0_));
+  EXPECT_CALL(ephemeris_, t_max())
+      .WillRepeatedly(Return(t0_ + 4 * Second));
+  EXPECT_CALL(ephemeris_, FlowWithAdaptiveStep(_, _, _, _, _, _))
+      .Times(AnyNumber());
+  EXPECT_CALL(ephemeris_, Prolong(_, _))
+      .Times(AnyNumber());
+  ON_CALL(ephemeris_, bodies()).WillByDefault(ReturnRef(bodies_));
+
+  Velocity<Barycentric> const v(
+      {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  AppendToVesselTrajectory(
+      t0_,
+      DegreesOfFreedom<Barycentric>(
+          Barycentric::origin +
+              Displacement<Barycentric>({4e9 * Metre, 0 * Metre, 0 * Metre}),
+          v));
+  vessel_.ApplyPlacementChange(
+      Displacement<Barycentric>{},
+      Velocity<Barycentric>{},
+      t0_,
+      {/*subsystem=*/0,
+       Ephemeris<Barycentric>::Anchor{
+           .offset = SectorDisplacement<Barycentric>::Split(
+               Displacement<Barycentric>(
+                   {4e9 * Metre, 0 * Metre, 0 * Metre})),
+           .velocity = v,
+           .epoch = t0_}});
+  ASSERT_TRUE(vessel_.placement().anchor.has_value());
+
+  vessel_.CreateFlightPlan(t0_ + 3.0 * Second,
+                           10 * Kilogram,
+                           DefaultPredictionParameters(),
+                           DefaultBurnParameters());
+  ASSERT_TRUE(vessel_.flight_plan().placement().anchor.has_value());
+
+  EXPECT_OK(vessel_.RebaseFlightPlan(5 * Kilogram));
+  EXPECT_EQ(vessel_.placement().subsystem,
+            vessel_.flight_plan().placement().subsystem);
+  ASSERT_TRUE(vessel_.flight_plan().placement().anchor.has_value());
+  EXPECT_EQ(*vessel_.placement().anchor,
+            *vessel_.flight_plan().placement().anchor);
+}
+
 TEST_F(VesselTest, KeepAndFreeParts) {
   std::set<PartId> remaining_part_ids;
   vessel_.ForAllParts([&remaining_part_ids](Part const& part) {

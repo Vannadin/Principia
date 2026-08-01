@@ -728,6 +728,9 @@ absl::Status Vessel::RebaseFlightPlan(Mass const& initial_mass) {
           ? new_initial_time + (original_flight_plan->desired_final_time() -
                                 original_flight_plan->initial_time())
           : original_flight_plan->desired_final_time();
+  // The backstory is expressed in the vessel's placement, anchor included;
+  // an anchorless plan would misread its near-origin anchored coordinates as
+  // subsystem-relative.
   flight_plan = make_not_null_unique<FlightPlan>(
       initial_mass,
       /*initial_time=*/new_initial_time,
@@ -736,8 +739,7 @@ absl::Status Vessel::RebaseFlightPlan(Mass const& initial_mass) {
       ephemeris_,
       original_flight_plan->adaptive_step_parameters(),
       original_flight_plan->generalized_adaptive_step_parameters(),
-      Ephemeris<Barycentric>::SubsystemPlacement(placement_.subsystem,
-                                                 std::nullopt));
+      placement_);
   for (int i = first_manœuvre_kept;
        i < original_flight_plan->number_of_manœuvres();
        ++i) {
