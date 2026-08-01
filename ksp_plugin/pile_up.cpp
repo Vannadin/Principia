@@ -95,7 +95,7 @@ PileUp::PileUp(
   // (smallest index breaks a tie) and reconcile the parts onto it.
   std::map<int, Mass> mass_by_subsystem;
   for (not_null<Part*> const part : parts_) {
-    mass_by_subsystem[part->subsystem()] += part->mass();
+    mass_by_subsystem[part->placement().subsystem] += part->mass();
   }
   subsystem_ = mass_by_subsystem.begin()->first;
   Mass target_mass = mass_by_subsystem.begin()->second;
@@ -108,19 +108,22 @@ PileUp::PileUp(
   // The anchor of the first part already in the target subsystem: always
   // present, and natively valid, so it needs no folding.
   for (not_null<Part*> const part : parts_) {
-    if (part->subsystem() == subsystem_) {
-      anchor_ = part->anchor();
+    if (part->placement().subsystem == subsystem_) {
+      anchor_ = part->placement().anchor;
       break;
     }
   }
   MechanicalSystem<Barycentric, NonRotatingPileUp> mechanical_system;
   for (not_null<Part*> const part : parts_) {
-    if (part->subsystem() != subsystem_ || part->anchor() != anchor_) {
+    Ephemeris<Barycentric>::SubsystemPlacement const& part_placement =
+        part->placement();
+    if (part_placement.subsystem != subsystem_ ||
+        part_placement.anchor != anchor_) {
       // A part from a vessel in another placement carries the donor's tags:
       // re-express its rigid motion in the pile-up's, consistently with the
       // retag below.
       auto const [displacement, velocity_offset] =
-          ephemeris_->placement_conversion({part->subsystem(), part->anchor()},
+          ephemeris_->placement_conversion(part_placement,
                                            {subsystem_, anchor_},
                                            t);
       RigidMotion<Barycentric, Barycentric> const conversion_motion(
@@ -131,8 +134,7 @@ PileUp::PileUp(
           Barycentric::nonrotating,
           -velocity_offset);
       part->set_rigid_motion(conversion_motion * part->rigid_motion());
-      part->set_subsystem(subsystem_);
-      part->set_anchor(anchor_);
+      part->set_placement({subsystem_, anchor_});
     }
     mechanical_system.AddRigidBody(
         part->rigid_motion(), part->mass(), part->inertia_tensor());
@@ -493,8 +495,8 @@ PileUp::PileUp(
       trajectory_(std::move(trajectory)),
       angular_momentum_(angular_momentum),
       deletion_callback_(std::move(deletion_callback)) {
-  subsystem_ = parts_.front()->subsystem();
-  anchor_ = parts_.front()->anchor();
+  subsystem_ = parts_.front()->placement().subsystem;
+  anchor_ = parts_.front()->placement().anchor;
   if (history.has_value()) {
     history_ = history.value();
   } else {
@@ -662,8 +664,7 @@ PileUp::PlacementChange PileUp::RebaseToSubsystem(int const subsystem,
     // The parts' rigid motions are valid numbers in the preserved
     // representation; only their tags change.
     for (not_null<Part*> const part : parts_) {
-      part->set_subsystem(subsystem_);
-      part->set_anchor(anchor_);
+      part->set_placement({subsystem_, anchor_});
     }
     return {.displacement = Displacement<Barycentric>{},
             .velocity_offset = Velocity<Barycentric>{},
@@ -684,7 +685,7 @@ PileUp::PlacementChange PileUp::RebaseToSubsystem(int const subsystem,
       Barycentric::nonrotating,
       -velocity_offset);
   for (not_null<Part*> const part : parts_) {
-    part->set_subsystem(subsystem_);
+    part->set_placement({subsystem_, anchor_});
     part->set_rigid_motion(conversion_motion * part->rigid_motion());
   }
   return {.displacement = displacement,
@@ -744,7 +745,7 @@ PileUp::PlacementChange PileUp::AdoptAnchorAtPresentState(Instant const& t) {
       Barycentric::nonrotating,
       velocity_offset);
   for (not_null<Part*> const part : parts_) {
-    part->set_anchor(anchor_);
+    part->set_placement({subsystem_, anchor_});
     part->set_rigid_motion(conversion_motion * part->rigid_motion());
   }
   return {.displacement = translation,

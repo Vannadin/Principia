@@ -82,21 +82,13 @@ void Part::make_truthful() {
   truthful_ = true;
 }
 
-void Part::set_subsystem(int const subsystem) {
-  subsystem_ = subsystem;
+void Part::set_placement(
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
+  placement_ = placement;
 }
 
-int Part::subsystem() const {
-  return subsystem_;
-}
-
-void Part::set_anchor(
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
-  anchor_ = anchor;
-}
-
-std::optional<Ephemeris<Barycentric>::Anchor> const& Part::anchor() const {
-  return anchor_;
+Ephemeris<Barycentric>::SubsystemPlacement const& Part::placement() const {
+  return placement_;
 }
 
 void Part::set_mass(Mass const& mass) {

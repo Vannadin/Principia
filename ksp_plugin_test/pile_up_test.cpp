@@ -1098,8 +1098,7 @@ TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
           Displacement<Barycentric>({1e15 * Metre, 0 * Metre, 0 * Metre})),
       .velocity = Velocity<Barycentric>(),
       .epoch = J2000};
-  p2_.set_subsystem(1);
-  p2_.set_anchor(anchor);
+  p2_.set_placement({1, anchor});
 
   // The known conversion the vote applies to p1_, and the rigid motion it must
   // produce (built exactly as the constructor does).
@@ -1144,9 +1143,9 @@ TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
   EXPECT_EQ(anchor, *pile_up.anchor());
 
   // p1_ is retagged and its rigid motion converted; p2_ is left untouched.
-  EXPECT_EQ(1, p1_.subsystem());
-  ASSERT_TRUE(p1_.anchor().has_value());
-  EXPECT_EQ(anchor, *p1_.anchor());
+  EXPECT_EQ(1, p1_.placement().subsystem);
+  ASSERT_TRUE(p1_.placement().anchor.has_value());
+  EXPECT_EQ(anchor, *p1_.placement().anchor);
   auto const p1_actual =
       p1_.rigid_motion()({RigidPart::origin, RigidPart::unmoving});
   EXPECT_EQ(p1_expected.position(), p1_actual.position());
@@ -1196,7 +1195,7 @@ TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
           RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
               p2_dof_),
           /*deletion_callback=*/nullptr);
-  pb.set_subsystem(1);
+  pb.set_placement({1, std::nullopt});
   TestablePileUp tie_pile_up({&pa, &pb}, J2000,
                              DefaultPsychohistoryParameters(),
                              DefaultHistoryParameters(),

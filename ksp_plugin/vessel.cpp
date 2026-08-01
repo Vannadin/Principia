@@ -264,14 +264,17 @@ void Vessel::set_parent(not_null<Celestial const*> const parent) {
 void Vessel::AddPart(not_null<std::unique_ptr<Part>> part, Instant const& t) {
   LOG(INFO) << "Adding part " << part->ShortDebugString() << " to vessel "
             << ShortDebugString();
-  if (!TryInheritPlacement(part->subsystem(), part->anchor()) &&
-      (part->subsystem() != subsystem_ || part->anchor() != anchor_)) {
+  Ephemeris<Barycentric>::SubsystemPlacement const& part_placement =
+      part->placement();
+  if (!TryInheritPlacement(part_placement.subsystem, part_placement.anchor) &&
+      (part_placement.subsystem != subsystem_ ||
+       part_placement.anchor != anchor_)) {
     // A part transferred from a vessel in another placement — its tags,
     // which always match the owning vessel's placement, carry the donor's:
     // re-express its rigid motion in this vessel's, consistently with the
     // retag below.
     auto const [displacement, velocity_offset] =
-        ephemeris_->placement_conversion({part->subsystem(), part->anchor()},
+        ephemeris_->placement_conversion(part_placement,
                                          {subsystem_, anchor_},
                                          t);
     RigidMotion<Barycentric, Barycentric> const conversion_motion(
@@ -283,8 +286,7 @@ void Vessel::AddPart(not_null<std::unique_ptr<Part>> part, Instant const& t) {
         -velocity_offset);
     part->set_rigid_motion(conversion_motion * part->rigid_motion());
   }
-  part->set_subsystem(subsystem_);
-  part->set_anchor(anchor_);
+  part->set_placement({subsystem_, anchor_});
   parts_.emplace(part->part_id(), std::move(part));
 }
 
@@ -982,8 +984,7 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
             deletion_callback(part_id);
           }
         });
-    part->set_subsystem(vessel->subsystem_);
-    part->set_anchor(vessel->anchor_);
+    part->set_placement({vessel->subsystem_, vessel->anchor_});
     vessel->parts_.emplace(part_id, std::move(part));
   }
   for (PartId const part_id : message.kept_parts()) {

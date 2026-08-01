@@ -79,15 +79,12 @@ class Part final {
   bool truthful() const;
   void make_truthful();
 
-  // Sets or returns the subsystem relative to whose local origin the
-  // Barycentric degrees of freedom of this part are represented.
-  void set_subsystem(int subsystem);
-  int subsystem() const;
-
-  // Sets or returns the anchor further displacing that representation when
-  // the part's vessel coasts in the force-free inter-subsystem void.
-  void set_anchor(std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
-  std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
+  // Sets or returns the placement — subsystem and anchor — in whose
+  // representation the Barycentric degrees of freedom of this part are
+  // expressed.
+  void set_placement(
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement);
+  Ephemeris<Barycentric>::SubsystemPlacement const& placement() const;
 
   // Sets or returns the mass and inertia tensor.  Even though a part is
   // massless in the sense that it doesn't exert gravity, it has a mass and an
@@ -207,8 +204,8 @@ class Part final {
   PartId const part_id_;
   std::string const name_;
   bool truthful_;
-  int subsystem_ = 0;
-  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
+  Ephemeris<Barycentric>::SubsystemPlacement placement_ =
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock();
   Mass mass_;
   Position<EccentricPart> centre_of_mass_ = EccentricPart::origin;
   // NOTE(eggrobin): `mass_change_` and `is_solid_rocket_motor_` are set by

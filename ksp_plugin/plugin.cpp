@@ -735,8 +735,8 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
   // error that the reconcile would otherwise silently absorb.
   for (auto const& [_, vessel] : vessels_) {
     vessel->ForAllParts([&vessel = vessel](Part& part) {
-      DCHECK_EQ(part.subsystem(), vessel->subsystem());
-      DCHECK(part.anchor() == vessel->anchor());
+      DCHECK_EQ(part.placement().subsystem, vessel->subsystem());
+      DCHECK(part.placement().anchor == vessel->anchor());
     });
   }
 
@@ -2346,8 +2346,7 @@ void Plugin::AddPart(not_null<Vessel*> const vessel,
   // The callers compute a fresh part's degrees of freedom in the vessel's own
   // placement; tag it accordingly before handing it over, so that the
   // conversion in `Vessel::AddPart` never fires here (its `t` is unused).
-  part->set_subsystem(vessel->subsystem());
-  part->set_anchor(vessel->anchor());
+  part->set_placement({vessel->subsystem(), vessel->anchor()});
   vessel->AddPart(std::move(part), current_time_);
 }
 
