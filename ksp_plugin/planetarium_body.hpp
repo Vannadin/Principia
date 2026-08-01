@@ -174,8 +174,7 @@ void Planetarium::PlotMethod4(
     // affine with the same epoch) places an anchored void vessel at its true
     // position, and differences the anchors on the sector lattice against a
     // target-vessel frame.
-    if (placement.subsystem != frame_placement.subsystem ||
-        placement.anchor != frame_placement.anchor) {
+    if (placement != frame_placement) {
       auto const [offset, velocity] = ephemeris_->placement_conversion(
           placement, frame_placement, last_time);
       TranslatedTrajectory<Barycentric> const translated_trajectory(
