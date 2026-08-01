@@ -69,7 +69,7 @@ void __cdecl principia__RenderedPredictionApsides(
       max_points,
       rendered_apoapsides,
       rendered_periapsides,
-      {vessel->subsystem(), vessel->anchor()});
+      vessel->placement());
   *apoapsides = new TypedIterator<DistinguishedPoints<World>>(
       std::move(rendered_apoapsides),
       plugin);
@@ -99,7 +99,7 @@ void __cdecl principia__RenderedPredictionClosestApproaches(
       FromXYZ<Position<World>>(sun_world_position),
       max_points,
       rendered_closest_approaches,
-      {vessel->subsystem(), vessel->anchor()});
+      vessel->placement());
   *closest_approaches = new TypedIterator<DistinguishedPoints<World>>(
       std::move(rendered_closest_approaches),
       plugin);
@@ -128,7 +128,7 @@ void __cdecl principia__RenderedPredictionNodes(Plugin const* const plugin,
       max_points,
       rendered_ascending,
       rendered_descending,
-      {vessel->subsystem(), vessel->anchor()});
+      vessel->placement());
   *ascending = new TypedIterator<std::vector<Renderer::Node>>(
       std::move(rendered_ascending), plugin);
   *descending = new TypedIterator<std::vector<Renderer::Node>>(

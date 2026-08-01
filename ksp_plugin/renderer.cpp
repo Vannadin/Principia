@@ -263,7 +263,7 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
   auto const& back = vessel.psychohistory()->back();
   auto const [conversion_displacement, conversion_velocity] =
-      PlacementConversion({vessel.subsystem(), vessel.anchor()},
+      PlacementConversion(vessel.placement(),
                           GetPlottingFrame()->placement(),
                           back.time);
   DegreesOfFreedom<Barycentric> const barycentric_degrees_of_freedom = {
@@ -287,7 +287,7 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
   auto const& back = vessel.psychohistory()->back();
   auto const [conversion_displacement, conversion_velocity] =
-      PlacementConversion({vessel.subsystem(), vessel.anchor()},
+      PlacementConversion(vessel.placement(),
                           navigation_frame.placement(),
                           back.time);
   DegreesOfFreedom<Barycentric> const degrees_of_freedom = {
@@ -398,8 +398,8 @@ Renderer::Target::Target(
               ephemeris,
               [this]() -> auto& { return *this->vessel->prediction(); },
               celestial->body(),
-              [this]() { return this->vessel->subsystem(); },
-              [this]() { return this->vessel->anchor(); })) {}
+              [this]() { return this->vessel->placement().subsystem; },
+              [this]() { return this->vessel->placement().anchor; })) {}
 
 std::pair<Displacement<Barycentric>, Velocity<Barycentric>>
 Renderer::PlacementConversion(

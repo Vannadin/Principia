@@ -237,8 +237,9 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithTargetVessel) {
       /*to=*/vessel_trajectory);
   EXPECT_CALL(vessel, prediction())
       .WillRepeatedly(Return(vessel_trajectory.segments().begin()));
-  std::optional<Ephemeris<Barycentric>::Anchor> const no_anchor;
-  EXPECT_CALL(vessel, anchor()).WillRepeatedly(ReturnRef(no_anchor));
+  Ephemeris<Barycentric>::SubsystemPlacement const stock_placement =
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock();
+  EXPECT_CALL(vessel, placement()).WillRepeatedly(ReturnRef(stock_placement));
 
   for (Instant t = t0_ + 3 * Second; t < t0_ + 8 * Second; t += 1 * Second) {
     EXPECT_CALL(celestial_trajectory, EvaluateDegreesOfFreedom(t))
@@ -324,7 +325,9 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchoredTarget) {
               {2e16 * Metre, 8 * Metre, 0 * Metre})),
       .velocity = Velocity<Barycentric>(),
       .epoch = t0_};
-  EXPECT_CALL(vessel, anchor()).WillRepeatedly(ReturnRef(target_anchor));
+  Ephemeris<Barycentric>::SubsystemPlacement const target_placement{
+      0, target_anchor};
+  EXPECT_CALL(vessel, placement()).WillRepeatedly(ReturnRef(target_placement));
 
   Position<Barycentric> const celestial_position =
       Barycentric::origin +

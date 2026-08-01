@@ -204,7 +204,7 @@ void __cdecl principia__PlanetariumPlotPrediction(
         vertices[(*vertex_count)++] = vertex;
       },
       vertices_size,
-      {vessel->subsystem(), vessel->anchor()},
+      vessel->placement(),
       &anchor_coordinates);
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
@@ -266,7 +266,7 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        {vessel->subsystem(), vessel->anchor()},
+        vessel->placement(),
         &anchor_coordinates);
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();

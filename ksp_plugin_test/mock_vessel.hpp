@@ -22,8 +22,8 @@ class MockVessel : public Vessel {
               (not_null<Celestial const*> parent),
               (override));
 
-  MOCK_METHOD((std::optional<Ephemeris<Barycentric>::Anchor> const&),
-              anchor,
+  MOCK_METHOD((Ephemeris<Barycentric>::SubsystemPlacement const&),
+              placement,
               (),
               (const, override));
 

@@ -73,8 +73,7 @@ bool operator!=(Vessel::PrognosticatorParameters const& left,
                 Vessel::PrognosticatorParameters const& right) {
   return left.first_time != right.first_time ||
          left.first_degrees_of_freedom != right.first_degrees_of_freedom ||
-         left.subsystem != right.subsystem ||
-         left.anchor != right.anchor ||
+         left.placement != right.placement ||
          left.on_rails_burn != right.on_rails_burn ||
          &left.adaptive_step_parameters.integrator() !=
              &right.adaptive_step_parameters.integrator() ||
@@ -102,7 +101,7 @@ Vessel::Vessel(
           std::move(prediction_adaptive_step_parameters)),
       parent_(parent),
       ephemeris_(ephemeris),
-      subsystem_(ephemeris->subsystem_of_body(parent->body())),
+      placement_(ephemeris->subsystem_of_body(parent->body()), std::nullopt),
       downsampling_parameters_(downsampling_parameters),
       checkpointer_(make_not_null_unique<Checkpointer<serialization::Vessel>>(
           MakeCheckpointerWriterFromPileUp(),
@@ -152,41 +151,37 @@ not_null<Celestial const*> Vessel::parent() const {
   return parent_;
 }
 
-int Vessel::subsystem() const {
-  return subsystem_;
-}
-
-std::optional<Ephemeris<Barycentric>::Anchor> const& Vessel::anchor() const {
-  return anchor_;
+Ephemeris<Barycentric>::SubsystemPlacement const& Vessel::placement() const {
+  return placement_;
 }
 
 void Vessel::ApplyPlacementChange(
     Displacement<Barycentric> const& displacement,
     Velocity<Barycentric> const& velocity_offset,
     Instant const& epoch,
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
   if (trajectory_.empty()) {
     return;
   }
-  int const old_subsystem = subsystem_;
+  int const old_subsystem = placement_.subsystem;
   {
     // `AwaitReanimation` merges into `trajectory_` under `lock_`, and the
     // translation rewrites all of its points.  The pile-up already moved
     // itself and retagged the shared parts, so this touches neither.
     absl::MutexLock l(&lock_);
     trajectory_.Translate(displacement, velocity_offset, epoch);
-    subsystem_ = subsystem;
-    anchor_ = anchor;
+    placement_ = placement;
   }
-  if (subsystem != old_subsystem) {
+  if (placement.subsystem != old_subsystem) {
     // A subsystem retag: the flight plans fold the delta between their old
     // anchor and the composed anchor into the raw subsystem conversion, which
     // cancels the conversion to the composition rounding.
     Displacement<Barycentric> const conversion =
-        ephemeris_->subsystem_conversion(old_subsystem, subsystem, epoch);
+        ephemeris_->subsystem_conversion(old_subsystem, placement.subsystem,
+                                         epoch);
     Velocity<Barycentric> const velocity_conversion =
-        ephemeris_->subsystem_velocity_conversion(old_subsystem, subsystem);
+        ephemeris_->subsystem_velocity_conversion(old_subsystem,
+                                                  placement.subsystem);
     for (auto& flight_plan : flight_plans_) {
       if (auto* const optimizable_flight_plan =
               std::get_if<OptimizableFlightPlan>(&flight_plan)) {
@@ -196,8 +191,8 @@ void Vessel::ApplyPlacementChange(
           optimizable_flight_plan->optimization_driver->Interrupt();
         }
         optimizable_flight_plan->flight_plan
-            ->Rebase(conversion, velocity_conversion, epoch, subsystem_,
-                     anchor_)
+            ->Rebase(conversion, velocity_conversion, epoch,
+                     placement_.subsystem, placement_.anchor)
             .IgnoreError();
       }
     }
@@ -223,7 +218,8 @@ void Vessel::ApplyPlacementChange(
     }
     auto const [gap, gap_velocity] =
         Ephemeris<Barycentric>::Anchor::Conversion(
-            optimizable_flight_plan->flight_plan->anchor(), anchor_, epoch);
+            optimizable_flight_plan->flight_plan->anchor(), placement_.anchor,
+            epoch);
     if (gap.Norm²() <= flight_plan_rebase_bound * flight_plan_rebase_bound) {
       continue;
     }
@@ -238,20 +234,19 @@ void Vessel::ApplyPlacementChange(
         ->Rebase(Displacement<Barycentric>{},
                  Velocity<Barycentric>{},
                  epoch,
-                 subsystem_,
-                 anchor_)
+                 placement_.subsystem,
+                 placement_.anchor)
         .IgnoreError();
   }
 }
 
 bool Vessel::TryInheritPlacement(
-    int const subsystem,
-    std::optional<Ephemeris<Barycentric>::Anchor> const& anchor) {
-  if (!trajectory_.empty() || !parts_.empty() || anchor_.has_value()) {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
+  if (!trajectory_.empty() || !parts_.empty() ||
+      placement_.anchor.has_value()) {
     return false;
   }
-  subsystem_ = subsystem;
-  anchor_ = anchor;
+  placement_ = placement;
   return true;
 }
 
@@ -266,17 +261,13 @@ void Vessel::AddPart(not_null<std::unique_ptr<Part>> part, Instant const& t) {
             << ShortDebugString();
   Ephemeris<Barycentric>::SubsystemPlacement const& part_placement =
       part->placement();
-  if (!TryInheritPlacement(part_placement.subsystem, part_placement.anchor) &&
-      (part_placement.subsystem != subsystem_ ||
-       part_placement.anchor != anchor_)) {
+  if (!TryInheritPlacement(part_placement) && part_placement != placement_) {
     // A part transferred from a vessel in another placement — its tags,
     // which always match the owning vessel's placement, carry the donor's:
     // re-express its rigid motion in this vessel's, consistently with the
     // retag below.
     auto const [displacement, velocity_offset] =
-        ephemeris_->placement_conversion(part_placement,
-                                         {subsystem_, anchor_},
-                                         t);
+        ephemeris_->placement_conversion(part_placement, placement_, t);
     RigidMotion<Barycentric, Barycentric> const conversion_motion(
         RigidTransformation<Barycentric, Barycentric>(
             Barycentric::origin,
@@ -286,7 +277,7 @@ void Vessel::AddPart(not_null<std::unique_ptr<Part>> part, Instant const& t) {
         -velocity_offset);
     part->set_rigid_motion(conversion_motion * part->rigid_motion());
   }
-  part->set_placement({subsystem_, anchor_});
+  part->set_placement(placement_);
   parts_.emplace(part->part_id(), std::move(part));
 }
 
@@ -470,7 +461,7 @@ bool Vessel::UpdateFlightPlanFromOptimization() {
   std::shared_ptr const last_flight_plan =
       optimization_driver->last_flight_plan();
   if (flight_plan != last_flight_plan &&
-      last_flight_plan->subsystem() == subsystem_) {
+      last_flight_plan->subsystem() == placement_.subsystem) {
     flight_plan = last_flight_plan;
     return true;
   }
@@ -486,16 +477,16 @@ void Vessel::ReadFlightPlanFromMessage() {
     auto flight_plan = FlightPlan::ReadFromMessage(message, ephemeris_);
     // The vessel may have been rebased while this flight plan was lazily held
     // in its serialized form.
-    if (flight_plan->subsystem() != subsystem_) {
+    if (flight_plan->subsystem() != placement_.subsystem) {
       flight_plan->Rebase(ephemeris_->subsystem_conversion(
                               flight_plan->subsystem(),
-                              subsystem_,
+                              placement_.subsystem,
                               flight_plan->initial_time()),
                           ephemeris_->subsystem_velocity_conversion(
-                              flight_plan->subsystem(), subsystem_),
+                              flight_plan->subsystem(), placement_.subsystem),
                           flight_plan->initial_time(),
-                          subsystem_,
-                          anchor_).IgnoreError();
+                          placement_.subsystem,
+                          placement_.anchor).IgnoreError();
     }
     selected_flight_plan() = OptimizableFlightPlan{
         .flight_plan = std::move(flight_plan),
@@ -635,23 +626,25 @@ void Vessel::AwaitReanimation(Instant const& desired_t_min,
     // thereby ensuring that the trajectory doesn't change, say, while clients
     // iterate over it.
     while (!reanimated_trajectories_.empty()) {
-      auto& [trajectory, subsystem, anchor] = reanimated_trajectories_.front();
+      auto& [trajectory, placement] = reanimated_trajectories_.front();
       // The reanimated trajectory was computed in the representation of its
       // checkpoint; bring it to the current one, translating each point at its
       // own time.  Both conversions are affine, so a single translation at the
       // trajectory's own epoch is exact.  A copy, not a reference: the
       // translation rebuilds the timeline that `back()` points into.
-      if (subsystem != subsystem_) {
+      if (placement.subsystem != placement_.subsystem) {
         Instant const epoch = trajectory.back().time;
         trajectory.Translate(
-            ephemeris_->subsystem_conversion(subsystem, subsystem_, epoch),
-            ephemeris_->subsystem_velocity_conversion(subsystem, subsystem_),
+            ephemeris_->subsystem_conversion(placement.subsystem,
+                                             placement_.subsystem, epoch),
+            ephemeris_->subsystem_velocity_conversion(placement.subsystem,
+                                                      placement_.subsystem),
             epoch);
       }
-      if (anchor != anchor_) {
+      if (placement.anchor != placement_.anchor) {
         Instant const epoch = trajectory.back().time;
         auto const [displacement, velocity] =
-            AnchorConversion(anchor, anchor_, epoch);
+            AnchorConversion(placement.anchor, placement_.anchor, epoch);
         trajectory.Translate(displacement, velocity, epoch);
       }
       trajectory_.Merge(std::move(trajectory));
@@ -677,8 +670,8 @@ void Vessel::CreateFlightPlan(
           ephemeris_,
           flight_plan_adaptive_step_parameters,
           flight_plan_generalized_adaptive_step_parameters,
-          subsystem_,
-          anchor_),
+          placement_.subsystem,
+          placement_.anchor),
       .optimization_driver = nullptr});
   selected_flight_plan_index_ = flight_plans_.size() - 1;
 }
@@ -746,7 +739,7 @@ absl::Status Vessel::RebaseFlightPlan(Mass const& initial_mass) {
       ephemeris_,
       original_flight_plan->adaptive_step_parameters(),
       original_flight_plan->generalized_adaptive_step_parameters(),
-      subsystem_);
+      placement_.subsystem);
   for (int i = first_manœuvre_kept;
        i < original_flight_plan->number_of_manœuvres();
        ++i) {
@@ -775,8 +768,7 @@ void Vessel::RefreshPrediction() {
       .first_time = psychohistory_->back().time,
       .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
       .adaptive_step_parameters = prediction_adaptive_step_parameters_,
-      .subsystem = subsystem_,
-      .anchor = anchor_,
+      .placement = placement_,
       .on_rails_burn = std::move(on_rails_burn)};
   if (synchronous_) {
     auto status_or_prognostication =
@@ -820,8 +812,8 @@ void Vessel::RequestOrbitAnalysis(Time const& mission_duration) {
   orbit_analyser_->RequestAnalysis(
       {.first_time = psychohistory_->back().time,
        .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
-       .subsystem = subsystem_,
-       .anchor = anchor_,
+       .subsystem = placement_.subsystem,
+       .anchor = placement_.anchor,
        .mission_duration = mission_duration});
 }
 
@@ -855,11 +847,11 @@ void Vessel::WriteToMessage(not_null<serialization::Vessel*> const message,
                                 serialization_index_for_pile_up) const {
   message->set_guid(guid_);
   message->set_name(name_);
-  if (subsystem_ != 0) {
-    message->set_subsystem(subsystem_);
+  if (placement_.subsystem != 0) {
+    message->set_subsystem(placement_.subsystem);
   }
-  if (anchor_.has_value()) {
-    anchor_->WriteToMessage(message->mutable_anchor());
+  if (placement_.anchor.has_value()) {
+    placement_.anchor->WriteToMessage(message->mutable_anchor());
   }
   body_.WriteToMessage(message->mutable_body());
   prediction_adaptive_step_parameters_.WriteToMessage(
@@ -971,9 +963,9 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
       Ephemeris<Barycentric>::AdaptiveStepParameters::ReadFromMessage(
           message.prediction_adaptive_step_parameters()),
       DefaultDownsamplingParameters());
-  vessel->subsystem_ = message.subsystem();
+  vessel->placement_.subsystem = message.subsystem();
   if (message.has_anchor()) {
-    vessel->anchor_ =
+    vessel->placement_.anchor =
         Ephemeris<Barycentric>::Anchor::ReadFromMessage(message.anchor());
   }
   for (auto const& serialized_part : message.parts()) {
@@ -984,7 +976,7 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
             deletion_callback(part_id);
           }
         });
-    part->set_placement({vessel->subsystem_, vessel->anchor_});
+    part->set_placement(vessel->placement_);
     vessel->parts_.emplace(part_id, std::move(part));
   }
   for (PartId const part_id : message.kept_parts()) {
@@ -1141,13 +1133,14 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
           reanimated_trajectory.ForgetAfter(vessel->trajectory().t_min());
           if (!reanimated_trajectory.empty()) {
             if (int const checkpoint_subsystem = message.subsystem();
-                checkpoint_subsystem != vessel->subsystem_) {
+                checkpoint_subsystem != vessel->placement_.subsystem) {
               Instant const epoch = reanimated_trajectory.back().time;
               reanimated_trajectory.Translate(
                   vessel->ephemeris_->subsystem_conversion(
-                      checkpoint_subsystem, vessel->subsystem_, epoch),
+                      checkpoint_subsystem, vessel->placement_.subsystem,
+                      epoch),
                   vessel->ephemeris_->subsystem_velocity_conversion(
-                      checkpoint_subsystem, vessel->subsystem_),
+                      checkpoint_subsystem, vessel->placement_.subsystem),
                   epoch);
             }
             std::optional<Ephemeris<Barycentric>::Anchor> checkpoint_anchor;
@@ -1155,10 +1148,11 @@ not_null<std::unique_ptr<Vessel>> Vessel::ReadFromMessage(
               checkpoint_anchor = Ephemeris<Barycentric>::Anchor::
                   ReadFromMessage(message.anchor());
             }
-            if (checkpoint_anchor != vessel->anchor_) {
+            if (checkpoint_anchor != vessel->placement_.anchor) {
               Instant const epoch = reanimated_trajectory.back().time;
               auto const [displacement, velocity] =
-                  AnchorConversion(checkpoint_anchor, vessel->anchor_, epoch);
+                  AnchorConversion(checkpoint_anchor, vessel->placement_.anchor,
+                                   epoch);
               reanimated_trajectory.Translate(displacement, velocity, epoch);
             }
             vessel->trajectory_.Merge(std::move(reanimated_trajectory));
@@ -1307,11 +1301,11 @@ Checkpointer<serialization::Vessel>::Writer Vessel::MakeCheckpointerWriter(
                                /*exact=*/{});
     fixed_step_parameters().WriteToMessage(
         message->mutable_collapsible_fixed_step_parameters());
-    if (subsystem_ != 0) {
-      message->set_subsystem(subsystem_);
+    if (placement_.subsystem != 0) {
+      message->set_subsystem(placement_.subsystem);
     }
-    if (anchor_.has_value()) {
-      anchor_->WriteToMessage(message->mutable_anchor());
+    if (placement_.anchor.has_value()) {
+      placement_.anchor->WriteToMessage(message->mutable_anchor());
     }
   };
 }
@@ -1458,8 +1452,7 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
   {
     absl::MutexLock l(&lock_);
     reanimated_trajectories_.push({std::move(reanimated_trajectory),
-                                   checkpoint_subsystem,
-                                   checkpoint_anchor});
+                                   {checkpoint_subsystem, checkpoint_anchor}});
     oldest_reanimated_checkpoint_ = t_initial;
   }
 
@@ -1507,7 +1500,7 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
         final_time,
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
-        {prognosticator_parameters.subsystem, prognosticator_parameters.anchor});
+        prognosticator_parameters.placement);
   }
   if (status.ok()) {
     status = ephemeris_->FlowWithAdaptiveStep(
@@ -1516,7 +1509,7 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
         ephemeris_->t_max(),
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
-        {prognosticator_parameters.subsystem, prognosticator_parameters.anchor});
+        prognosticator_parameters.placement);
   }
   bool const reached_t_max = status.ok();
   if (reached_t_max) {
@@ -1527,7 +1520,7 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
         InfiniteFuture,
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
-        {prognosticator_parameters.subsystem, prognosticator_parameters.anchor});
+        prognosticator_parameters.placement);
   }
   LOG_IF_EVERY_N(INFO, !status.ok(), 50)
       << "Prognostication from " << prognosticator_parameters.first_time
@@ -1539,8 +1532,7 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
     // Unless we were stopped, ignore the status, which indicates a failure to
     // reach `t_max`, and provide a short prognostication.
     return Prognostication{std::move(prognostication),
-                           prognosticator_parameters.subsystem,
-                           prognosticator_parameters.anchor};
+                           prognosticator_parameters.placement};
   }
 }
 
@@ -1603,20 +1595,21 @@ void Vessel::AttachPrognostication(Prognostication&& prognostication) {
   // was in flight; bring it back to the current representation.  Both
   // conversions are affine, so a single translation at the trajectory's own
   // epoch is exact.
-  if (prognostication.subsystem != subsystem_) {
+  if (prognostication.placement.subsystem != placement_.subsystem) {
     Instant const epoch = prognostication.trajectory.front().time;
     prognostication.trajectory.Translate(
-        ephemeris_->subsystem_conversion(prognostication.subsystem,
-                                         subsystem_,
+        ephemeris_->subsystem_conversion(prognostication.placement.subsystem,
+                                         placement_.subsystem,
                                          epoch),
-        ephemeris_->subsystem_velocity_conversion(prognostication.subsystem,
-                                                  subsystem_),
+        ephemeris_->subsystem_velocity_conversion(
+            prognostication.placement.subsystem, placement_.subsystem),
         epoch);
   }
-  if (prognostication.anchor != anchor_) {
+  if (prognostication.placement.anchor != placement_.anchor) {
     Instant const epoch = prognostication.trajectory.front().time;
     auto const [displacement, velocity] =
-        AnchorConversion(prognostication.anchor, anchor_, epoch);
+        AnchorConversion(prognostication.placement.anchor, placement_.anchor,
+                         epoch);
     prognostication.trajectory.Translate(displacement, velocity, epoch);
   }
   AttachPrediction(std::move(prognostication.trajectory));

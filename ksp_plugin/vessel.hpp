@@ -109,30 +109,22 @@ class Vessel {
   virtual not_null<Celestial const*> parent() const;
   virtual void set_parent(not_null<Celestial const*> parent);
 
-  // Returns the subsystem relative to whose local origin the Barycentric
-  // positions of the trajectories of this vessel are represented.
-  virtual int subsystem() const;
+  // Returns the placement — subsystem and anchor — in whose representation the
+  // Barycentric positions of the trajectories of this vessel are expressed.
+  virtual Ephemeris<Barycentric>::SubsystemPlacement const& placement() const;
 
   // Applies a placement change decided and already executed by this vessel's
   // pile-up: translates the vessel's own trajectory by
-  // `displacement + velocity_offset * (t - epoch)`, retags it into `subsystem`
-  // under `anchor`, and folds the change into its flight plans (the raw
-  // subsystem conversion on a retag, an anchor-gap refresh otherwise).  Does
-  // NOT touch the parts or the pile-up: the pile-up has already moved itself
-  // and retagged the shared parts.  Must not be called while the pile-ups are
-  // being advanced.
+  // `displacement + velocity_offset * (t - epoch)`, retags it into `placement`,
+  // and folds the change into its flight plans (the raw subsystem conversion on
+  // a retag, an anchor-gap refresh otherwise).  Does NOT touch the parts or the
+  // pile-up: the pile-up has already moved itself and retagged the shared
+  // parts.  Must not be called while the pile-ups are being advanced.
   virtual void ApplyPlacementChange(
       Displacement<Barycentric> const& displacement,
       Velocity<Barycentric> const& velocity_offset,
       Instant const& epoch,
-      int subsystem,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
-
-  // The anchor further displacing the representation of this vessel while it
-  // coasts in the force-free inter-subsystem void, if any.  A loaded vessel
-  // may be anchored: the loaded paths are placement-aware and convert at the
-  // World boundary.
-  virtual std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement);
 
   // Adopts the given placement — subsystem and anchor — on a vessel that has
   // no trajectory, parts, or anchor yet, so that its parts are inserted
@@ -147,8 +139,7 @@ class Vessel {
   // Returns false (and does nothing) if this vessel already has state of its
   // own.
   virtual bool TryInheritPlacement(
-      int subsystem,
-      std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement);
 
   // Adds the given part to this vessel.  The part carries its placement: a
   // vessel with no state of its own adopts it (see `TryInheritPlacement`);
@@ -375,14 +366,11 @@ class Vessel {
     Instant first_time;
     DegreesOfFreedom<Barycentric> first_degrees_of_freedom;
     Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters;
-    // The subsystem relative to whose local origin `first_degrees_of_freedom`
-    // is represented.
-    int subsystem = 0;
-    // The anchor further displacing that representation while the vessel coasts
-    // in the force-free inter-subsystem void; absent when unanchored.  Without
-    // it the integrator would read the near-origin anchored coordinates as
-    // subsystem-relative and plunge into the home star.
-    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
+    // The placement in whose representation `first_degrees_of_freedom` is
+    // expressed.  Without the anchor the integrator would read the near-origin
+    // anchored coordinates as subsystem-relative and plunge into the home star.
+    Ephemeris<Barycentric>::SubsystemPlacement placement =
+        Ephemeris<Barycentric>::SubsystemPlacement::Stock();
     // The burn applied by the last catch-up of the containing pile up, if
     // any; the prognostication anticipates the burn continuing until its
     // propellant runs out.
@@ -391,12 +379,12 @@ class Vessel {
   friend bool operator!=(PrognosticatorParameters const& left,
                          PrognosticatorParameters const& right);
 
-  // A prognostication, together with the subsystem and anchor in whose
-  // representation it is expressed.
+  // A prognostication, together with the placement in whose representation it
+  // is expressed.
   struct Prognostication {
     DiscreteTrajectory<Barycentric> trajectory;
-    int subsystem = 0;
-    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
+    Ephemeris<Barycentric>::SubsystemPlacement placement =
+        Ephemeris<Barycentric>::SubsystemPlacement::Stock();
   };
 
   struct ReanimatorParameters {
@@ -494,8 +482,8 @@ class Vessel {
   // The parent body for the 2-body approximation.
   not_null<Celestial const*> parent_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;
-  int subsystem_ = 0;
-  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
+  Ephemeris<Barycentric>::SubsystemPlacement placement_ =
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock();
   std::optional<DiscreteTrajectorySegment<Barycentric>::DownsamplingParameters>
       downsampling_parameters_;
 
@@ -529,12 +517,12 @@ class Vessel {
   // Parameter passed to the last call to `RequestReanimation`, if any.
   std::optional<Instant> last_desired_t_min_ ABSL_GUARDED_BY(lock_);
 
-  // A trajectory that has been reanimated, together with the subsystem and
-  // anchor in whose representation it is expressed.
+  // A trajectory that has been reanimated, together with the placement in whose
+  // representation it is expressed.
   struct ReanimatedTrajectory {
     DiscreteTrajectory<Barycentric> trajectory;
-    int subsystem = 0;
-    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
+    Ephemeris<Barycentric>::SubsystemPlacement placement =
+        Ephemeris<Barycentric>::SubsystemPlacement::Stock();
   };
 
   // The trajectories that have been reanimated are put in this queue by

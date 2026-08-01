@@ -476,15 +476,15 @@ void Plugin::InsertUnloadedPart(
   DegreesOfFreedom<Barycentric> degrees_of_freedom =
       vessel->parent()->current_degrees_of_freedom(current_time_) + relative;
   if (int const parent_subsystem = vessel->parent()->subsystem();
-      parent_subsystem != vessel->subsystem() ||
-      vessel->anchor().has_value()) {
+      parent_subsystem != vessel->placement().subsystem ||
+      vessel->placement().anchor.has_value()) {
     // Into the vessel's placement — subsystem AND anchor: a vessel born of a
     // split or an EVA inherits its parent vessel's placement before its
     // parts are inserted, so the anchored case is reachable here.
     auto const [conversion_displacement, conversion_velocity] =
         ephemeris_->placement_conversion(
             {parent_subsystem, std::nullopt},
-            {vessel->subsystem(), vessel->anchor()},
+            vessel->placement(),
             current_time_);
     degrees_of_freedom = {
         degrees_of_freedom.position() + conversion_displacement,
@@ -542,11 +542,11 @@ void Plugin::InsertOrKeepLoadedPart(
       main_body_frame.FromThisFrameAtTime(previous_time) *
       world_to_main_body_centred;
   if (int const main_body_subsystem = main_body_frame.subsystem();
-      main_body_subsystem != vessel->subsystem() ||
-      vessel->anchor().has_value()) {
+      main_body_subsystem != vessel->placement().subsystem ||
+      vessel->placement().anchor.has_value()) {
     world_to_barycentric_motion =
         PlacementConversionMotion({main_body_subsystem, std::nullopt},
-                                  {vessel->subsystem(), vessel->anchor()},
+                                  vessel->placement(),
                                   previous_time) *
         world_to_barycentric_motion;
   }
@@ -735,8 +735,8 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
   // error that the reconcile would otherwise silently absorb.
   for (auto const& [_, vessel] : vessels_) {
     vessel->ForAllParts([&vessel = vessel](Part& part) {
-      DCHECK_EQ(part.placement().subsystem, vessel->subsystem());
-      DCHECK(part.placement().anchor == vessel->anchor());
+      DCHECK_EQ(part.placement().subsystem, vessel->placement().subsystem);
+      DCHECK(part.placement().anchor == vessel->placement().anchor);
     });
   }
 
@@ -768,20 +768,18 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
       not_null<Vessel*> const vessel =
           FindOrDie(part_id_to_vessel_, part->part_id());
       if (aligned.insert(vessel).second &&
-          (vessel->subsystem() != pile_up_placement.subsystem ||
-           vessel->anchor() != pile_up_placement.anchor)) {
+          vessel->placement() != pile_up_placement) {
         Instant const vessel_time =
             is_loaded(vessel) ? current_time_ - Δt : current_time_;
         auto const [displacement, velocity_offset] =
             ephemeris_->placement_conversion(
-                {vessel->subsystem(), vessel->anchor()},
+                vessel->placement(),
                 pile_up_placement,
                 vessel_time);
         vessel->ApplyPlacementChange(displacement,
                                      velocity_offset,
                                      vessel_time,
-                                     pile_up_placement.subsystem,
-                                     pile_up_placement.anchor);
+                                     pile_up_placement);
       }
     }
   }
@@ -833,16 +831,14 @@ RigidMotion<EccentricPart, World> Plugin::GetPartActualMotion(
       FindOrDie(part_id_to_vessel_, reference_part_id);
   Part const& part = *vessel->part(part_id);
   RigidMotion<RigidPart, Barycentric> part_rigid_motion = part.rigid_motion();
-  if (vessel->subsystem() != reference_vessel->subsystem() ||
-      vessel->anchor() != reference_vessel->anchor()) {
+  if (vessel->placement() != reference_vessel->placement()) {
     // Convert into the placement of the reference vessel — the `Barycentric`
     // side of `barycentric_to_world`.  Between two anchored vessels the
     // anchors difference exactly on the sector lattice, so the conversion is
     // small and precise no matter how deep in the void they are.
     part_rigid_motion =
-        PlacementConversionMotion({vessel->subsystem(), vessel->anchor()},
-                                  {reference_vessel->subsystem(),
-                                   reference_vessel->anchor()},
+        PlacementConversionMotion(vessel->placement(),
+                                  reference_vessel->placement(),
                                   current_time_) *
         part_rigid_motion;
   }
@@ -865,8 +861,8 @@ DegreesOfFreedom<World> Plugin::CelestialWorldDegreesOfFreedom(
   DegreesOfFreedom<Barycentric> degrees_of_freedom =
       celestial.current_degrees_of_freedom(time);
   if (int const celestial_subsystem = celestial.subsystem();
-      celestial_subsystem != reference_vessel->subsystem() ||
-      reference_vessel->anchor().has_value()) {
+      celestial_subsystem != reference_vessel->placement().subsystem ||
+      reference_vessel->placement().anchor.has_value()) {
     // Into the placement of the reference vessel — the `Barycentric` side of
     // `barycentric_to_world`.  For an anchored reference this materializes the
     // void-scale offset once, on the celestial: at that distance the rounding
@@ -874,7 +870,7 @@ DegreesOfFreedom<World> Plugin::CelestialWorldDegreesOfFreedom(
     auto const [conversion_displacement, conversion_velocity] =
         ephemeris_->placement_conversion(
             {celestial_subsystem, std::nullopt},
-            {reference_vessel->subsystem(), reference_vessel->anchor()},
+            reference_vessel->placement(),
             time);
     degrees_of_freedom = {
         degrees_of_freedom.position() + conversion_displacement,
@@ -888,7 +884,7 @@ void Plugin::InheritVesselPlacement(GUID const& vessel_guid,
   not_null<Vessel*> const vessel = FindOrDie(vessels_, vessel_guid).get();
   not_null<Vessel*> const parent =
       FindOrDie(vessels_, parent_vessel_guid).get();
-  vessel->TryInheritPlacement(parent->subsystem(), parent->anchor());
+  vessel->TryInheritPlacement(parent->placement());
 }
 
 DegreesOfFreedom<World> Plugin::VesselWorldDegreesOfFreedom(
@@ -913,16 +909,15 @@ DegreesOfFreedom<World> Plugin::VesselWorldDegreesOfFreedom(
       << "Unprepared history for " << vessel_guid;
   DegreesOfFreedom<Barycentric> degrees_of_freedom =
       psychohistory->back().degrees_of_freedom;
-  if (vessel->subsystem() != reference_vessel->subsystem() ||
-      vessel->anchor() != reference_vessel->anchor()) {
+  if (vessel->placement() != reference_vessel->placement()) {
     // Into the placement of the reference vessel — the `Barycentric` side of
     // `barycentric_to_world`.  Between two anchored vessels the anchors
     // difference exactly on the sector lattice, so the conversion is small
     // and precise no matter how deep in the void they are.
     auto const [conversion_displacement, conversion_velocity] =
         ephemeris_->placement_conversion(
-            {vessel->subsystem(), vessel->anchor()},
-            {reference_vessel->subsystem(), reference_vessel->anchor()},
+            vessel->placement(),
+            reference_vessel->placement(),
             time);
     degrees_of_freedom = {
         degrees_of_freedom.position() + conversion_displacement,
@@ -952,13 +947,13 @@ RigidMotion<Barycentric, World> Plugin::BarycentricToWorld(
                   {EccentricPart::origin, EccentricPart::unmoving}));
   DegreesOfFreedom<Barycentric> reference_part_barycentric_degrees_of_freedom =
       reference_part_placement_degrees_of_freedom;
-  if (int const vessel_subsystem = reference_vessel->subsystem(),
+  if (int const vessel_subsystem = reference_vessel->placement().subsystem,
           main_body_subsystem = main_body_frame.subsystem();
       vessel_subsystem != main_body_subsystem ||
-      reference_vessel->anchor().has_value()) {
+      reference_vessel->placement().anchor.has_value()) {
     auto const [conversion_displacement, conversion_velocity] =
         ephemeris_->placement_conversion(
-            {vessel_subsystem, reference_vessel->anchor()},
+            {vessel_subsystem, reference_vessel->placement().anchor},
             {main_body_subsystem, std::nullopt},
             current_time_);
     reference_part_barycentric_degrees_of_freedom = {
@@ -1057,8 +1052,7 @@ void Plugin::ApplyPlacementChangesToVessels(
       vessel->ApplyPlacementChange(change.displacement,
                                    change.velocity_offset,
                                    change.epoch,
-                                   change.placement.subsystem,
-                                   change.placement.anchor);
+                                   change.placement);
     }
   }
 }
@@ -1219,12 +1213,12 @@ RelativeDegreesOfFreedom<AliceSun> Plugin::VesselFromParent(
   RelativeDegreesOfFreedom<Barycentric> barycentric_result =
       vessel->psychohistory()->back().degrees_of_freedom -
       vessel->parent()->current_degrees_of_freedom(current_time_);
-  if (auto const& anchor = vessel->anchor(); anchor.has_value()) {
+  if (auto const& anchor = vessel->placement().anchor; anchor.has_value()) {
     barycentric_result = {
         barycentric_result.displacement() + anchor->OffsetAt(current_time_),
         barycentric_result.velocity() + anchor->velocity};
   }
-  if (int const vessel_subsystem = vessel->subsystem(),
+  if (int const vessel_subsystem = vessel->placement().subsystem,
           parent_subsystem = vessel->parent()->subsystem();
       vessel_subsystem != parent_subsystem) {
     barycentric_result = {
@@ -1252,12 +1246,12 @@ Plugin::NavigationState Plugin::VesselNavigationState(
   // with any anchor offset folded in.
   DegreesOfFreedom<Barycentric> vessel_dof =
       vessel.psychohistory()->back().degrees_of_freedom;
-  if (auto const& anchor = vessel.anchor(); anchor.has_value()) {
+  if (auto const& anchor = vessel.placement().anchor; anchor.has_value()) {
     vessel_dof = DegreesOfFreedom<Barycentric>(
         vessel_dof.position() + anchor->OffsetAt(current_time_),
         vessel_dof.velocity() + anchor->velocity);
   }
-  int const vessel_subsystem = vessel.subsystem();
+  int const vessel_subsystem = vessel.placement().subsystem;
   // The vessel's state relative to a celestial, converted across subsystem
   // representations like `VesselFromParent`.
   auto const relative_to = [&](Celestial const& celestial) {
@@ -1576,7 +1570,7 @@ void Plugin::ComputeAndRenderClosestApproaches(
   // are homed to different subsystems.
   auto const [target_displacement, target_velocity] =
       ephemeris_->placement_conversion(
-          {target_vessel.subsystem(), target_vessel.anchor()},
+          target_vessel.placement(),
           placement,
           current_time_);
   TranslatedTrajectory<Barycentric> const target_prediction(
@@ -1908,7 +1902,7 @@ Velocity<World> Plugin::VesselVelocity(GUID const& vessel_guid) const {
   Vessel const& vessel = *FindOrDie(vessels_, vessel_guid);
   auto const& back = vessel.psychohistory()->back();
   return VesselVelocity(back.time, back.degrees_of_freedom,
-                        {vessel.subsystem(), vessel.anchor()});
+                        vessel.placement());
 }
 
 void Plugin::RequestReanimation(Instant const& desired_t_min) const {
@@ -2347,7 +2341,7 @@ void Plugin::AddPart(not_null<Vessel*> const vessel,
   // The callers compute a fresh part's degrees of freedom in the vessel's own
   // placement; tag it accordingly before handing it over, so that the
   // conversion in `Vessel::AddPart` never fires here (its `t` is unused).
-  part->set_placement({vessel->subsystem(), vessel->anchor()});
+  part->set_placement(vessel->placement());
   vessel->AddPart(std::move(part), current_time_);
 }
 

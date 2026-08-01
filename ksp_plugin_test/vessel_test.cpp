@@ -242,21 +242,20 @@ TEST_F(VesselTest, AdoptAnchorRefreshesStaleFlightPlan) {
   vessel_.ApplyPlacementChange(Displacement<Barycentric>{},
                                Velocity<Barycentric>{},
                                t0_,
-                               /*subsystem=*/0,
-                               anchor_at(4e9 * Metre, t0_));
-  ASSERT_TRUE(vessel_.anchor().has_value());
+                               {/*subsystem=*/0, anchor_at(4e9 * Metre, t0_)});
+  ASSERT_TRUE(vessel_.placement().anchor.has_value());
   EXPECT_FALSE(vessel_.flight_plan().anchor().has_value());
 
   // The vessel drifts far from its anchor and re-anchors; the gap now exceeds
   // the margin and the plan is rebased onto the vessel's fresh anchor.
-  vessel_.ApplyPlacementChange(Displacement<Barycentric>{},
-                               Velocity<Barycentric>{},
-                               t0_ + 1 * Second,
-                               /*subsystem=*/0,
-                               anchor_at(1e11 * Metre, t0_ + 1 * Second));
-  ASSERT_TRUE(vessel_.anchor().has_value());
+  vessel_.ApplyPlacementChange(
+      Displacement<Barycentric>{},
+      Velocity<Barycentric>{},
+      t0_ + 1 * Second,
+      {/*subsystem=*/0, anchor_at(1e11 * Metre, t0_ + 1 * Second)});
+  ASSERT_TRUE(vessel_.placement().anchor.has_value());
   ASSERT_TRUE(vessel_.flight_plan().anchor().has_value());
-  EXPECT_EQ(*vessel_.anchor(), *vessel_.flight_plan().anchor());
+  EXPECT_EQ(*vessel_.placement().anchor, *vessel_.flight_plan().anchor());
 }
 
 TEST_F(VesselTest, KeepAndFreeParts) {

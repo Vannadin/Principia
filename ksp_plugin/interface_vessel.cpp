@@ -134,8 +134,8 @@ void __cdecl principia__VesselGetPlacement(Plugin const* const plugin,
       {subsystem, has_anchor, anchor_cell, anchor_local});
   CHECK(plugin != nullptr);
   Vessel const& vessel = *plugin->GetVessel(vessel_guid);
-  *subsystem = vessel.subsystem();
-  auto const& anchor = vessel.anchor();
+  *subsystem = vessel.placement().subsystem;
+  auto const& anchor = vessel.placement().anchor;
   *has_anchor = anchor.has_value();
   if (anchor.has_value()) {
     auto const& cell = anchor->offset.cell;

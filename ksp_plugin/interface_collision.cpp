@@ -154,7 +154,7 @@ PushPullExecutor<
                               sun_world_position,
                               max_points,
                               *vessel->prediction(),
-                              {vessel->subsystem(), vessel->anchor()})
+                              vessel->placement())
                       .release());
 }
 

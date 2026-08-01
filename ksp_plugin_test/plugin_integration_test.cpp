@@ -766,7 +766,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
   plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
 
   auto const& vessel = *plugin->GetVessel(vessel_guid);
-  int const initial_subsystem = vessel.subsystem();
+  int const initial_subsystem = vessel.placement().subsystem;
   EXPECT_EQ(plugin->GetCelestial(star_a).subsystem(), initial_subsystem);
 
   // Coast across the void; the stars have equal masses, so the dominance
@@ -795,13 +795,14 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
                   RelativeErrorFrom(v * δt, Lt(1e-6)));
     }
     previous_displacement = from_parent.displacement();
-    if (vessel.subsystem() != previous_subsystem) {
-      previous_subsystem = vessel.subsystem();
+    if (vessel.placement().subsystem != previous_subsystem) {
+      previous_subsystem = vessel.placement().subsystem;
       ++rebases;
     }
   }
   EXPECT_EQ(1, rebases);
-  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(), vessel.subsystem());
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(),
+            vessel.placement().subsystem);
 
   // The distance from star B to its parent star A is unaffected by their
   // distinct representations.
@@ -823,7 +824,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
         trajectory.end(),
         World::origin,
         plugin->PlanetariumRotation(),
-        {vessel.subsystem(), vessel.anchor()});
+        vessel.placement());
     return (rendered.back().degrees_of_freedom.position() - World::origin)
         .Norm();
   };
@@ -838,11 +839,11 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebase) {
   // one `Plugin` may exist at a time, so destroy it before reading.
   serialization::Plugin message;
   plugin->WriteToMessage(&message);
-  int const subsystem_before_save = vessel.subsystem();
+  int const subsystem_before_save = vessel.placement().subsystem;
   plugin = nullptr;
   auto const plugin2 = Plugin::ReadFromMessage(message);
   auto const& vessel2 = *plugin2->GetVessel(vessel_guid);
-  EXPECT_EQ(subsystem_before_save, vessel2.subsystem());
+  EXPECT_EQ(subsystem_before_save, vessel2.placement().subsystem);
   EXPECT_THAT(
       plugin2->VesselFromParent(star_a, vessel_guid).displacement().Norm(),
       AbsoluteErrorFrom(previous_displacement->Norm(), Lt(100 * Metre)));
@@ -986,9 +987,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidNavigationState) {
   // vessel is still represented in star A's subsystem while star B, in its
   // own moving subsystem, exercises the position and velocity conversions.
   EXPECT_EQ(plugin->GetCelestial(star_a).subsystem(),
-            plugin->GetVessel(void_guid)->subsystem());
+            plugin->GetVessel(void_guid)->placement().subsystem);
   EXPECT_NE(plugin->GetCelestial(star_b).subsystem(),
-            plugin->GetVessel(void_guid)->subsystem());
+            plugin->GetVessel(void_guid)->placement().subsystem);
   auto const void_state = plugin->VesselNavigationState(
       void_guid,
       /*target_index=*/star_b,
@@ -1090,12 +1091,12 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseMassBoundary) {
   plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
 
   auto const& vessel = *plugin->GetVessel(vessel_guid);
-  EXPECT_EQ(subsystem_a, vessel.subsystem());
+  EXPECT_EQ(subsystem_a, vessel.placement().subsystem);
 
   Time const δt = 1200 * Second;
   Instant const t_final = Instant() + 37'200 * Second;
   int rebases = 0;
-  int previous_subsystem = vessel.subsystem();
+  int previous_subsystem = vessel.placement().subsystem;
   for (Instant t = Instant() + δt; t <= t_final; t += δt) {
     plugin->AdvanceTime(t, 1 * Radian);
     plugin->InsertOrKeepVessel(vessel_guid,
@@ -1106,27 +1107,27 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseMassBoundary) {
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
     // The graze never captures the representation.
-    EXPECT_NE(subsystem_c, vessel.subsystem());
+    EXPECT_NE(subsystem_c, vessel.placement().subsystem);
     if (t == Instant() + 20'400 * Second) {
       // Closest approach to star C: still A's.
-      EXPECT_EQ(subsystem_a, vessel.subsystem());
+      EXPECT_EQ(subsystem_a, vessel.placement().subsystem);
     }
     if (t == Instant() + 26'400 * Second) {
       // Past the geometric midpoint, but A, heavier, still dominates.
-      EXPECT_EQ(subsystem_a, vessel.subsystem());
+      EXPECT_EQ(subsystem_a, vessel.placement().subsystem);
     }
     if (t == Instant() + 33'600 * Second) {
       // Past the mass-weighted balance at 3.2e16 m, but short of the
       // hysteresis margin: still A's.
-      EXPECT_EQ(subsystem_a, vessel.subsystem());
+      EXPECT_EQ(subsystem_a, vessel.placement().subsystem);
     }
-    if (vessel.subsystem() != previous_subsystem) {
-      previous_subsystem = vessel.subsystem();
+    if (vessel.placement().subsystem != previous_subsystem) {
+      previous_subsystem = vessel.placement().subsystem;
       ++rebases;
     }
   }
   EXPECT_EQ(1, rebases);
-  EXPECT_EQ(subsystem_b, vessel.subsystem());
+  EXPECT_EQ(subsystem_b, vessel.placement().subsystem);
 }
 
 // A vessel crosses the void into a subsystem that moves at the speed of the
@@ -1223,7 +1224,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
   Time const δt = 1200 * Second;
   Instant const t_final = Instant() + 33'600 * Second;
   int rebases = 0;
-  int previous_subsystem = vessel.subsystem();
+  int previous_subsystem = vessel.placement().subsystem;
   std::optional<Displacement<AliceSun>> previous_displacement;
   for (Instant t = Instant() + δt; t <= t_final; t += δt) {
     plugin->AdvanceTime(t, 1 * Radian);
@@ -1244,13 +1245,14 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
     // The coast velocity relative to star A is unaffected by the
     // representation switch into the moving subsystem.
     EXPECT_THAT((from_parent.velocity() - v0).Norm() / v0.Norm(), Lt(1e-9));
-    if (vessel.subsystem() != previous_subsystem) {
-      previous_subsystem = vessel.subsystem();
+    if (vessel.placement().subsystem != previous_subsystem) {
+      previous_subsystem = vessel.placement().subsystem;
       ++rebases;
     }
   }
   EXPECT_EQ(1, rebases);
-  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(), vessel.subsystem());
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(),
+            vessel.placement().subsystem);
 }
 
 // WS1 × WS3: a vessel runs an on-rails burn (WS3) while it crosses the void and
@@ -1338,7 +1340,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseDuringOnRailsBurn) 
   plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
 
   auto const& vessel = *plugin->GetVessel(vessel_guid);
-  int const initial_subsystem = vessel.subsystem();
+  int const initial_subsystem = vessel.placement().subsystem;
 
   Force const thrust = 0.1 * Newton;
   SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
@@ -1374,8 +1376,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseDuringOnRailsBurn) 
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
     m -= δt * mass_flow;
-    if (vessel.subsystem() != previous_subsystem) {
-      previous_subsystem = vessel.subsystem();
+    if (vessel.placement().subsystem != previous_subsystem) {
+      previous_subsystem = vessel.placement().subsystem;
       ++rebases;
     }
   }
@@ -1383,7 +1385,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRebaseDuringOnRailsBurn) 
   // The vessel rebased exactly once and ended in star B's subsystem, despite
   // burning throughout.
   EXPECT_EQ(1, rebases);
-  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(), vessel.subsystem());
+  EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(),
+            vessel.placement().subsystem);
 
   // The burn survived the rebase: the accumulated Δv is Циолковский's, and it
   // lies transverse to the coast (in the z direction, since a `World` y command
@@ -1734,11 +1737,11 @@ TEST_F(PluginIntegrationTestWithoutPlugin, WarpReadoptionLandsInDestinationSubsy
   // Each vessel is tagged with its parent star's subsystem — automatically,
   // from the constructor (no distance-triggered rebase, no re-seed fork).
   EXPECT_EQ(plugin->GetCelestial(star_a).subsystem(),
-            plugin->GetVessel(guid_a)->subsystem());
+            plugin->GetVessel(guid_a)->placement().subsystem);
   EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(),
-            plugin->GetVessel(guid_b)->subsystem());
-  EXPECT_NE(plugin->GetVessel(guid_a)->subsystem(),
-            plugin->GetVessel(guid_b)->subsystem());
+            plugin->GetVessel(guid_b)->placement().subsystem);
+  EXPECT_NE(plugin->GetVessel(guid_a)->placement().subsystem,
+            plugin->GetVessel(guid_b)->placement().subsystem);
 
   // The destination vessel is anchored at star B's local origin: its trajectory
   // sits ~1e9 m from that origin, NOT ~4e16 m (which is what a wrong subsystem
@@ -1849,8 +1852,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CrossSubsystemDockingReconciles) {
   plugin->GetVessel(guid_b)->part(102)->set_mass(1 * Kilogram);
   plugin->PrepareToReportCollisions();
   plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
-  EXPECT_NE(plugin->GetVessel(guid_a)->subsystem(),
-            plugin->GetVessel(guid_b)->subsystem());
+  EXPECT_NE(plugin->GetVessel(guid_a)->placement().subsystem,
+            plugin->GetVessel(guid_b)->placement().subsystem);
   Displacement<AliceSun> const visitor_from_star_b =
       plugin->VesselFromParent(star_b, guid_b).displacement();
 
@@ -1874,8 +1877,10 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CrossSubsystemDockingReconciles) {
   // Both vessels were reconciled to the heavier side (the station's
   // subsystem) and share a single pile-up in that subsystem.
   int const station_subsystem = plugin->GetCelestial(star_a).subsystem();
-  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_a)->subsystem());
-  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_b)->subsystem());
+  EXPECT_EQ(station_subsystem,
+            plugin->GetVessel(guid_a)->placement().subsystem);
+  EXPECT_EQ(station_subsystem,
+            plugin->GetVessel(guid_b)->placement().subsystem);
   auto* const pile_up_a =
       plugin->GetVessel(guid_a)->part(101)->containing_pile_up();
   auto* const pile_up_b =
@@ -2027,7 +2032,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, ThousandLightYearScale) {
   // star B's origin (~1e9 m, not ~1e19 m), and its reported orbit is exact to
   // well below the metre — no distance dependence.
   EXPECT_EQ(plugin->GetCelestial(star_b).subsystem(),
-            plugin->GetVessel(guid_orbiter)->subsystem());
+            plugin->GetVessel(guid_orbiter)->placement().subsystem);
   EXPECT_THAT((plugin->GetVessel(guid_orbiter)
                    ->trajectory().back().degrees_of_freedom.position() -
                Barycentric::origin).Norm(),
@@ -2036,8 +2041,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, ThousandLightYearScale) {
       plugin->VesselFromParent(star_b, guid_orbiter).displacement().Norm(),
       AbsoluteErrorFrom(orbit, Lt(1 * Metre)));
 
-  EXPECT_NE(plugin->GetVessel(guid_a)->subsystem(),
-            plugin->GetVessel(guid_b)->subsystem());
+  EXPECT_NE(plugin->GetVessel(guid_a)->placement().subsystem,
+            plugin->GetVessel(guid_b)->placement().subsystem);
   Displacement<AliceSun> const visitor_from_star_b =
       plugin->VesselFromParent(star_b, guid_b).displacement();
 
@@ -2065,8 +2070,10 @@ TEST_F(PluginIntegrationTestWithoutPlugin, ThousandLightYearScale) {
   // representation change; the entire distance-dependent cost is a few ULPs
   // of that translation (ULP ≈ 2 km), physically a fixed sub-10-km offset.
   int const station_subsystem = plugin->GetCelestial(star_a).subsystem();
-  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_a)->subsystem());
-  EXPECT_EQ(station_subsystem, plugin->GetVessel(guid_b)->subsystem());
+  EXPECT_EQ(station_subsystem,
+            plugin->GetVessel(guid_a)->placement().subsystem);
+  EXPECT_EQ(station_subsystem,
+            plugin->GetVessel(guid_b)->placement().subsystem);
   EXPECT_EQ(plugin->GetVessel(guid_a)->part(202)->containing_pile_up(),
             plugin->GetVessel(guid_b)->part(203)->containing_pile_up());
   EXPECT_THAT((plugin->VesselFromParent(star_b, guid_b).displacement() -
@@ -2166,9 +2173,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
 
-  EXPECT_FALSE(plugin->GetVessel(guid_near)->anchor().has_value());
+  EXPECT_FALSE(plugin->GetVessel(guid_near)->placement().anchor.has_value());
   not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
-  ASSERT_TRUE(drifter->anchor().has_value());
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
   // The anchored coordinates and velocity are near zero (the coordinates were
   // ~2e16 m); the anchor records where the vessel really is and how it moves.
   EXPECT_THAT((drifter->trajectory().back().degrees_of_freedom.position() -
@@ -2177,12 +2184,12 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
   EXPECT_THAT(drifter->trajectory().back().degrees_of_freedom.velocity()
                   .Norm(),
               Lt(1e-6 * Metre / Second));
-  EXPECT_THAT(drifter->anchor()->offset.Collapse().Norm(),
+  EXPECT_THAT(drifter->placement().anchor->offset.Collapse().Norm(),
               AbsoluteErrorFrom(2e16 * Metre, Lt(1e12 * Metre)));
-  EXPECT_THAT(drifter->anchor()->velocity.Norm(),
+  EXPECT_THAT(drifter->placement().anchor->velocity.Norm(),
               AbsoluteErrorFrom(3 * Kilo(Metre) / Second,
                                 Lt(1 * Metre / Second)));
-  auto const saved_anchor = *drifter->anchor();
+  auto const saved_anchor = *drifter->placement().anchor;
 
   // The representation survives a save.
   serialization::Plugin message;
@@ -2190,8 +2197,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
   plugin = nullptr;
   auto const plugin2 = Plugin::ReadFromMessage(message);
   not_null<Vessel*> const drifter2 = plugin2->GetVessel(guid_void);
-  ASSERT_TRUE(drifter2->anchor().has_value());
-  EXPECT_EQ(saved_anchor, *drifter2->anchor());
+  ASSERT_TRUE(drifter2->placement().anchor.has_value());
+  EXPECT_EQ(saved_anchor, *drifter2->placement().anchor);
 
   // Loading the vessel keeps the anchor and the small anchored coordinates:
   // the loaded paths convert between placements instead of demanding the
@@ -2200,8 +2207,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidCoastAdoptsAnchor) {
       drifter2->trajectory().back().degrees_of_freedom.position();
   plugin2->InsertOrKeepVessel(guid_void, "drifter", star_a,
                               /*loaded=*/true, inserted);
-  ASSERT_TRUE(drifter2->anchor().has_value());
-  EXPECT_EQ(saved_anchor, *drifter2->anchor());
+  ASSERT_TRUE(drifter2->placement().anchor.has_value());
+  EXPECT_EQ(saved_anchor, *drifter2->placement().anchor);
   EXPECT_EQ(expected_position,
             drifter2->trajectory().back().degrees_of_freedom.position());
 }
@@ -2331,14 +2338,16 @@ TEST_F(PluginIntegrationTestWithoutPlugin, SharedPileUpReAnchorsOnce) {
   EXPECT_EQ(pile_up,
             plugin->GetVessel(guid_b)->part(102)->containing_pile_up());
   ASSERT_TRUE(pile_up->placement().anchor.has_value());
-  ASSERT_TRUE(plugin->GetVessel(guid_a)->anchor().has_value());
-  ASSERT_TRUE(plugin->GetVessel(guid_b)->anchor().has_value());
-  EXPECT_EQ(*pile_up->placement().anchor, *plugin->GetVessel(guid_a)->anchor());
-  EXPECT_EQ(*pile_up->placement().anchor, *plugin->GetVessel(guid_b)->anchor());
+  ASSERT_TRUE(plugin->GetVessel(guid_a)->placement().anchor.has_value());
+  ASSERT_TRUE(plugin->GetVessel(guid_b)->placement().anchor.has_value());
+  EXPECT_EQ(*pile_up->placement().anchor,
+            *plugin->GetVessel(guid_a)->placement().anchor);
+  EXPECT_EQ(*pile_up->placement().anchor,
+            *plugin->GetVessel(guid_b)->placement().anchor);
   EXPECT_EQ(pile_up->placement().anchor->epoch,
-            plugin->GetVessel(guid_a)->anchor()->epoch);
+            plugin->GetVessel(guid_a)->placement().anchor->epoch);
   EXPECT_EQ(pile_up->placement().anchor->epoch,
-            plugin->GetVessel(guid_b)->anchor()->epoch);
+            plugin->GetVessel(guid_b)->placement().anchor->epoch);
 
   Displacement<AliceSun> const visitor_from_star_a =
       plugin->VesselFromParent(star_a, guid_b).displacement();
@@ -2351,8 +2360,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, SharedPileUpReAnchorsOnce) {
     VesselSet collided_vessels;
     plugin->WaitForVesselToCatchUp(*future, collided_vessels);
   }
-  EXPECT_EQ(*plugin->GetVessel(guid_a)->anchor(),
-            *plugin->GetVessel(guid_b)->anchor());
+  EXPECT_EQ(*plugin->GetVessel(guid_a)->placement().anchor,
+            *plugin->GetVessel(guid_b)->placement().anchor);
 
   // The next advance preserves the pair's relative geometry: one verdict moved
   // both members together, so nothing compounds.
@@ -2420,8 +2429,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
   }
   not_null<Vessel*> const drifter = plugin->GetVessel(guid);
   not_null<Vessel*> const tender = plugin->GetVessel(tender_guid);
-  ASSERT_TRUE(drifter->anchor().has_value());
-  ASSERT_TRUE(tender->anchor().has_value());
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
+  ASSERT_TRUE(tender->placement().anchor.has_value());
 
   // A tick goes by (the loaded insertion evaluates the main-body frame just
   // before the current time, which must not precede the ephemeris).
@@ -2434,8 +2443,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
                              /*loaded=*/true, inserted);
   plugin->InsertOrKeepVessel(tender_guid, "tender", star_a,
                              /*loaded=*/true, inserted);
-  ASSERT_TRUE(drifter->anchor().has_value());
-  ASSERT_TRUE(tender->anchor().has_value());
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
+  ASSERT_TRUE(tender->placement().anchor.has_value());
   Mass const mass = 1000 * Kilogram;
   // The main body's World coordinates must be consistent with the scene in
   // which the scaffold sits at the World origin — the way the game hands them
@@ -2492,7 +2501,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
   GUID const stray_guid = "stray";
   plugin->InsertOrKeepVessel(stray_guid, "stray", star_a,
                              /*loaded=*/true, inserted);
-  EXPECT_FALSE(plugin->GetVessel(stray_guid)->anchor().has_value());
+  EXPECT_FALSE(plugin->GetVessel(stray_guid)->placement().anchor.has_value());
   plugin->InsertOrKeepLoadedPart(
       405, "stray pod", mass, EccentricPart::origin,
       MakeWaterSphereInertiaTensor(mass),
@@ -2540,9 +2549,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
-  ASSERT_TRUE(drifter->anchor().has_value());
-  ASSERT_TRUE(tender->anchor().has_value());
-  EXPECT_TRUE(plugin->GetVessel(stray_guid)->anchor().has_value());
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
+  ASSERT_TRUE(tender->placement().anchor.has_value());
+  EXPECT_TRUE(plugin->GetVessel(stray_guid)->placement().anchor.has_value());
 
   // The round trip back to `World`: the reference part sits at the World
   // origin, unmoving despite the 3 km/s anchored cruise, and the half-metre
@@ -2595,8 +2604,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
   // stray misses an intended-position assertion at this tolerance by
   // ~0.4 m).
   not_null<Vessel*> const newborn = plugin->GetVessel(newborn_guid);
-  ASSERT_TRUE(newborn->anchor().has_value());
-  EXPECT_EQ(*drifter->anchor(), *newborn->anchor());
+  ASSERT_TRUE(newborn->placement().anchor.has_value());
+  EXPECT_EQ(*drifter->placement().anchor, *newborn->placement().anchor);
   DegreesOfFreedom<World> const newborn_degrees_of_freedom =
       plugin->GetPartActualMotion(406, 402, barycentric_to_world)(
           {EccentricPart::origin, EccentricPart::unmoving});
@@ -2614,8 +2623,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LoadedVoidVesselKeepsAnchor) {
   // below (unanchored, same subsystem: the old path also lands nearby).
   not_null<Vessel*> const packed_newborn =
       plugin->GetVessel(packed_newborn_guid);
-  ASSERT_TRUE(packed_newborn->anchor().has_value());
-  EXPECT_EQ(*drifter->anchor(), *packed_newborn->anchor());
+  ASSERT_TRUE(packed_newborn->placement().anchor.has_value());
+  EXPECT_EQ(*drifter->placement().anchor, *packed_newborn->placement().anchor);
   // Its unloaded insertion survived the anchored placement: it sits ~500 m
   // from the drifter, not an anchor offset away.  The tolerance absorbs the
   // celestial-relative round trip, which collapses the 2e16 m absolute into
@@ -2657,7 +2666,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidStagingKeepsAnchors) {
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
   not_null<Vessel*> const stack = plugin->GetVessel(guid);
-  ASSERT_TRUE(stack->anchor().has_value());
+  ASSERT_TRUE(stack->placement().anchor.has_value());
   plugin->AdvanceTime(plugin->CurrentTime() + 60 * Second, 1 * Radian);
 
   // The vessel loads with two parts 2 m apart.
@@ -2698,8 +2707,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidStagingKeepsAnchors) {
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
-  ASSERT_TRUE(stack->anchor().has_value());
-  auto const stack_anchor = *stack->anchor();
+  ASSERT_TRUE(stack->placement().anchor.has_value());
+  auto const stack_anchor = *stack->placement().anchor;
   // Captured for the bit-identity assertion at the end: the fix keeps the
   // anchor VERBATIM through the whole staging choreography, whereas a
   // drop/re-adopt cycle would mint a new anchor with a new epoch.
@@ -2738,8 +2747,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidStagingKeepsAnchors) {
       part_motion(World::origin + stage_offset), 20 * Milli(Second));
   not_null<Vessel*> const booster = plugin->GetVessel(booster_guid);
   // The fresh vessel inherited the anchor at the part transfer.
-  ASSERT_TRUE(booster->anchor().has_value());
-  EXPECT_EQ(stack_anchor, *booster->anchor());
+  ASSERT_TRUE(booster->placement().anchor.has_value());
+  EXPECT_EQ(stack_anchor, *booster->placement().anchor);
   // Diagnostic bisection point (b): the transfer preserved the geometry.
   EXPECT_THAT(((part_q(booster, 502) - part_q(stack, 501)).Norm()),
               AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
@@ -2786,19 +2795,20 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidStagingKeepsAnchors) {
     plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
-    ASSERT_TRUE(stack->anchor().has_value()) << "frame " << frame;
-    ASSERT_TRUE(booster->anchor().has_value()) << "frame " << frame;
-    EXPECT_EQ(*stack->anchor(), *booster->anchor()) << "frame " << frame;
+    ASSERT_TRUE(stack->placement().anchor.has_value()) << "frame " << frame;
+    ASSERT_TRUE(booster->placement().anchor.has_value()) << "frame " << frame;
+    EXPECT_EQ(*stack->placement().anchor, *booster->placement().anchor)
+        << "frame " << frame;
   }
 
   // The collision-merged subset kept a single shared anchor rather than
   // dropping to absolutes — indeed the anchor is BIT-IDENTICAL to the one
   // adopted before staging: no drop/re-adopt cycle happened at all.
-  ASSERT_TRUE(stack->anchor().has_value());
-  ASSERT_TRUE(booster->anchor().has_value());
-  EXPECT_EQ(*stack->anchor(), *booster->anchor());
-  EXPECT_EQ(original_anchor, *stack->anchor());
-  EXPECT_EQ(original_anchor, *booster->anchor());
+  ASSERT_TRUE(stack->placement().anchor.has_value());
+  ASSERT_TRUE(booster->placement().anchor.has_value());
+  EXPECT_EQ(*stack->placement().anchor, *booster->placement().anchor);
+  EXPECT_EQ(original_anchor, *stack->placement().anchor);
+  EXPECT_EQ(original_anchor, *booster->placement().anchor);
 
   // The separation geometry survives to sub-mm: the pieces are 2 m apart,
   // not scattered by the ~4 m ULP of the void absolute.
@@ -2859,9 +2869,11 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
   not_null<Vessel*> const stack = plugin->GetVessel(guid);
-  ASSERT_TRUE(stack->anchor().has_value());
-  ASSERT_EQ(plugin->GetCelestial(star_b).subsystem(), stack->subsystem());
-  ASSERT_NE(plugin->GetCelestial(star_a).subsystem(), stack->subsystem());
+  ASSERT_TRUE(stack->placement().anchor.has_value());
+  ASSERT_EQ(plugin->GetCelestial(star_b).subsystem(),
+            stack->placement().subsystem);
+  ASSERT_NE(plugin->GetCelestial(star_a).subsystem(),
+            stack->placement().subsystem);
   plugin->AdvanceTime(plugin->CurrentTime() + 60 * Second, 1 * Radian);
 
   // The vessel loads with two parts 2 m apart; the stock main body handed to
@@ -2904,8 +2916,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
-  ASSERT_TRUE(stack->anchor().has_value());
-  auto const stack_anchor = *stack->anchor();
+  ASSERT_TRUE(stack->placement().anchor.has_value());
+  auto const stack_anchor = *stack->placement().anchor;
   auto const part_q = [](not_null<Vessel*> const vessel, PartId const id) {
     return vessel->part(id)->rigid_motion()(
         {RigidPart::origin, RigidPart::unmoving}).position();
@@ -2936,9 +2948,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
       part_motion(World::origin + stage_offset), 20 * Milli(Second));
   not_null<Vessel*> const booster = plugin->GetVessel(booster_guid);
   // The whole placement was inherited at the transfer: subsystem AND anchor.
-  EXPECT_EQ(stack->subsystem(), booster->subsystem());
-  ASSERT_TRUE(booster->anchor().has_value());
-  EXPECT_EQ(stack_anchor, *booster->anchor());
+  EXPECT_EQ(stack->placement().subsystem, booster->placement().subsystem);
+  ASSERT_TRUE(booster->placement().anchor.has_value());
+  EXPECT_EQ(stack_anchor, *booster->placement().anchor);
   EXPECT_THAT(((part_q(booster, 602) - part_q(stack, 601)).Norm()),
               AbsoluteErrorFrom(2 * Metre, Lt(1 * Milli(Metre))))
       << "(b) after the transfer, before the merge";
@@ -2982,7 +2994,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidPredictionCoasts) {
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
   not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
-  ASSERT_TRUE(drifter->anchor().has_value());
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
 
   // Predict synchronously so the read is deterministic.
   Vessel::MakeSynchronous();
@@ -3030,7 +3042,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidFlightPlanCoasts) {
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
   not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
-  ASSERT_TRUE(drifter->anchor().has_value());
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
 
   drifter->CreateFlightPlan(
       drifter->trajectory().back().time + 1 * Hour,
@@ -3107,8 +3119,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CoAnchoredVoidVesselsKeepLocalPrecisi
 
   not_null<Vessel*> const station = plugin->GetVessel(guid_a);
   not_null<Vessel*> const visitor = plugin->GetVessel(guid_b);
-  ASSERT_TRUE(station->anchor().has_value());
-  ASSERT_TRUE(visitor->anchor().has_value());
+  ASSERT_TRUE(station->placement().anchor.has_value());
+  ASSERT_TRUE(visitor->placement().anchor.has_value());
 
   // Each vessel's stored coordinates stay near its own local origin.  At this
   // magnitude the ULP is sub-micron, so the vessel's own dynamics resolve mm
@@ -3123,9 +3135,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CoAnchoredVoidVesselsKeepLocalPrecisi
   // vessel at the ~2e16 m midpoint (render placement is correct, not collapsed
   // onto the home star at the origin).
   Position<Barycentric> const true_a =
-      dof_a.position() + station->anchor()->OffsetAt(t_a);
+      dof_a.position() + station->placement().anchor->OffsetAt(t_a);
   Position<Barycentric> const true_b =
-      dof_b.position() + visitor->anchor()->OffsetAt(t_b);
+      dof_b.position() + visitor->placement().anchor->OffsetAt(t_b);
   EXPECT_THAT((true_a - Barycentric::origin).Norm(),
               AllOf(Gt(1e16 * Metre), Lt(3e16 * Metre)));
   EXPECT_THAT((true_b - Barycentric::origin).Norm(),
@@ -3186,18 +3198,20 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
 
   not_null<Vessel*> const station = plugin->GetVessel(guid_a);
   not_null<Vessel*> const visitor = plugin->GetVessel(guid_b);
-  ASSERT_TRUE(station->anchor().has_value());
-  ASSERT_TRUE(visitor->anchor().has_value());
+  ASSERT_TRUE(station->placement().anchor.has_value());
+  ASSERT_TRUE(visitor->placement().anchor.has_value());
   Velocity<Barycentric> const relative_velocity =
-      visitor->anchor()->velocity - station->anchor()->velocity;
+      visitor->placement().anchor->velocity -
+      station->placement().anchor->velocity;
 
   Instant const t0 = station->trajectory().back().time;
   auto const conversion_at = [&](Instant const& t) {
     return Ephemeris<Barycentric>::Anchor::Conversion(
-        visitor->anchor(), station->anchor(), t).first;
+        visitor->placement().anchor, station->placement().anchor, t).first;
   };
   auto const paired_collapse_at = [&](Instant const& t) {
-    return visitor->anchor()->OffsetAt(t) - station->anchor()->OffsetAt(t);
+    return visitor->placement().anchor->OffsetAt(t) -
+           station->placement().anchor->OffsetAt(t);
   };
 
   Displacement<Barycentric> const conversion₀ = conversion_at(t0);
@@ -3263,8 +3277,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LongCoastReAnchorsContinuously) {
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
   not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
-  ASSERT_TRUE(drifter->anchor().has_value());
-  auto const anchor_1 = *drifter->anchor();
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
+  auto const anchor_1 = *drifter->placement().anchor;
   Instant const t1 = drifter->trajectory().back().time;
   DegreesOfFreedom<Barycentric> const dof1 =
       drifter->trajectory().back().degrees_of_freedom;
@@ -3283,8 +3297,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, LongCoastReAnchorsContinuously) {
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
 
-  ASSERT_TRUE(drifter->anchor().has_value());
-  auto const anchor_2 = *drifter->anchor();
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
+  auto const anchor_2 = *drifter->placement().anchor;
   Instant const t2 = drifter->trajectory().back().time;
   DegreesOfFreedom<Barycentric> const dof2 =
       drifter->trajectory().back().degrees_of_freedom;
@@ -3346,7 +3360,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredBurnSurvivesDropAndReanimatio
     VesselSet collided_vessels;
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
-  ASSERT_TRUE(plugin->GetVessel(vessel_guid)->anchor().has_value());
+  ASSERT_TRUE(plugin->GetVessel(vessel_guid)->placement().anchor.has_value());
 
   Force const thrust = 1 * Newton;
   SpecificImpulse const specific_impulse = 1e4 * Metre / Second;
@@ -3411,7 +3425,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredBurnSurvivesDropAndReanimatio
   // through the anchor rather than plunging into the home star.
   vessel2->AwaitReanimation(t_start, /*quiet=*/true);
   ASSERT_LE(vessel2->trajectory().t_min(), t_sample);
-  ASSERT_TRUE(vessel2->anchor().has_value());
+  ASSERT_TRUE(vessel2->placement().anchor.has_value());
   DegreesOfFreedom<Barycentric> const reconstructed =
       vessel2->trajectory().EvaluateDegreesOfFreedom(t_sample);
   Length const position_divergence =
@@ -3525,7 +3539,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRenderShapeIsExact) {
       trajectory.end(),
       World::origin,
       plugin->PlanetariumRotation(),
-      {vessel.subsystem(), vessel.anchor()});
+      vessel.placement());
   ASSERT_GT(locate.size(), 3);
   Position<World> const sun_world_position =
       World::origin -
@@ -3536,7 +3550,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, InterstellarRenderShapeIsExact) {
       trajectory.end(),
       sun_world_position,
       plugin->PlanetariumRotation(),
-      {vessel.subsystem(), vessel.anchor()});
+      vessel.placement());
   ASSERT_GT(rendered.size(), 3);
 
   // The rendered shape reproduces the barycentric shape: adjacent-vertex
@@ -3691,7 +3705,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
           vertices.push_back(vertex);
         },
         /*max_points=*/10'000,
-        {vessel.subsystem(), vessel.anchor()},
+        vessel.placement(),
         &anchor);
     ASSERT_GT(vertices.size(), 3);
     // The anchor is the camera position, exactly; its conversion is recorded
@@ -3826,7 +3840,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, PlotMethod4StockVerticesUnchanged) {
         vertices.push_back(vertex);
       },
       /*max_points=*/10'000,
-      {vessel.subsystem(), vessel.anchor()},
+      vessel.placement(),
       &anchor);
   ASSERT_GT(vertices.size(), 3);
   ASSERT_EQ(reference.size(), vertices.size());
@@ -3958,8 +3972,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
     plugin->CatchUpLaggingVessels(collided_vessels);
   }
   auto const& vessel = *plugin->GetVessel(vessel_guid);
-  EXPECT_EQ(subsystem_a, vessel.subsystem());
-  EXPECT_FALSE(vessel.anchor().has_value());
+  EXPECT_EQ(subsystem_a, vessel.placement().subsystem);
+  EXPECT_FALSE(vessel.placement().anchor.has_value());
 
   // ——— Stage 1: launch burn ———
   SpecificImpulse const specific_impulse = 1e12 * Metre / Second;
@@ -4072,7 +4086,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   // v·δt ≈ 1.5e15 m — 1e-12 relative leaves ~10³ m of headroom while still
   // catching any metre-scale-per-kilometre representation glitch.
   int rebases = 0;
-  int previous_subsystem = vessel.subsystem();
+  int previous_subsystem = vessel.placement().subsystem;
   std::optional<Displacement<AliceSun>> previous_displacement;
   std::optional<Speed> cruise_speed;
   auto const step_checks = [&](Plugin const& p, Vessel const& v) {
@@ -4087,8 +4101,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
                   RelativeErrorFrom(*cruise_speed * δt, Lt(1e-12)));
     }
     previous_displacement = from_parent.displacement();
-    if (v.subsystem() != previous_subsystem) {
-      previous_subsystem = v.subsystem();
+    if (v.placement().subsystem != previous_subsystem) {
+      previous_subsystem = v.placement().subsystem;
       ++rebases;
     }
   };
@@ -4098,7 +4112,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   Length const mid_void = 1.8e16 * Metre;
   for (int step = 0;
        step < 20 &&
-       !(vessel.anchor().has_value() &&
+       !(vessel.placement().anchor.has_value() &&
          plugin->VesselFromParent(star_a, vessel_guid).displacement().Norm() >
              mid_void);
        ++step) {
@@ -4109,11 +4123,11 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
             void_threshold) {
       // Beyond the far-field threshold of both stars the coast is force-free:
       // the vessel must be anchored.
-      EXPECT_TRUE(vessel.anchor().has_value());
+      EXPECT_TRUE(vessel.placement().anchor.has_value());
     }
   }
-  ASSERT_TRUE(vessel.anchor().has_value());
-  EXPECT_EQ(subsystem_a, vessel.subsystem());
+  ASSERT_TRUE(vessel.placement().anchor.has_value());
+  EXPECT_EQ(subsystem_a, vessel.placement().subsystem);
   EXPECT_EQ(0, rebases);
 
   // ——— Stage 5 (creation): a flight plan on the anchored void vessel.  Its
@@ -4158,7 +4172,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   DegreesOfFreedom<Barycentric> const actual_sample =
       vessel.trajectory().EvaluateDegreesOfFreedom(t_sample);
 
-  auto const anchor_before_save = *vessel.anchor();
+  auto const anchor_before_save = *vessel.placement().anchor;
   auto const state_before_save = plugin->VesselFromParent(star_a, vessel_guid);
 
   serialization::Plugin message;
@@ -4169,9 +4183,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   // burn it adds.
   auto const plugin2 = Plugin::ReadFromMessage(message);
   auto const& vessel2 = *plugin2->GetVessel(vessel_guid);
-  EXPECT_EQ(subsystem_a, vessel2.subsystem());
-  ASSERT_TRUE(vessel2.anchor().has_value());
-  EXPECT_EQ(anchor_before_save, *vessel2.anchor());
+  EXPECT_EQ(subsystem_a, vessel2.placement().subsystem);
+  ASSERT_TRUE(vessel2.placement().anchor.has_value());
+  EXPECT_EQ(anchor_before_save, *vessel2.placement().anchor);
   EXPECT_TRUE(vessel2.has_flight_plan());
   EXPECT_THAT(
       (plugin2->VesselFromParent(star_a, vessel_guid).displacement() -
@@ -4198,16 +4212,17 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   // ——— Stage 6: void exit — the vessel rebases into star B's subsystem,
   // exactly once; the anchor survives the retag (the conversion is folded
   // into it), keeping the representation uniform across the boundary ———
-  for (int step = 0; step < 15 && vessel2.subsystem() != subsystem_b; ++step) {
+  for (int step = 0;
+       step < 15 && vessel2.placement().subsystem != subsystem_b; ++step) {
     coast_frame(*plugin2);
     step_checks(*plugin2, vessel2);
   }
-  ASSERT_EQ(subsystem_b, vessel2.subsystem());
+  ASSERT_EQ(subsystem_b, vessel2.placement().subsystem);
   EXPECT_EQ(1, rebases);
   // Uniform representation: entering star B's field KEEPS the anchor — an
   // unanchored representation at these subsystem distances would quantize
   // the parts at the domain ULP (the owner-visible part gaps at TRAPPIST-1).
-  EXPECT_TRUE(vessel2.anchor().has_value());
+  EXPECT_TRUE(vessel2.placement().anchor.has_value());
 
   // ——— Stage 5 (checks): the flight plan survived the reload AND the rebase,
   // still coasts, and renders consistently ———
@@ -4402,10 +4417,10 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
     plugin2->CatchUpLaggingVessels(collided_vessels);
   }
   not_null<Vessel*> const station = plugin2->GetVessel(station_guid);
-  EXPECT_EQ(subsystem_b, station->subsystem());
+  EXPECT_EQ(subsystem_b, station->placement().subsystem);
   // Uniform representation: the station's coordinates in star B's subsystem
   // exceed the re-anchor bound, so it anchors inside the star's field too.
-  EXPECT_TRUE(station->anchor().has_value());
+  EXPECT_TRUE(station->placement().anchor.has_value());
   Displacement<AliceSun> const separation_before_docking =
       plugin2->VesselFromParent(star_b, station_guid).displacement() -
       plugin2->VesselFromParent(star_b, vessel_guid).displacement();
@@ -4438,8 +4453,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
   ASSERT_NE(nullptr, pile_up_traveller);
   EXPECT_EQ(pile_up_traveller, pile_up_station);
   EXPECT_EQ(subsystem_b, pile_up_traveller->placement().subsystem);
-  EXPECT_EQ(subsystem_b, vessel2.subsystem());
-  EXPECT_EQ(subsystem_b, station->subsystem());
+  EXPECT_EQ(subsystem_b, vessel2.placement().subsystem);
+  EXPECT_EQ(subsystem_b, station->placement().subsystem);
   EXPECT_EQ(1, rebases);
   Displacement<AliceSun> const separation_after_docking =
       plugin2->VesselFromParent(star_b, station_guid).displacement() -
