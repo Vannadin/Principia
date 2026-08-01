@@ -130,34 +130,29 @@ class PileUp {
   // Runs the `deletion_callback` passed at construction, if not null.
   virtual ~PileUp();
 
-  // Returns the subsystem relative to whose local origin the Barycentric
-  // degrees of freedom of this pile-up are represented.
-  int subsystem() const;
+  // Returns the placement — subsystem and anchor — in whose representation
+  // the Barycentric degrees of freedom of this pile-up are expressed.
+  Ephemeris<Barycentric>::SubsystemPlacement const& placement() const;
 
-  // Returns the anchor further displacing that representation, if any.
-  std::optional<Ephemeris<Barycentric>::Anchor> const& anchor() const;
-
-  // Re-expresses this pile-up in the given representation, by translating its
+  // Re-expresses this pile-up in the given `placement`, by translating its
   // trajectory by `displacement_at_epoch + velocity_offset * (t - epoch)` in
   // position and by `velocity_offset` in velocity.  Must not be called while
   // the pile-up is being advanced.
   void Rebase(Displacement<Barycentric> const& displacement_at_epoch,
               Velocity<Barycentric> const& velocity_offset,
               Instant const& epoch,
-              int subsystem,
-              std::optional<Ephemeris<Barycentric>::Anchor> const& anchor);
+              Ephemeris<Barycentric>::SubsystemPlacement const& placement);
 
-  // A single affine re-expression of a placement at `epoch`: the trajectory is
-  // translated by `displacement + velocity_offset * (t - epoch)` in position
-  // and by `velocity_offset` in velocity, and it now lives in `subsystem`
-  // under `anchor`.  `RebaseIfNeeded` applies it to the pile-up and returns it
-  // so that the plugin can replay it onto every member vessel.
+  // A single affine re-expression at `epoch`: the trajectory is translated by
+  // `displacement + velocity_offset * (t - epoch)` in position and by
+  // `velocity_offset` in velocity, and it now lives in `placement`.
+  // `RebaseIfNeeded` applies it to the pile-up and returns it so that the
+  // plugin can replay it onto every member vessel.
   struct PlacementChange {
     Displacement<Barycentric> displacement;
     Velocity<Barycentric> velocity_offset;
     Instant epoch;
-    int subsystem;
-    std::optional<Ephemeris<Barycentric>::Anchor> anchor;
+    Ephemeris<Barycentric>::SubsystemPlacement placement;
   };
 
   // Maintains the two representation invariants of an interstellar system.
@@ -292,10 +287,10 @@ class PileUp {
 
   std::list<not_null<Part*>> parts_;
   not_null<Ephemeris<Barycentric>*> ephemeris_;
-  // The subsystem relative to whose local origin the Barycentric degrees of
-  // freedom of this pile-up are represented; deduced from the parts.
-  int subsystem_ = 0;
-  std::optional<Ephemeris<Barycentric>::Anchor> anchor_;
+  // The placement in whose representation the Barycentric degrees of freedom
+  // of this pile-up are expressed; deduced from the parts.
+  Ephemeris<Barycentric>::SubsystemPlacement placement_ =
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock();
   Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters_;
   Ephemeris<Barycentric>::FixedStepParameters fixed_step_parameters_;
 

@@ -182,6 +182,9 @@ class Ephemeris {
     }
     int subsystem;
     std::optional<Anchor> anchor;
+
+    friend bool operator==(SubsystemPlacement const& left,
+                           SubsystemPlacement const& right) = default;
   };
 
   class AccuracyParameters final {

@@ -97,35 +97,30 @@ PileUp::PileUp(
   for (not_null<Part*> const part : parts_) {
     mass_by_subsystem[part->placement().subsystem] += part->mass();
   }
-  subsystem_ = mass_by_subsystem.begin()->first;
+  int target_subsystem = mass_by_subsystem.begin()->first;
   Mass target_mass = mass_by_subsystem.begin()->second;
   for (auto const& [subsystem, mass] : mass_by_subsystem) {
     if (mass > target_mass) {
-      subsystem_ = subsystem;
+      target_subsystem = subsystem;
       target_mass = mass;
     }
   }
   // The anchor of the first part already in the target subsystem: always
   // present, and natively valid, so it needs no folding.
   for (not_null<Part*> const part : parts_) {
-    if (part->placement().subsystem == subsystem_) {
-      anchor_ = part->placement().anchor;
+    if (part->placement().subsystem == target_subsystem) {
+      placement_ = {target_subsystem, part->placement().anchor};
       break;
     }
   }
   MechanicalSystem<Barycentric, NonRotatingPileUp> mechanical_system;
   for (not_null<Part*> const part : parts_) {
-    Ephemeris<Barycentric>::SubsystemPlacement const& part_placement =
-        part->placement();
-    if (part_placement.subsystem != subsystem_ ||
-        part_placement.anchor != anchor_) {
+    if (part->placement() != placement_) {
       // A part from a vessel in another placement carries the donor's tags:
       // re-express its rigid motion in the pile-up's, consistently with the
       // retag below.
       auto const [displacement, velocity_offset] =
-          ephemeris_->placement_conversion(part_placement,
-                                           {subsystem_, anchor_},
-                                           t);
+          ephemeris_->placement_conversion(part->placement(), placement_, t);
       RigidMotion<Barycentric, Barycentric> const conversion_motion(
           RigidTransformation<Barycentric, Barycentric>(
               Barycentric::origin,
@@ -134,7 +129,7 @@ PileUp::PileUp(
           Barycentric::nonrotating,
           -velocity_offset);
       part->set_rigid_motion(conversion_motion * part->rigid_motion());
-      part->set_placement({subsystem_, anchor_});
+      part->set_placement(placement_);
     }
     mechanical_system.AddRigidBody(
         part->rigid_motion(), part->mass(), part->inertia_tensor());
@@ -495,8 +490,7 @@ PileUp::PileUp(
       trajectory_(std::move(trajectory)),
       angular_momentum_(angular_momentum),
       deletion_callback_(std::move(deletion_callback)) {
-  subsystem_ = parts_.front()->placement().subsystem;
-  anchor_ = parts_.front()->placement().anchor;
+  placement_ = parts_.front()->placement();
   if (history.has_value()) {
     history_ = history.value();
   } else {
@@ -507,23 +501,17 @@ PileUp::PileUp(
   }
 }
 
-int PileUp::subsystem() const {
-  return subsystem_;
+Ephemeris<Barycentric>::SubsystemPlacement const& PileUp::placement() const {
+  return placement_;
 }
 
-std::optional<Ephemeris<Barycentric>::Anchor> const& PileUp::anchor() const {
-  return anchor_;
-}
-
-void PileUp::Rebase(Displacement<Barycentric> const& displacement_at_epoch,
-                    Velocity<Barycentric> const& velocity_offset,
-                    Instant const& epoch,
-                    int const subsystem,
-                    std::optional<Ephemeris<Barycentric>::Anchor> const&
-                        anchor) {
+void PileUp::Rebase(
+    Displacement<Barycentric> const& displacement_at_epoch,
+    Velocity<Barycentric> const& velocity_offset,
+    Instant const& epoch,
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
   trajectory_.Translate(displacement_at_epoch, velocity_offset, epoch);
-  subsystem_ = subsystem;
-  anchor_ = anchor;
+  placement_ = placement;
   // The fixed instance, if any, holds integrator state in the previous
   // representation; it will be re-created as needed.
   fixed_instance_ = nullptr;
@@ -555,27 +543,32 @@ std::vector<PileUp::PlacementChange> PileUp::RebaseIfNeeded() {
   // geometry below must not depend on whether the pile-up is anchored.  The
   // collapse rounds at the ULP of the void distance, which is harmless in a
   // μ/d² comparison.
+  // A reference, not a copy: the re-anchor check below must observe the
+  // anchor left by any dominance retag above.
+  std::optional<Ephemeris<Barycentric>::Anchor> const& anchor =
+      placement_.anchor;
   Position<Barycentric> const true_q =
-      anchor_.has_value() ? q + anchor_->OffsetAt(t) : q;
+      anchor.has_value() ? q + anchor->OffsetAt(t) : q;
   // The dominance μ/d² is computed from the subsystem masses and (linearly
   // extrapolated) barycentres, not from the acceleration field: far-field
   // damping zeroes the field precisely in the region where the boundary lies.
   // The comparisons are cross-multiplied so that a vanishing distance needs no
   // special-casing.
+  int const subsystem = placement_.subsystem;
   auto const squared_distance_to_barycentre = [&](int const s) {
     Position<Barycentric> const q_in_s =
-        true_q + ephemeris_->subsystem_conversion(subsystem_, s, t);
+        true_q + ephemeris_->subsystem_conversion(subsystem, s, t);
     return (q_in_s - ephemeris_->subsystem_barycentre(s, t)).Norm²();
   };
   auto const current_distance² =
-      squared_distance_to_barycentre(subsystem_);
+      squared_distance_to_barycentre(subsystem);
   GravitationalParameter const current_μ =
-      ephemeris_->subsystem_gravitational_parameter(subsystem_);
-  int dominant_subsystem = subsystem_;
+      ephemeris_->subsystem_gravitational_parameter(subsystem);
+  int dominant_subsystem = subsystem;
   GravitationalParameter dominant_μ = current_μ;
   auto dominant_distance² = current_distance²;
   for (int s = 0; s < number_of_subsystems; ++s) {
-    if (s == subsystem_) {
+    if (s == subsystem) {
       continue;
     }
     auto const distance² = squared_distance_to_barycentre(s);
@@ -587,7 +580,7 @@ std::vector<PileUp::PlacementChange> PileUp::RebaseIfNeeded() {
       dominant_distance² = distance²;
     }
   }
-  if (dominant_subsystem != subsystem_ &&
+  if (dominant_subsystem != subsystem &&
       dominant_μ * current_distance² >
           rebase_dominance_margin * current_μ * dominant_distance²) {
     // A pure gravity-grouping retag: with an anchor the subsystem conversion
@@ -611,9 +604,9 @@ std::vector<PileUp::PlacementChange> PileUp::RebaseIfNeeded() {
   bool const coordinates_exceed_bound =
       (q_now - Barycentric::origin).Norm²() >
       re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_;
-  if (anchor_.has_value()) {
+  if (anchor.has_value()) {
     if (coordinates_exceed_bound ||
-        (anchor_->velocity * (t - anchor_->epoch)).Norm²() >
+        (anchor->velocity * (t - anchor->epoch)).Norm²() >
             re_anchor_bound_for_testing_ * re_anchor_bound_for_testing_) {
       changes.push_back(AdoptAnchorAtPresentState(t));
     }
@@ -628,12 +621,14 @@ PileUp::PlacementChange PileUp::RebaseToSubsystem(int const subsystem,
   // The origins move relative to each other, so the re-expression is affine
   // in time: each point of each trajectory is translated at its own time.
   Displacement<Barycentric> const displacement =
-      ephemeris_->subsystem_conversion(subsystem_, subsystem, t);
+      ephemeris_->subsystem_conversion(placement_.subsystem, subsystem, t);
   Velocity<Barycentric> const velocity_offset =
-      ephemeris_->subsystem_velocity_conversion(subsystem_, subsystem);
+      ephemeris_->subsystem_velocity_conversion(placement_.subsystem,
+                                                subsystem);
   LOG(INFO) << "Rebasing pile up at " << this << " from subsystem "
-            << subsystem_ << " to subsystem " << subsystem;
-  if (anchor_.has_value()) {
+            << placement_.subsystem << " to subsystem " << subsystem;
+  if (placement_.anchor.has_value()) {
+    Ephemeris<Barycentric>::Anchor const& anchor = *placement_.anchor;
     // Fold the subsystem conversion into the anchor instead of translating the
     // timeline: the conversion is affine in time and so is the anchor, so
     // re-expressing the anchor at its own epoch is exact algebra —
@@ -641,7 +636,7 @@ PileUp::PlacementChange PileUp::RebaseToSubsystem(int const subsystem,
     // anchored coordinates (the trajectory, the parts) stay bit-for-bit
     // untouched.
     Displacement<Barycentric> const conversion_at_epoch =
-        displacement - velocity_offset * (t - anchor_->epoch);
+        displacement - velocity_offset * (t - anchor.epoch);
     SectorDisplacement<Barycentric> const split =
         SectorDisplacement<Barycentric>::Split(conversion_at_epoch);
     // The cells add exactly; the local parts accumulate through `TwoSum` and
@@ -649,30 +644,31 @@ PileUp::PlacementChange PileUp::RebaseToSubsystem(int const subsystem,
     // re-anchor path so that the two ways of moving an anchor round
     // identically.
     DoublePrecision<Displacement<Barycentric>> const local =
-        TwoSum(anchor_->offset.local, split.local);
+        TwoSum(anchor.offset.local, split.local);
     Ephemeris<Barycentric>::Anchor new_anchor{
-        .offset = {.cell = anchor_->offset.cell + split.cell,
+        .offset = {.cell = anchor.offset.cell + split.cell,
                    .local = local.value},
-        .velocity = anchor_->velocity + velocity_offset,
-        .epoch = anchor_->epoch};
+        .velocity = anchor.velocity + velocity_offset,
+        .epoch = anchor.epoch};
     new_anchor.offset.Recenter();
     new_anchor.offset += local.error;
     // The trajectory does not move; folding into the anchor leaves the
     // represented coordinates intact.
-    Rebase(Displacement<Barycentric>{}, Velocity<Barycentric>{}, t, subsystem,
-           new_anchor);
+    Rebase(Displacement<Barycentric>{},
+           Velocity<Barycentric>{},
+           t,
+           {subsystem, new_anchor});
     // The parts' rigid motions are valid numbers in the preserved
     // representation; only their tags change.
     for (not_null<Part*> const part : parts_) {
-      part->set_placement({subsystem_, anchor_});
+      part->set_placement(placement_);
     }
     return {.displacement = Displacement<Barycentric>{},
             .velocity_offset = Velocity<Barycentric>{},
             .epoch = t,
-            .subsystem = subsystem_,
-            .anchor = anchor_};
+            .placement = placement_};
   }
-  Rebase(displacement, velocity_offset, t, subsystem, /*anchor=*/std::nullopt);
+  Rebase(displacement, velocity_offset, t, {subsystem, std::nullopt});
   // The parts' rigid motions are expressed in the old representation; keep them
   // consistent with their subsystem tag (they are regenerated from the rebased
   // pile-up trajectory at the next advance, but a docking merge before then
@@ -685,20 +681,20 @@ PileUp::PlacementChange PileUp::RebaseToSubsystem(int const subsystem,
       Barycentric::nonrotating,
       -velocity_offset);
   for (not_null<Part*> const part : parts_) {
-    part->set_placement({subsystem_, anchor_});
+    part->set_placement(placement_);
     part->set_rigid_motion(conversion_motion * part->rigid_motion());
   }
   return {.displacement = displacement,
           .velocity_offset = velocity_offset,
           .epoch = t,
-          .subsystem = subsystem_,
-          .anchor = anchor_};
+          .placement = placement_};
 }
 
 PileUp::PlacementChange PileUp::AdoptAnchorAtPresentState(Instant const& t) {
   // The anchor is seeded from the present state.  Value copies: the
   // translations rebuild the timeline.
-  std::optional<Ephemeris<Barycentric>::Anchor> const old_anchor = anchor_;
+  std::optional<Ephemeris<Barycentric>::Anchor> const old_anchor =
+      placement_.anchor;
   DegreesOfFreedom<Barycentric> const degrees_of_freedom =
       PresentState().degrees_of_freedom;
   Displacement<Barycentric> const displacement =
@@ -711,7 +707,7 @@ PileUp::PlacementChange PileUp::AdoptAnchorAtPresentState(Instant const& t) {
   // The exact translation at first adoption; `Split` is exact, so the new
   // representation collapses back to `displacement` bit for bit.
   Displacement<Barycentric> translation = -displacement;
-  if (anchor_.has_value()) {
+  if (old_anchor.has_value()) {
     // Re-anchoring: the new anchor is displaced from the subsystem origin by
     // the old anchor as well as by the anchored coordinates.  The cells carry
     // over exactly; the small terms — the old local part, the affine term, and
@@ -719,21 +715,22 @@ PileUp::PlacementChange PileUp::AdoptAnchorAtPresentState(Instant const& t) {
     // re-centred (exact) and the residual is folded back at the magnitude of
     // the re-centred local part.  The affine term is reset to the new epoch.
     Displacement<Barycentric> const affine =
-        anchor_->velocity * (t - anchor_->epoch);
+        old_anchor->velocity * (t - old_anchor->epoch);
     DoublePrecision<Displacement<Barycentric>> local =
-        TwoSum(anchor_->offset.local, affine);
+        TwoSum(old_anchor->offset.local, affine);
     local += displacement;
-    new_anchor.offset = {.cell = anchor_->offset.cell, .local = local.value};
+    new_anchor.offset = {.cell = old_anchor->offset.cell,
+                         .local = local.value};
     new_anchor.offset.Recenter();
     new_anchor.offset += local.error;
-    new_anchor.velocity += anchor_->velocity;
+    new_anchor.velocity += old_anchor->velocity;
     // The translation that keeps the represented positions consistent with the
     // new anchor: the cells difference exactly (`Recenter` may have moved whole
     // cells) and the small terms are summed last.
-    translation = (anchor_->offset - new_anchor.offset).Collapse(affine);
+    translation = (old_anchor->offset - new_anchor.offset).Collapse(affine);
   }
   LOG(INFO) << "Pile up at " << this << " adopts an anchor";
-  Rebase(translation, -velocity_offset, t, subsystem_, new_anchor);
+  Rebase(translation, -velocity_offset, t, {placement_.subsystem, new_anchor});
   // Retag the parts by the same offset: the conversion translates their rigid
   // motions by `translation` and boosts them by `velocity_offset`, keeping
   // them consistent with the new anchor.
@@ -745,14 +742,13 @@ PileUp::PlacementChange PileUp::AdoptAnchorAtPresentState(Instant const& t) {
       Barycentric::nonrotating,
       velocity_offset);
   for (not_null<Part*> const part : parts_) {
-    part->set_placement({subsystem_, anchor_});
+    part->set_placement(placement_);
     part->set_rigid_motion(conversion_motion * part->rigid_motion());
   }
   return {.displacement = translation,
           .velocity_offset = -velocity_offset,
           .epoch = t,
-          .subsystem = subsystem_,
-          .anchor = anchor_};
+          .placement = placement_};
 }
 
 void PileUp::MakeEulerSolver(
@@ -927,16 +923,15 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
     // Remove the fork.
     trajectory_.DeleteSegments(psychohistory_);
     if (fixed_instance_ == nullptr) {
-      // A single placement carrying `subsystem_` and `anchor_`.  When the pile
-      // up is unanchored (`anchor_` empty) `StoppableNewInstance` materializes
-      // no anchor vector, keeping the anchorless fast path (an anchor vector
-      // holding nullopt would leave `has_anchors` set and cost a per-pair check
-      // on every step).
+      // When the pile up is unanchored `StoppableNewInstance` materializes no
+      // anchor vector, keeping the anchorless fast path (an anchor vector
+      // holding nullopt would leave `has_anchors` set and cost a per-pair
+      // check on every step).
       fixed_instance_ = ephemeris_->NewInstance(
           {&trajectory_},
           Ephemeris<Barycentric>::NoIntrinsicAccelerations,
           fixed_step_parameters_,
-          {{subsystem_, anchor_}});
+          {placement_});
     }
     CHECK_LT(history_->back().time, t);
     status = ephemeris_->FlowWithFixedStep(t, *fixed_instance_);
@@ -950,7 +945,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           t,
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          {subsystem_, anchor_}));
+          placement_));
     }
   } else {
     // Destroy the fixed instance, it wouldn't be correct to use it the next
@@ -982,7 +977,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           t,
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          {subsystem_, anchor_});
+          placement_);
     } else {
       OnRailsBurn const& burn = *on_rails_burn_;
       Variation<Mass> const mass_flow = burn.thrust / burn.specific_impulse;
@@ -1016,7 +1011,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
           std::min(final_time, t),
           adaptive_step_parameters_,
           Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-          {subsystem_, anchor_});
+          placement_);
       if (status.ok() && trajectory_.back().time < t) {
         status.Update(ephemeris_->FlowWithAdaptiveStep(
             &trajectory_,
@@ -1024,7 +1019,7 @@ absl::Status PileUp::AdvanceTime(Instant const& t) {
             t,
             adaptive_step_parameters_,
             Ephemeris<Barycentric>::unlimited_max_ephemeris_steps,
-            {subsystem_, anchor_}));
+            placement_));
       }
     }
     psychohistory_ = trajectory_.NewSegment();

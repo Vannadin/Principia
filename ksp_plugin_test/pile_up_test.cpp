@@ -816,18 +816,18 @@ TEST_F(PileUpTest, MassBasedRebaseHysteresis) {
   // times heavier, still dominates: no rebase.
   pile_up.AppendToTrajectory(t0 + 1 * Second, at_x(2.5e16 * Metre));
   EXPECT_TRUE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(0, pile_up.subsystem());
+  EXPECT_EQ(0, pile_up.placement().subsystem);
 
   // B dominates, but by less than the hysteresis margin: still no rebase.
   pile_up.AppendToTrajectory(t0 + 2 * Second, at_x(3.45e16 * Metre));
   EXPECT_TRUE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(0, pile_up.subsystem());
+  EXPECT_EQ(0, pile_up.placement().subsystem);
 
   // B dominates beyond the margin: the pile-up is rebased, and its trajectory
   // is now represented relative to B's local origin.
   pile_up.AppendToTrajectory(t0 + 3 * Second, at_x(3.6e16 * Metre));
   EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(1, pile_up.subsystem());
+  EXPECT_EQ(1, pile_up.placement().subsystem);
   EXPECT_EQ(at_x(3.6e16 * Metre).position() - b_from_a,
             pile_up.trajectory().back().degrees_of_freedom.position());
 
@@ -837,13 +837,13 @@ TEST_F(PileUpTest, MassBasedRebaseHysteresis) {
   pile_up.AppendToTrajectory(t0 + 4 * Second,
                              at_x(3.0e16 * Metre - separation));
   EXPECT_TRUE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(1, pile_up.subsystem());
+  EXPECT_EQ(1, pile_up.placement().subsystem);
 
   // Deep into A's system: the margin is exceeded and the pile-up returns.
   pile_up.AppendToTrajectory(t0 + 5 * Second,
                              at_x(1.0e16 * Metre - separation));
   EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(0, pile_up.subsystem());
+  EXPECT_EQ(0, pile_up.placement().subsystem);
 }
 
 // A rebase into a subsystem whose local origin moves relative to the pile-up's:
@@ -922,7 +922,7 @@ TEST_F(PileUpTest, RebaseTranslatesEachPointAtItsOwnTime) {
       pile_up.trajectory().front().degrees_of_freedom.position();
   pile_up.AppendToTrajectory(t1, at_x(3.8e16 * Metre));
   EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(1, pile_up.subsystem());
+  EXPECT_EQ(1, pile_up.placement().subsystem);
 
   // The points are translated at their own times, not at the time of the
   // rebase, and the velocities are translated by the origins' relative
@@ -1013,9 +1013,9 @@ TEST_F(PileUpTest, AnchoredRebaseFoldsConversionIntoAnchor) {
   // no retag — and the true position survives the collapse bit for bit.
   pile_up.AppendToTrajectory(t0, at_x(3.45e16 * Metre));
   EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(0, pile_up.subsystem());
-  ASSERT_TRUE(pile_up.anchor().has_value());
-  auto const anchor0 = *pile_up.anchor();
+  EXPECT_EQ(0, pile_up.placement().subsystem);
+  ASSERT_TRUE(pile_up.placement().anchor.has_value());
+  auto const anchor0 = *pile_up.placement().anchor;
   EXPECT_EQ(at_x(3.45e16 * Metre).position(),
             pile_up.trajectory().back().degrees_of_freedom.position() +
                 anchor0.OffsetAt(t0));
@@ -1035,9 +1035,9 @@ TEST_F(PileUpTest, AnchoredRebaseFoldsConversionIntoAnchor) {
       pile_up.trajectory().front().degrees_of_freedom;
   auto const back_before = pile_up.trajectory().back().degrees_of_freedom;
   EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
-  EXPECT_EQ(1, pile_up.subsystem());
-  ASSERT_TRUE(pile_up.anchor().has_value());
-  auto const anchor1 = *pile_up.anchor();
+  EXPECT_EQ(1, pile_up.placement().subsystem);
+  ASSERT_TRUE(pile_up.placement().anchor.has_value());
+  auto const anchor1 = *pile_up.placement().anchor;
 
   // The money assertion: the represented points are bit-for-bit intact.
   EXPECT_EQ(front_before.position(),
@@ -1074,11 +1074,11 @@ TEST_F(PileUpTest, AnchoredRebaseFoldsConversionIntoAnchor) {
       grown.position() + anchor1.OffsetAt(t2);
   pile_up.AppendToTrajectory(t2, grown);
   EXPECT_FALSE(pile_up.RebaseIfNeeded().empty());
-  ASSERT_TRUE(pile_up.anchor().has_value());
-  EXPECT_NE(anchor1, *pile_up.anchor());
+  ASSERT_TRUE(pile_up.placement().anchor.has_value());
+  EXPECT_NE(anchor1, *pile_up.placement().anchor);
   Position<Barycentric> const true_after =
       pile_up.trajectory().back().degrees_of_freedom.position() +
-      pile_up.anchor()->OffsetAt(t2);
+      pile_up.placement().anchor->OffsetAt(t2);
   EXPECT_THAT((true_after - true_before).Norm(), Lt(1 * Milli(Metre)));
 }
 
@@ -1138,9 +1138,9 @@ TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
                          /*deletion_callback=*/nullptr);
 
   // The heavier subsystem wins the vote and its part's anchor is adopted.
-  EXPECT_EQ(1, pile_up.subsystem());
-  ASSERT_TRUE(pile_up.anchor().has_value());
-  EXPECT_EQ(anchor, *pile_up.anchor());
+  EXPECT_EQ(1, pile_up.placement().subsystem);
+  ASSERT_TRUE(pile_up.placement().anchor.has_value());
+  EXPECT_EQ(anchor, *pile_up.placement().anchor);
 
   // p1_ is retagged and its rigid motion converted; p2_ is left untouched.
   EXPECT_EQ(1, p1_.placement().subsystem);
@@ -1201,7 +1201,7 @@ TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
                              DefaultHistoryParameters(),
                              &tie_ephemeris,
                              /*deletion_callback=*/nullptr);
-  EXPECT_EQ(0, tie_pile_up.subsystem());
+  EXPECT_EQ(0, tie_pile_up.placement().subsystem);
 
   // The all-agree path is a byte-identical early-out: no conversion is
   // requested and the parts' rigid motions are untouched.
@@ -1224,8 +1224,8 @@ TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
                                DefaultHistoryParameters(),
                                &agree_ephemeris,
                                /*deletion_callback=*/nullptr);
-  EXPECT_EQ(0, agree_pile_up.subsystem());
-  EXPECT_FALSE(agree_pile_up.anchor().has_value());
+  EXPECT_EQ(0, agree_pile_up.placement().subsystem);
+  EXPECT_FALSE(agree_pile_up.placement().anchor.has_value());
   EXPECT_EQ(pc_before.position(),
             pc.rigid_motion()(
                 {RigidPart::origin, RigidPart::unmoving}).position());

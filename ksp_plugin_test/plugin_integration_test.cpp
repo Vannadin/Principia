@@ -1882,7 +1882,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, CrossSubsystemDockingReconciles) {
       plugin->GetVessel(guid_b)->part(102)->containing_pile_up();
   ASSERT_NE(nullptr, pile_up_a);
   EXPECT_EQ(pile_up_a, pile_up_b);
-  EXPECT_EQ(station_subsystem, pile_up_a->subsystem());
+  EXPECT_EQ(station_subsystem, pile_up_a->placement().subsystem);
 
   // The rebase changed only the representation of the visitor, not its
   // physical state: it is still where it was relative to star B (both are at
@@ -2330,14 +2330,14 @@ TEST_F(PluginIntegrationTestWithoutPlugin, SharedPileUpReAnchorsOnce) {
   ASSERT_NE(nullptr, pile_up);
   EXPECT_EQ(pile_up,
             plugin->GetVessel(guid_b)->part(102)->containing_pile_up());
-  ASSERT_TRUE(pile_up->anchor().has_value());
+  ASSERT_TRUE(pile_up->placement().anchor.has_value());
   ASSERT_TRUE(plugin->GetVessel(guid_a)->anchor().has_value());
   ASSERT_TRUE(plugin->GetVessel(guid_b)->anchor().has_value());
-  EXPECT_EQ(*pile_up->anchor(), *plugin->GetVessel(guid_a)->anchor());
-  EXPECT_EQ(*pile_up->anchor(), *plugin->GetVessel(guid_b)->anchor());
-  EXPECT_EQ(pile_up->anchor()->epoch,
+  EXPECT_EQ(*pile_up->placement().anchor, *plugin->GetVessel(guid_a)->anchor());
+  EXPECT_EQ(*pile_up->placement().anchor, *plugin->GetVessel(guid_b)->anchor());
+  EXPECT_EQ(pile_up->placement().anchor->epoch,
             plugin->GetVessel(guid_a)->anchor()->epoch);
-  EXPECT_EQ(pile_up->anchor()->epoch,
+  EXPECT_EQ(pile_up->placement().anchor->epoch,
             plugin->GetVessel(guid_b)->anchor()->epoch);
 
   Displacement<AliceSun> const visitor_from_star_a =
@@ -4437,7 +4437,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
           ->containing_pile_up();
   ASSERT_NE(nullptr, pile_up_traveller);
   EXPECT_EQ(pile_up_traveller, pile_up_station);
-  EXPECT_EQ(subsystem_b, pile_up_traveller->subsystem());
+  EXPECT_EQ(subsystem_b, pile_up_traveller->placement().subsystem);
   EXPECT_EQ(subsystem_b, vessel2.subsystem());
   EXPECT_EQ(subsystem_b, station->subsystem());
   EXPECT_EQ(1, rebases);

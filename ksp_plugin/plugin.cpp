@@ -763,24 +763,25 @@ void Plugin::FreeVesselsAndPartsAndCollectPileUps(Time const& Δt) {
   // Collect loop above computes it.
   for (auto* const pile_up : pile_ups_) {
     VesselSet aligned;
+    auto const& pile_up_placement = pile_up->placement();
     for (not_null<Part*> const part : pile_up->parts()) {
       not_null<Vessel*> const vessel =
           FindOrDie(part_id_to_vessel_, part->part_id());
       if (aligned.insert(vessel).second &&
-          (vessel->subsystem() != pile_up->subsystem() ||
-           vessel->anchor() != pile_up->anchor())) {
+          (vessel->subsystem() != pile_up_placement.subsystem ||
+           vessel->anchor() != pile_up_placement.anchor)) {
         Instant const vessel_time =
             is_loaded(vessel) ? current_time_ - Δt : current_time_;
         auto const [displacement, velocity_offset] =
             ephemeris_->placement_conversion(
                 {vessel->subsystem(), vessel->anchor()},
-                {pile_up->subsystem(), pile_up->anchor()},
+                pile_up_placement,
                 vessel_time);
         vessel->ApplyPlacementChange(displacement,
                                      velocity_offset,
                                      vessel_time,
-                                     pile_up->subsystem(),
-                                     pile_up->anchor());
+                                     pile_up_placement.subsystem,
+                                     pile_up_placement.anchor);
       }
     }
   }
@@ -1056,8 +1057,8 @@ void Plugin::ApplyPlacementChangesToVessels(
       vessel->ApplyPlacementChange(change.displacement,
                                    change.velocity_offset,
                                    change.epoch,
-                                   change.subsystem,
-                                   change.anchor);
+                                   change.placement.subsystem,
+                                   change.placement.anchor);
     }
   }
 }
