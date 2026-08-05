@@ -787,6 +787,12 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     return double.IsNaN(xyz.x + xyz.y + xyz.z);
   }
 
+  private static bool IsFinite(Vector3d v) {
+    return !double.IsNaN(v.x + v.y + v.z) &&
+           !double.IsInfinity(v.x) && !double.IsInfinity(v.y) &&
+           !double.IsInfinity(v.z);
+  }
+
   // It seems that parts sometimes have NaN position, velocity or angular
   // velocity, presumably because they are being destroyed.  Just skip these
   // unfaithful parts as if they had no rigid body.
@@ -1433,6 +1439,17 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         }
 
         if (vessel.packed && !plugin_.HasVessel(vessel_guid) &&
+            (!IsFinite(vessel.orbit.pos) || !IsFinite(vessel.orbit.vel))) {
+          // Mod-spawned pseudo-vessels (Blueshift space anomalies at game
+          // creation) can carry an uninitialized orbit; inserting one feeds
+          // NaN into the pile-up and dies on a CHECK.  Wait until the orbit
+          // becomes finite.  The guard deliberately never touches a vessel
+          // the plugin already has: a managed vessel with a transiently
+          // non-finite orbit must not lose its history over one bad frame.
+          continue;
+        }
+
+        if (vessel.packed && !plugin_.HasVessel(vessel_guid) &&
             VesselHasPartsOwnedElsewhere(vessel)) {
           // A vessel created by a split (undocking, decoupling) that packed
           // on the very frame of its creation: its parts are still registered
@@ -1566,17 +1583,21 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
           }
           // For reasons that are even more unclear, the comet spawning code
           // sometimes generates a zero flightID; when that happens, we
-          // regenerate the flightID (#4574).
-          if (vessel.vesselType == VesselType.SpaceObject &&
-              parts.Count == 1 &&
-              parts[0].partName == "PotatoComet" &&
-              parts[0].flightID == 0) {
-            var part = parts[0];
-            uint old_id = part.flightID;
-            part.flightID = ShipConstruction.GetUniqueFlightID(
-                HighLogic.CurrentGame.flightState);
-            Log.Info("Regenerating the part ID of " + vessel.name + ": " +
-                     part.flightID + " (was " + old_id + ")");
+          // regenerate the flightID (#4574).  Mod-spawned pseudo-vessels
+          // (Blueshift space anomalies) exhibit the same zero ID, and two
+          // such parts would collide in the plugin, so regenerate for any
+          // part born with a zero ID.  Unloaded vessels only: on a loaded
+          // vessel the live parts keep the old ID and the write would not
+          // stick.
+          if (!vessel.loaded) {
+            foreach (ProtoPartSnapshot part in parts) {
+              if (part.flightID == 0) {
+                part.flightID = ShipConstruction.GetUniqueFlightID(
+                    HighLogic.CurrentGame.flightState);
+                Log.Info("Regenerating the part ID of " + vessel.name + ": " +
+                         part.flightID + " (was 0)");
+              }
+            }
           }
           foreach (ProtoPartSnapshot part in parts) {
             plugin_.InsertUnloadedPart(part.flightID,
