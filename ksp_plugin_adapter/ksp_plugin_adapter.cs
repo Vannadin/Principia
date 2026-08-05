@@ -2285,17 +2285,18 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
   private void SetBodyFrames() {
     if (PluginRunning()) {
-      if (FlightGlobals.currentMainBody != null) {
-        FlightGlobals.currentMainBody.rotationPeriod =
-            plugin_.CelestialRotationPeriod(
-                FlightGlobals.currentMainBody.flightGlobalsIndex);
-        FlightGlobals.currentMainBody.initialRotation =
-            plugin_.CelestialInitialRotationInDegrees(
-                FlightGlobals.currentMainBody.flightGlobalsIndex);
-      }
       ApplyToBodyTree(body => UpdateBody(body, Planetarium.GetUniversalTime()));
 
       foreach (var body in FlightGlobals.Bodies) {
+        // Reconcile stock's rotation model for every body, not only the
+        // current main body: stock keeps deriving `bodyTransform.rotation`
+        // (which carries the terrain colliders) from these fields for any
+        // body not holding the rotating frame, while we overwrite `BodyFrame`
+        // below — a stale model poisons landed restores in a later scene.
+        body.rotationPeriod =
+            plugin_.CelestialRotationPeriod(body.flightGlobalsIndex);
+        body.initialRotation =
+            plugin_.CelestialInitialRotationInDegrees(body.flightGlobalsIndex);
         // TODO(egg): I have no idea why this `swizzle` thing makes things work.
         // This probably really means something in terms of frames that should
         // be done in the C++ instead---once I figure out what it is.
