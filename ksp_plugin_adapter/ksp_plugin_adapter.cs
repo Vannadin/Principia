@@ -103,6 +103,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   private int main_body_change_countdown_ = 1;
   private bool celestial_terrains_were_validated_ = false;
 
+  // Whether the scene-entry celestial anchor residual has been checked; see
+  // `OnVesselLoaded`.
+  private bool scene_anchor_corrected_ = false;
+
   private PlanetariumCameraAdjuster planetarium_camera_adjuster_;
 
   private RenderingActions map_renderer_;
@@ -964,6 +968,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     GameEvents.onPartDeCoupleNewVesselComplete.Add(OnVesselSplit);
     GameEvents.onVesselsUndocking.Add(OnVesselSplit);
     GameEvents.onVesselGoOffRails.Add(OnVesselGoOffRails);
+    GameEvents.onVesselLoaded.Add(OnVesselLoaded);
 
     // Timing0, -8008 on the script execution order page.
     TimingManager.FixedUpdateAdd(TimingManager.TimingStage.ObscenelyEarly,
@@ -1375,6 +1380,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     GameEvents.onPartDeCoupleNewVesselComplete.Remove(OnVesselSplit);
     GameEvents.onVesselsUndocking.Remove(OnVesselSplit);
     GameEvents.onVesselGoOffRails.Remove(OnVesselGoOffRails);
+    GameEvents.onVesselLoaded.Remove(OnVesselLoaded);
     TimingManager.FixedUpdateRemove(TimingManager.TimingStage.ObscenelyEarly,
                                     ObscenelyEarly);
     TimingManager.FixedUpdateRemove(TimingManager.TimingStage.Precalc, Precalc);
@@ -2302,6 +2308,48 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       return;
     }
     RepositionVesselInScene(vessel, origin, active_root);
+  }
+
+  // Stock re-centres a freshly constructed flight scene on the float32
+  // `Transform.position` of its vessel (`FlightDriver.Start` via
+  // `FloatingOrigin.SetOffset`), leaving the float32 rounding of the previous
+  // scene's world magnitude in the bodies' double positions; the parts are
+  // then laid out — and one-shot `OnStart` state baked — at gigametre
+  // coordinates.  This fires inside `Vessel.Load` for the scene's first
+  // vessel, before any `Part.Start`, and undoes the residual in double.
+  private void OnVesselLoaded(Vessel vessel) {
+    if (scene_anchor_corrected_ ||
+        !PluginRunning() ||
+        !HighLogic.LoadedSceneIsFlight ||
+        FlightDriver.flightStarted ||
+        vessel != FlightGlobals.ActiveVessel) {
+      return;
+    }
+    scene_anchor_corrected_ = true;
+    // Mirror the placement stock performed: `FlightDriver` seats a landed
+    // vessel at the surface position of its proto altitude; an orbital
+    // vessel's transform sits at the orbit position minus the rotated CoM.
+    Vector3d authoritative =
+        vessel.LandedOrSplashed
+            ? vessel.mainBody.GetWorldSurfacePosition(
+                  vessel.latitude,
+                  vessel.longitude,
+                  vessel.protoVessel.altitude)
+            : vessel.orbit.getPositionAtUT(Planetarium.GetUniversalTime()) -
+                  (UnityEngine.QuaternionD)vessel.transform.rotation *
+                      (Vector3d)vessel.localCoM;
+    Vector3d residual = authoritative - (Vector3d)vessel.transform.position;
+    double magnitude = residual.magnitude;
+    if (double.IsNaN(magnitude) || double.IsInfinity(magnitude) ||
+        magnitude < 1) {
+      return;
+    }
+    Log.Info("Scene anchor residual " + magnitude.ToString("E3") +
+             " m at load of " + vessel.vesselName +
+             "; correcting the celestial frame");
+    foreach (CelestialBody celestial in FlightGlobals.Bodies) {
+      celestial.position -= residual;
+    }
   }
 
   private void SetBodyFrames() {
