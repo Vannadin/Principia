@@ -996,6 +996,13 @@ ClassicalJacobi(Matrix const& A,  std::int64_t max_iterations, double const ε) 
     if (max_Apq <= ε * A_frobenius_norm) {
       break;
     }
+    if (max_p < 0) {
+      // NaN off-diagonal elements defeat every pivot comparison; we give up
+      // instead of rotating with out-of-bounds pivot indices.  The ε test
+      // above already covers matrices with no off-diagonal element.
+      LOG(ERROR) << "Diagonalization without a valid pivot: " << A;
+      break;
+    }
 
     auto const J =
         SymmetricSchurDecomposition2By2<Scalar>(diagonalized_A, max_p, max_q);

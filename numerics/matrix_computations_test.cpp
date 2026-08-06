@@ -1,5 +1,6 @@
 #include "numerics/matrix_computations.hpp"
 
+#include <limits>
 #include <tuple>
 
 #include "gmock/gmock.h"
@@ -292,6 +293,26 @@ TYPED_TEST(MatrixComputationsTest, ClassicalJacobi) {
                                    -0.452474204605165882087767104452,
                                     0.474732983530015631333696554458}),
                            4));
+}
+
+TYPED_TEST(MatrixComputationsTest, ClassicalJacobiWithoutPivot) {
+  using Vector = typename std::tuple_element_t<0, TypeParam>;
+  using Matrix = typename std::tuple_element_t<3, TypeParam>;
+  double const nan = std::numeric_limits<double>::quiet_NaN();
+
+  Matrix const m4({  1, nan, nan, nan,
+                   nan,   4, nan, nan,
+                   nan, nan,   3, nan,
+                   nan, nan, nan,   2});
+
+  auto const actual = ClassicalJacobi(m4, /*max_iterations=*/20);
+  EXPECT_THAT(actual.eigenvalues, AlmostEquals(Vector({1, 4, 3, 2}), 0));
+  EXPECT_THAT(actual.rotation,
+              AlmostEquals(Matrix({1, 0, 0, 0,
+                                   0, 1, 0, 0,
+                                   0, 0, 1, 0,
+                                   0, 0, 0, 1}),
+                           0));
 }
 
 TYPED_TEST(MatrixComputationsTest, RayleighQuotient) {
