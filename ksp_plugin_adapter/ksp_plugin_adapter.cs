@@ -2310,13 +2310,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     RepositionVesselInScene(vessel, origin, active_root);
   }
 
-  // Stock re-centres a freshly constructed flight scene on the float32
-  // `Transform.position` of its vessel (`FlightDriver.Start` via
-  // `FloatingOrigin.SetOffset`), leaving the float32 rounding of the previous
-  // scene's world magnitude in the bodies' double positions; the parts are
-  // then laid out — and one-shot `OnStart` state baked — at gigametre
-  // coordinates.  This fires inside `Vessel.Load` for the scene's first
-  // vessel, before any `Part.Start`, and undoes the residual in double.
+  // A flight scene built after a far-away one instantiates its vessel at the
+  // magnitude the previous scene left behind, where float32 is coarser than
+  // the craft; the one-shot `OnStart` bakes and the terrain tessellation then
+  // consume collapsed geometry, and stock only recentres once
+  // `FlightGlobals.ready` comes back, well after both.  We recentre here,
+  // inside `Vessel.Load` while the vessel is still packed, so that its parts
+  // come along, and before any `Part.Start`.
   private void OnVesselLoaded(Vessel vessel) {
     if (scene_anchor_corrected_ ||
         !PluginRunning() ||
@@ -2326,30 +2326,17 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       return;
     }
     scene_anchor_corrected_ = true;
-    // Mirror the placement stock performed: `FlightDriver` seats a landed
-    // vessel at the surface position of its proto altitude; an orbital
-    // vessel's transform sits at the orbit position minus the rotated CoM.
-    Vector3d authoritative =
-        vessel.LandedOrSplashed
-            ? vessel.mainBody.GetWorldSurfacePosition(
-                  vessel.latitude,
-                  vessel.longitude,
-                  vessel.protoVessel.altitude)
-            : vessel.orbit.getPositionAtUT(Planetarium.GetUniversalTime()) -
-                  (UnityEngine.QuaternionD)vessel.transform.rotation *
-                      (Vector3d)vessel.localCoM;
-    Vector3d residual = authoritative - (Vector3d)vessel.transform.position;
-    double magnitude = residual.magnitude;
+    Vector3d origin = (Vector3d)vessel.transform.position;
+    double magnitude = origin.magnitude;
     if (double.IsNaN(magnitude) || double.IsInfinity(magnitude) ||
-        magnitude < 1) {
+        magnitude < 1000) {
       return;
     }
-    Log.Info("Scene anchor residual " + magnitude.ToString("E3") +
-             " m at load of " + vessel.vesselName +
-             "; correcting the celestial frame");
-    foreach (CelestialBody celestial in FlightGlobals.Bodies) {
-      celestial.position -= residual;
-    }
+    Log.Info("Scene entered " + magnitude.ToString("E3") +
+             " m from the origin at load of " + vessel.vesselName +
+             "; recentring the world");
+    FloatingOrigin.SetOffset(origin);
+    UnityEngine.Physics.SyncTransforms();
   }
 
   private void SetBodyFrames() {
