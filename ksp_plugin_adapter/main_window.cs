@@ -324,10 +324,12 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
           show   : ref show_logging_settings_,
           render : RenderLoggingSettings);
       if (adapter_.PluginRunning()) {
+        // The regime label of the coordinate-origin section below depends on
+        // the cached `nav_in_void_`, so refresh it first.
+        bool in_void = UpdateVoidNavigationState();
         RenderToggleableSection(name   : "Coordinate origin",
                                 show   : ref show_coordinate_origin_,
                                 render : RenderCoordinateOrigin);
-        bool in_void = UpdateVoidNavigationState();
         if (in_void) {
           RenderToggleableSection(
               name   : L10N.CacheFormat("#Principia_MainWindow_VoidNavigation"),
@@ -347,11 +349,7 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
   // Queries the void-navigation state of the active vessel; returns true and
   // caches the readouts when it is coasting in the interstellar void.
   private bool UpdateVoidNavigationState() {
-    // The active vessel lingers when leaving the flight scene, e.g., for the
-    // KSC; navigation only applies in flight.
-    if (!HighLogic.LoadedSceneIsFlight) {
-      return false;
-    }
+    nav_in_void_ = false;
     // A single-subsystem (stock) system has no interstellar void; skip the
     // interface call on that common path.
     RebuildSubsystemNamesIfNeeded();
@@ -369,13 +367,16 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
         vessel_guid,
         nav_target_celestial_?.flightGlobalsIndex ?? -1,
         nav_reference_celestial_?.flightGlobalsIndex ?? -1,
-        out bool in_void,
+        out nav_in_void_,
         out nav_nearest_star_index_,
         out nav_nearest_star_distance_,
         out nav_position_wrt_target_,
         out nav_velocity_wrt_target_,
         out nav_velocity_wrt_reference_);
-    return in_void;
+    // The active vessel lingers when leaving the flight scene, e.g., for the
+    // KSC; the navigation section only applies in flight, but `nav_in_void_`
+    // stays valid for the regime label in any scene.
+    return nav_in_void_ && HighLogic.LoadedSceneIsFlight;
   }
 
   // There are no conics between the stars, so the void panel shows distances,
@@ -432,9 +433,11 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
   }
 
   // Displays the placement under which the active vessel is represented: the
-  // subsystem (named by its lowest-index celestial, in practice its star) or,
-  // in the void, the anchor's sector-lattice cell; and the recent placement
-  // transitions observed while this section was open.
+  // subsystem (named by its primary star), the anchor's sector-lattice cell
+  // if it has one, and the recent placement transitions observed while this
+  // section was open.  Anchors are adopted on coordinate magnitude alone,
+  // star domain and void alike, so whether the vessel actually coasts in the
+  // force-free void is reported from `nav_in_void_`, not from the anchor.
   private void RenderCoordinateOrigin() {
     Vessel active_vessel = FlightGlobals.ActiveVessel;
     string vessel_guid = active_vessel?.id.ToString();
@@ -450,8 +453,11 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
     string subsystem_name = SubsystemName(subsystem);
     UnityEngine.GUILayout.Label(
         has_anchor
-            ? $"Regime: void, anchored (subsystem #{subsystem}: " +
-              $"{subsystem_name} kept for the handoff)"
+            ? nav_in_void_
+                  ? $"Regime: void, anchored (subsystem #{subsystem}: " +
+                    $"{subsystem_name} kept for the handoff)"
+                  : $"Regime: subsystem #{subsystem}: {subsystem_name}, " +
+                    "anchored"
             : $"Regime: subsystem #{subsystem}: {subsystem_name}");
     if (has_anchor) {
       UnityEngine.GUILayout.Label(
@@ -487,9 +493,9 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
     }
   }
 
-  // Names a subsystem by its lowest-index celestial: subsystem 0 is the home
-  // system (named by the stock sun), and each added star heads its own
-  // subsystem.  The map is rebuilt when the plugin is.
+  // Names a subsystem by its primary — its heaviest body, so a token-mass
+  // barycentre node cannot lend its name to a star's subsystem.  The map is
+  // rebuilt when the plugin is.
   private string SubsystemName(int subsystem) {
     RebuildSubsystemNamesIfNeeded();
     return subsystem_names_.TryGetValue(subsystem, out string name)
@@ -504,7 +510,11 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
         int body_subsystem =
             plugin.CelestialGetSubsystem(body.flightGlobalsIndex);
         if (!subsystem_names_.ContainsKey(body_subsystem)) {
-          subsystem_names_[body_subsystem] = body.name;
+          int primary = plugin.SubsystemGetPrimary(body_subsystem);
+          subsystem_names_[body_subsystem] =
+              primary >= 0 && primary < FlightGlobals.Bodies.Count
+                  ? FlightGlobals.Bodies[primary].name
+                  : body.name;
         }
       }
       subsystem_names_plugin_ = plugin;
@@ -827,6 +837,7 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
   private bool void_navigation_section_visible_ = false;
   private CelestialBody nav_target_celestial_;
   private CelestialBody nav_reference_celestial_;
+  private bool nav_in_void_;
   private int nav_nearest_star_index_;
   private double nav_nearest_star_distance_;
   private XYZ nav_position_wrt_target_;

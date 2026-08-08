@@ -46,6 +46,7 @@
 #include "physics/rotating_pulsating_reference_frame.hpp"
 #include "physics/solar_system.hpp"
 #include "physics/translated_trajectory.hpp"
+#include "quantities/named_quantities.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/parser.hpp"
 #include "quantities/quantities.hpp"
@@ -79,6 +80,7 @@ using namespace principia::physics::_reference_frame;
 using namespace principia::physics::_rotating_pulsating_reference_frame;
 using namespace principia::physics::_solar_system;
 using namespace principia::physics::_translated_trajectory;
+using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_parser;
 using namespace principia::quantities::_quantities;
 
@@ -1276,14 +1278,12 @@ Plugin::NavigationState Plugin::VesselNavigationState(
                                              vessel_subsystem,
                                              current_time_);
   state.nearest_star_distance = Infinity<Length>;
-  std::set<int> subsystems_seen;
-  for (auto const& [index, celestial] : celestials_) {
-    // `celestials_` is ordered by index, so the first body seen in a
-    // subsystem is its primary — the star of the nearest-star readout.
-    if (!subsystems_seen.insert(celestial->subsystem()).second) {
-      continue;
-    }
-    Length const distance = relative_to(*celestial).displacement().Norm();
+  for (int s = 0; s < ephemeris_->number_of_subsystems(); ++s) {
+    // The subsystem's primary — its heaviest body — is the star of the
+    // nearest-star readout.
+    Index const index = SubsystemPrimary(s);
+    Length const distance =
+        relative_to(*FindOrDie(celestials_, index)).displacement().Norm();
     if (distance < state.nearest_star_distance) {
       state.nearest_star_index = index;
       state.nearest_star_distance = distance;
@@ -1657,6 +1657,21 @@ bool Plugin::HasCelestial(Index const index) const {
 
 Celestial const& Plugin::GetCelestial(Index const index) const {
   return *FindOrDie(celestials_, index);
+}
+
+Index Plugin::SubsystemPrimary(int const subsystem) const {
+  std::optional<Index> primary;
+  GravitationalParameter largest;
+  for (auto const& [index, celestial] : celestials_) {
+    if (celestial->subsystem() == subsystem &&
+        (!primary.has_value() ||
+         celestial->body()->gravitational_parameter() > largest)) {
+      primary = index;
+      largest = celestial->body()->gravitational_parameter();
+    }
+  }
+  CHECK(primary.has_value()) << "No celestial in subsystem " << subsystem;
+  return *primary;
 }
 
 bool Plugin::HasVessel(GUID const& vessel_guid) const {

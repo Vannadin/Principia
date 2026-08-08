@@ -1016,6 +1016,98 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidNavigationState) {
                                 Lt(1e-3 * Metre / Second)));
 }
 
+// A subsystem's primary is its heaviest body, not its lowest-index one: a
+// token-mass barycentre node inserted below its star must lend neither its
+// name to the subsystem nor its distance to the nearest-star readout.
+TEST_F(PluginIntegrationTestWithoutPlugin, SubsystemPrimary) {
+  Index const star_a = 0;
+  Index const node = 1;
+  Index const star_b = 2;
+  auto const plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  auto const insert_body = [&plugin](Index const index,
+                                     std::optional<Index> const parent_index,
+                                     std::string const& name,
+                                     std::string const& gravitational_parameter,
+                                     std::string const& x) {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name                    : ")", name, R"("
+                        gravitational_parameter : ")",
+                     gravitational_parameter, R"("
+                        reference_instant       : "JD2451545.0"
+                        mean_radius             : "1e6 m"
+                        axis_right_ascension    : "0 deg"
+                        axis_declination        : "90 deg"
+                        reference_angle         : "0 rad"
+                        angular_frequency       : "1 rad/s")"),
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        absl::StrCat(R"(name : ")", name, R"("
+                        x    : ")", x, R"("
+                        y    : "0 m"
+                        z    : "0 m"
+                        vx   : "0 m/s"
+                        vy   : "0 m/s"
+                        vz   : "0 m/s")"),
+        &initial_state));
+    plugin->InsertCelestialAbsoluteCartesian(
+        index, parent_index, gravity_model, initial_state);
+  };
+  insert_body(star_a, std::nullopt, "star A", "1.3e20 m^3/s^2", "0 m");
+  // The node sits between its star and the vessel below, so that a primary
+  // picked by index would win both readouts.
+  insert_body(node, star_a, "node", "1 m^3/s^2", "3.999e16 m");
+  insert_body(star_b, node, "star B", "1.3e20 m^3/s^2", "4e16 m");
+  plugin->EndInitialization();
+
+  // The node clusters with star B while preceding it in index.
+  int const subsystem_b = plugin->GetCelestial(star_b).subsystem();
+  EXPECT_EQ(subsystem_b, plugin->GetCelestial(node).subsystem());
+  EXPECT_NE(subsystem_b, plugin->GetCelestial(star_a).subsystem());
+  EXPECT_EQ(star_a,
+            plugin->SubsystemPrimary(plugin->GetCelestial(star_a).subsystem()));
+  EXPECT_EQ(star_b, plugin->SubsystemPrimary(subsystem_b));
+
+  // A vessel coasting between the stars: the nearest star is star B itself,
+  // not the node in front of it.
+  GUID const vessel_guid = "in-void";
+  bool inserted;
+  plugin->InsertOrKeepVessel(vessel_guid,
+                            "in the void",
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  Vector<double, AliceSun> const to_star_b =
+      Normalize(plugin->CelestialFromParent(node).displacement());
+  Speed const v = 1e3 * Metre / Second;
+  plugin->InsertUnloadedPart(111,
+                             "void part",
+                             vessel_guid,
+                             {(2.1e16 * Metre) * to_star_b, v * to_star_b});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  Time const δt = 1200 * Second;
+  plugin->AdvanceTime(Instant() + δt, 1 * Radian);
+  plugin->InsertOrKeepVessel(vessel_guid,
+                            "in the void",
+                            star_a,
+                            /*loaded=*/false,
+                            inserted);
+  VesselSet collided_vessels;
+  plugin->CatchUpLaggingVessels(collided_vessels);
+
+  auto const state =
+      plugin->VesselNavigationState(vessel_guid,
+                                    /*target_index=*/std::nullopt,
+                                    /*reference_index=*/std::nullopt);
+  EXPECT_EQ(star_b, state.nearest_star_index);
+  // Tight enough to reject the node's distance, 5.3e-4 nearer.
+  EXPECT_THAT(state.nearest_star_distance,
+              RelativeErrorFrom(1.9e16 * Metre, Lt(1e-4)));
+}
+
 // The mass-based rebase boundary, end-to-end, on an unequal pair: star A is
 // sixteen times heavier than star B, so the dominance boundary sits at 4/5 of
 // the way — far past the geometric midpoint — and the hysteresis margin puts

@@ -507,6 +507,12 @@ class Plugin {
   virtual bool HasCelestial(Index index) const;
   virtual Celestial const& GetCelestial(Index index) const;
 
+  // Returns the index of the celestial with the largest gravitational
+  // parameter in the given subsystem — the star by which the readouts name
+  // it.  Picking by index would elect a token-mass barycentre node inserted
+  // below its star.
+  virtual Index SubsystemPrimary(int subsystem) const;
+
   virtual bool HasVessel(GUID const& vessel_guid) const;
   virtual not_null<Vessel*> GetVessel(GUID const& vessel_guid) const;
 

@@ -1230,6 +1230,15 @@ void __cdecl principia__SetWorldRotationalReferenceFrame(Plugin* const plugin,
   return m.Return();
 }
 
+// Returns the index of the celestial with the largest gravitational parameter
+// in the given subsystem, by which the readouts name the subsystem.
+int __cdecl principia__SubsystemGetPrimary(Plugin const* const plugin,
+                                           int const subsystem) {
+  journal::Method<journal::SubsystemGetPrimary> m({plugin, subsystem});
+  CHECK(plugin != nullptr);
+  return m.Return(plugin->SubsystemPrimary(subsystem));
+}
+
 XYZ __cdecl principia__UnmanageableVesselVelocity(Plugin const* const plugin,
                                                   QP const degrees_of_freedom,
                                                   int const parent_index) {
