@@ -1,5 +1,6 @@
 #include "geometry/symmetric_bilinear_form.hpp"
 
+#include <limits>
 #include <random>
 
 #include "base/algebra.hpp"
@@ -623,6 +624,30 @@ TEST_F(SymmetricBilinearFormTest, Diagonalize) {
     EXPECT_THAT(f_eigensystem.rotation(e₂),
                 Componentwise(0, 1, VanishesBefore(1, 1)));
   }
+}
+
+TEST_F(SymmetricBilinearFormTest, DiagonalizeNonFinite) {
+  double const nan = std::numeric_limits<double>::quiet_NaN();
+
+  // A single NaN element defeats the convergence test and every comparison in
+  // the pivot search, so the rotations would use indeterminate indices.  It
+  // goes on the diagonal because the constructor checks the symmetry of the
+  // off-diagonal elements, and NaN is not equal to itself.
+  auto const f = MakeSymmetricBilinearForm<World>(
+                     R3x3Matrix<double>({  1,   5,   0},
+                                        {  5, nan,   0},
+                                        {  0,   0,   3}));
+  auto const f_eigensystem = f.Diagonalize<Eigenworld>();
+
+  // We give up before rotating, so the basis is unchanged.  The eigenvalues
+  // cannot be read through `form`, which multiplies out the whole matrix: the
+  // NaN one reaches every product through a zero coordinate.
+  Vector<double, Eigenworld> const e₀({1, 0, 0});
+  Vector<double, Eigenworld> const e₁({0, 1, 0});
+  Vector<double, Eigenworld> const e₂({0, 0, 1});
+  EXPECT_THAT(f_eigensystem.rotation(e₀), Componentwise(1, 0, 0));
+  EXPECT_THAT(f_eigensystem.rotation(e₁), Componentwise(0, 1, 0));
+  EXPECT_THAT(f_eigensystem.rotation(e₂), Componentwise(0, 0, 1));
 }
 
 }  // namespace geometry

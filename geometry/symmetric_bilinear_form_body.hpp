@@ -181,10 +181,18 @@ typename SymmetricBilinearForm<Scalar, Frame, Multivector>::
   R3x3Matrix<Scalar> A = matrix_;
   Scalar const A_frobenius_norm = A.FrobeniusNorm();
   auto V = R3x3Matrix<double>::Identity();
-  for (int k = 0; k < max_iterations; ++k) {
+  // A NaN element defeats the convergence test below and every comparison in
+  // the pivot search, so we would rotate on indeterminate indices; see the
+  // same test in `ClassicalJacobi`.
+  bool const is_diagonalizable = IsFinite(A_frobenius_norm);
+  if (!is_diagonalizable) {
+    LOG(ERROR) << "Diagonalization of a form whose Frobenius norm is "
+               << A_frobenius_norm << ": " << matrix_;
+  }
+  for (int k = 0; is_diagonalizable && k < max_iterations; ++k) {
     Scalar max_Apq{};
-    int max_p;
-    int max_q;
+    int max_p = -1;
+    int max_q = -1;
 
     // Find the largest off-diagonal element and exit if it's small.
     for (int p = 0; p < 3; ++p) {
@@ -200,6 +208,8 @@ typename SymmetricBilinearForm<Scalar, Frame, Multivector>::
     if (max_Apq <= ε * A_frobenius_norm) {
       break;
     }
+
+    DCHECK_GE(max_p, 0);
 
     auto θ = SymmetricSchurDecomposition2By2(A, max_p, max_q);
     auto const J = JacobiRotation(max_p, max_q, θ);
