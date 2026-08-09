@@ -1240,5 +1240,136 @@ TEST_F(PileUpTest, PileUpConstructionReconcilesDivergentPlacements) {
                 {RigidPart::origin, RigidPart::unmoving}).velocity());
 }
 
+// The numeric companion of the reconcile test above, at the magnitudes of an
+// inter-star docking: the parts are homed to subsystems 4 × 10¹⁶ m apart, each
+// anchored 2 × 10¹⁶ m from its own origin in the void midway.  The reconcile
+// folds the divergent part through the real `placement_conversion` and applies
+// the result as a single translation, so the part's metre-scale coordinates
+// never transit the inter-star magnitude; a composition collapsing each leg
+// separately would round them to that magnitude's 8 m grid.  The rounding of
+// the conversion itself is pinned by
+// `InterstellarPrecisionTest.CrossSubsystemPlacementConversion`.
+TEST_F(PileUpTest, AnchoredCrossSubsystemMergePrecision) {
+  Instant const t0 = J2000;
+  // The docking happens 8192 s after the anchors are adopted, so the affine
+  // terms of the conversion are exercised.
+  Instant const t1 = t0 + 8192 * Second;
+
+  // Two token bodies, one per subsystem, the remote one in bulk motion.
+  Displacement<Barycentric> const to_remote(
+      {4.0e16 * Metre, 0 * Metre, 0 * Metre});
+  Velocity<Barycentric> const remote_velocity(
+      {256 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.emplace_back(make_not_null_unique<MassiveBody>(1 * Kilogram));
+  bodies.emplace_back(make_not_null_unique<MassiveBody>(1 * Kilogram));
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      {Barycentric::origin, Barycentric::unmoving},
+      {Barycentric::origin + to_remote, remote_velocity}};
+  Ephemeris<Barycentric> ephemeris{
+      std::move(bodies),
+      initial_state,
+      t0,
+      Ephemeris<Barycentric>::AccuracyParameters(
+          /*fitting_tolerance=*/1 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<Barycentric>::FixedStepParameters(
+          SymplecticRungeKuttaNyströmIntegrator<
+              BlanesMoan2002SRKN6B,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*step=*/1 * Second),
+      /*subsystems=*/std::vector<int>{0, 1}};
+  // The local origins are the bodies' initial positions, so they differ by
+  // exactly `to_remote` and the remote one moves at exactly `remote_velocity`;
+  // the representations below are built on both conventions.
+  ASSERT_EQ(to_remote,
+            ephemeris.subsystem_conversion(/*s1=*/1, /*s2=*/0, t0));
+  ASSERT_EQ(remote_velocity,
+            ephemeris.subsystem_velocity_conversion(/*s1=*/1, /*s2=*/0));
+
+  // The station cruises through the void; the visitor closes at 0.5 m/s.
+  Velocity<Barycentric> const cruise(
+      {32768 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  Velocity<Barycentric> const approach(
+      {-0.5 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second});
+  Ephemeris<Barycentric>::Anchor const station_anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({2.0e16 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = cruise,
+      .epoch = t0};
+  Ephemeris<Barycentric>::Anchor const visitor_anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({-2.0e16 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = cruise + approach - remote_velocity,
+      .epoch = t0};
+
+  // The anchors coincide at `t0`, so at `t1` the visitor's representation
+  // leads the station's by the 4096 m its anchor has closed; the parts are
+  // then 5 m apart, closing at 0.5 m/s.  The station's abscissa must not be a
+  // multiple of the 8 m ULP of the inter-star distance: that is exactly what
+  // a per-leg collapse rounds away, so a round number here would leave this
+  // test blind to one.
+  Displacement<Barycentric> const expected_separation(
+      {5 * Metre, 0 * Metre, 0 * Metre});
+  Displacement<Barycentric> const station_position(
+      {3 * Metre, 2 * Metre, 3 * Metre});
+  Displacement<Barycentric> const visitor_position =
+      station_position - approach * (t1 - t0) + expected_separation;
+  Velocity<Barycentric> const part_velocity(
+      {1 * Metre / Second, -2 * Metre / Second, 0.5 * Metre / Second});
+  Part station(131, "station", mass1_, EccentricPart::origin,
+               inertia_tensor1_,
+               RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+                   {Barycentric::origin + station_position, part_velocity}),
+               /*deletion_callback=*/nullptr);
+  Part visitor(132, "visitor", mass2_, EccentricPart::origin,
+               inertia_tensor2_,
+               RigidMotion<EccentricPart, Barycentric>::MakeNonRotatingMotion(
+                   {Barycentric::origin + visitor_position, part_velocity}),
+               /*deletion_callback=*/nullptr);
+  station.set_placement({0, station_anchor});
+  visitor.set_placement({1, visitor_anchor});
+
+  TestablePileUp pile_up({&station, &visitor}, t1,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         /*deletion_callback=*/nullptr);
+
+  // The heavier visitor wins the vote; the station is retagged with the whole
+  // winning placement, anchor included.
+  EXPECT_EQ(1, pile_up.placement().subsystem);
+  ASSERT_TRUE(pile_up.placement().anchor.has_value());
+  EXPECT_EQ(visitor_anchor, *pile_up.placement().anchor);
+  EXPECT_EQ(pile_up.placement(), station.placement());
+
+  // The merged representation reproduces the true relative state.
+  auto const station_dof =
+      station.rigid_motion()({RigidPart::origin, RigidPart::unmoving});
+  auto const visitor_dof =
+      visitor.rigid_motion()({RigidPart::origin, RigidPart::unmoving});
+  EXPECT_THAT(visitor_dof.position() - station_dof.position(),
+              AbsoluteErrorFrom(expected_separation, Lt(1 * Milli(Metre))));
+  EXPECT_THAT(visitor_dof.velocity() - station_dof.velocity(),
+              AbsoluteErrorFrom(approach, Lt(1 * Nano(Metre) / Second)));
+
+  // The pile-up frame is built from the merged representation, which it
+  // reaches by a translation, and preserves the same geometry.
+  auto const station_in_pile_up =
+      pile_up.actual_part_rigid_motion().at(&station)(
+          {RigidPart::origin, RigidPart::unmoving});
+  auto const visitor_in_pile_up =
+      pile_up.actual_part_rigid_motion().at(&visitor)(
+          {RigidPart::origin, RigidPart::unmoving});
+  auto const to_pile_up =
+      OrthogonalMap<Barycentric, NonRotatingPileUp>::Identity();
+  EXPECT_THAT(visitor_in_pile_up.position() - station_in_pile_up.position(),
+              AbsoluteErrorFrom(to_pile_up(expected_separation),
+                                Lt(1 * Milli(Metre))));
+  EXPECT_THAT(visitor_in_pile_up.velocity() - station_in_pile_up.velocity(),
+              AbsoluteErrorFrom(to_pile_up(approach),
+                                Lt(1 * Nano(Metre) / Second)));
+}
+
 }  // namespace ksp_plugin
 }  // namespace principia
