@@ -107,6 +107,16 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // `OnVesselLoaded`.
   private bool scene_anchor_corrected_ = false;
 
+  // Roughly the angle a pixel spans: 1080 lines over a 60° field, halved for
+  // margin.  See `SquaredRepositioningRange`.
+  private const double pixel_angular_size = 5e-4;
+  // The stock unload range, past which a vessel is not there to be seen
+  // trembling anyway.
+  private const double reposition_range_floor = 2500;
+  // Whether a repositioning has been rejected as out of scale; see
+  // `RepositionVesselInScene`.
+  private bool repositioning_was_rejected_ = false;
+
   private PlanetariumCameraAdjuster planetarium_camera_adjuster_;
 
   private RenderingActions map_renderer_;
@@ -2201,10 +2211,12 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // floating origin moves: a packed ship visibly thrashes against the
   // physics-driven active vessel, and the pre-unpack overlap can detonate a
   // boarding.  Re-place packed loaded vessels through the plugin, whose
-  // placement conversions cancel the void-scale absolute.  Requires an
-  // unpacked active vessel as the physics reference; under rails warp every
-  // vessel is packed and collisions cannot arise, so the stock placement
-  // stands there.
+  // placement conversions cancel the void-scale absolute.  The active vessel
+  // is the reference and is left alone: the flight camera's pivot is parented
+  // to its transform, so its own churn is not seen.  The reference holds under
+  // rails warp — a vessel that was once loaded keeps its truthful parts, freed
+  // only for `loaded_vessels_` — but every vessel is packed there, so the pass
+  // gates on visibility.
   private void RepositionOnRailsVesselsInScene() {
     if (!PluginRunning() ||
         !HighLogic.LoadedSceneIsFlight ||
@@ -2212,28 +2224,72 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                                     out Part active_root)) {
       return;
     }
-    foreach (Vessel vessel in FlightGlobals.Vessels.Where(
-        v => v.loaded && is_manageable_on_rails(v))) {
-      RepositionVesselInScene(vessel, origin, active_root);
+    // `Precalc` skips the advance in some frames; a tick of skew between the
+    // stock placement and the plugin position is a warp tick of relative
+    // motion, kilometres against the metres this corrects.
+    if (Math.Abs(plugin_.CurrentTime() - Planetarium.GetUniversalTime()) >
+        0.5 * TimeWarp.fixedDeltaTime) {
+      return;
+    }
+    var reference = (Vector3d)active_root.rb.position;
+    double squared_range = SquaredRepositioningRange();
+    // The cull comes before the manageability test, which allocates.
+    List<Vessel> loaded_vessels = FlightGlobals.VesselsLoaded;
+    for (int i = loaded_vessels.Count - 1; i >= 0; --i) {
+      Vessel vessel = loaded_vessels[i];
+      if (vessel == FlightGlobals.ActiveVessel ||
+          ((Vector3d)vessel.transform.position - reference).sqrMagnitude >
+              squared_range ||
+          !is_manageable_on_rails(vessel)) {
+        continue;
+      }
+      RepositionVesselInScene(vessel, origin, reference, squared_range);
     }
   }
 
-  // The physics reference for scene placement: the unpacked active vessel's
-  // root part, which the plugin also knows.
+  // Past the distance at which the correction spans a pixel it cannot be seen,
+  // and the load range, which mods raise for the view, bounds nothing useful.
+  // The correction is the size of the rounding in the chain of sums that
+  // places a body, `celestialBody.position = referenceBody.position + pos`
+  // from the tree root: the terms are root-centric, so the spacing to take is
+  // that of the root's own world position, the vessel's distance from it
+  // negated.  A body's world position is recentred on the vessel and carries
+  // none of it.  The floor keeps a docking approach always exact.
+  private static double SquaredRepositioningRange() {
+    CelestialBody root = Planetarium.fetch?.Sun;
+    double magnitude =
+        root == null ? 0 : ((Vector3d)root.position).magnitude;
+    double range = reposition_range_floor;
+    // An infinite magnitude would make the range infinite, and with it the
+    // bound on what a repositioning may move.
+    if (magnitude > 1 && !double.IsInfinity(magnitude)) {
+      // The spacing of the doubles at `magnitude`, over the angle a pixel
+      // spans.
+      double spacing = Math.Pow(2, Math.Floor(Math.Log(magnitude, 2)) - 52);
+      range = Math.Max(range, spacing / pixel_angular_size);
+    }
+    return range * range;
+  }
+
+  // The physics reference for scene placement: the active vessel's root part,
+  // packed or not, which the plugin knows truthfully.
   private bool TryGetSceneReferenceOrigin(out Origin origin,
                                           out Part active_root) {
     origin = default;
     active_root = null;
     Vessel active_vessel = FlightGlobals.ActiveVessel;
     if (active_vessel == null ||
-        active_vessel.packed ||
         !is_manageable(active_vessel) ||
         !plugin_.HasVessel(active_vessel.id.ToString())) {
       return false;
     }
     Part root = active_vessel.rootPart;
+    // A vessel loaded but never unpacked holds proto parts inserted at a
+    // single degrees of freedom, which would make a nonsensical reference;
+    // truthfulness distinguishes them, and implies a rigid body, which
+    // packing keeps (kinematic).
     if (root == null || root.rb == null ||
-        !plugin_.PartIsKnown(root.flightID)) {
+        !plugin_.PartIsTruthful(root.flightID)) {
       return false;
     }
     active_root = root;
@@ -2250,7 +2306,8 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
   private void RepositionVesselInScene(Vessel vessel,
                                        Origin origin,
-                                       Part active_root) {
+                                       Vector3d reference,
+                                       double squared_range) {
     string vessel_guid = vessel.id.ToString();
     if (!plugin_.HasVessel(vessel_guid)) {
       return;
@@ -2263,8 +2320,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     // the vessel transform are written at other points of the frame than
     // the orbit-driven part positions, and a delta mixing those samples
     // re-applies the very churn being corrected.
-    Vector3d target_centre_of_mass =
-        (Vector3d)active_root.rb.position + (Vector3d)dof.q;
+    Vector3d target_centre_of_mass = reference + (Vector3d)dof.q;
     Vector3d current_centre_of_mass = Vector3d.zero;
     double total_mass = 0;
     foreach (Part part in vessel.parts) {
@@ -2281,8 +2337,22 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     }
     current_centre_of_mass /= total_mass;
     Vector3d delta = target_centre_of_mass - current_centre_of_mass;
+    // A placement conversion that went wrong is off by the void scale, not by
+    // the ULP this corrects, and the transforms are float32.  Logged once: the
+    // condition latches if it fires at all.
+    if (!IsFinite(delta) || delta.sqrMagnitude > squared_range) {
+      if (!repositioning_was_rejected_) {
+        repositioning_was_rejected_ = true;
+        Log.Error("Rejecting a " + delta.magnitude + " m repositioning of " +
+                  vessel.vesselName);
+      }
+      return;
+    }
     foreach (Part part in vessel.parts) {
-      if (part.partTransform == null) {
+      // A physicsless part is parented to its parent part, so it has already
+      // ridden that part's move; translating it again would double it.
+      if (part.partTransform == null ||
+          part.physicalSignificance != Part.PhysicalSignificance.FULL) {
         continue;
       }
       part.partTransform.position =
@@ -2307,7 +2377,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                                     out Part active_root)) {
       return;
     }
-    RepositionVesselInScene(vessel, origin, active_root);
+    RepositionVesselInScene(vessel,
+                            origin,
+                            (Vector3d)active_root.rb.position,
+                            SquaredRepositioningRange());
   }
 
   // A flight scene built after a far-away one instantiates its vessel at the
