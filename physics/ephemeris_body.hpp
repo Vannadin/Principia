@@ -1358,6 +1358,10 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
         Instant::ReadFromMessage(message.subsystem_barycentre_time());
   }
 
+  // The trajectories are written one per body, and indexed in lockstep with
+  // `bodies_` throughout; a message where the counts disagree would have us
+  // index past the end of one or the other.
+  CHECK_EQ(message.trajectory_size(), ephemeris->bodies_.size());
   int index = 0;
   ephemeris->bodies_to_trajectories_.clear();
   ephemeris->trajectories_.clear();
