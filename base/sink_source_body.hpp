@@ -3,6 +3,9 @@
 #include "base/sink_source.hpp"
 
 #include <algorithm>
+#include <cstdint>
+
+#include "absl/log/check.h"
 
 namespace principia {
 namespace base {
@@ -42,6 +45,7 @@ Array<Element> ArraySink<Element>::array() const {
 
 template<typename Element>
 void ArraySink<Element>::Append(const char* const data, std::size_t const n) {
+  CHECK_LE(next_to_write_ + static_cast<std::int64_t>(n), array_.size);
   // Do no copying if the caller filled in the result of GetAppendBuffer()
   if (data != reinterpret_cast<const char*>(array_.data + next_to_write_)) {
     memcpy(array_.data + next_to_write_, data, n);
@@ -51,11 +55,14 @@ void ArraySink<Element>::Append(const char* const data, std::size_t const n) {
 
 template<typename Element>
 char* ArraySink<Element>::GetAppendBuffer(
-    std::size_t const /*min_size*/,
+    std::size_t const min_size,
     std::size_t const desired_size_hint,
     char* const /*scratch*/,
     std::size_t const /*scratch_size*/,
     std::size_t* const allocated_size) {
+  // The caller is entitled to write `min_size` characters into the buffer we
+  // return, so we must not return a shorter one.
+  CHECK_LE(static_cast<std::int64_t>(min_size), array_.size - next_to_write_);
   *allocated_size = std::min(static_cast<std::int64_t>(desired_size_hint),
                              array_.size - next_to_write_);
   return reinterpret_cast<char*>(array_.data + next_to_write_);
