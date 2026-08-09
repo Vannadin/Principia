@@ -119,9 +119,17 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // The stock warp acceleration threshold while we hold it lifted; see
   // `UpdateWarpAccelerationGate`.
   private double? stock_warp_g_threshold_ = null;
-  // The main throttle as of the last unpacked frame; see
+  // The main throttle as of the last frame in which it was ours to read; see
   // `UpdateWarpAccelerationGate`.
   private double throttle_before_packing_ = 0;
+  // Whether we hold stock's rails-warp lock with the burn controls cleared; see
+  // `UpdateWarpAccelerationGate`.
+  private bool warp_controls_unlocked_ = false;
+  // Stock's name for the lock it sets on entering rails warp, and the controls
+  // an on-rails burn keeps.
+  private const string warp_lock_name = "TimeWarpLock";
+  private const ControlTypes warp_burn_controls =
+      ControlTypes.THROTTLE | ControlTypes.SAS | ControlTypes.THROTTLE_CUT_MAX;
 
   private PlanetariumCameraAdjuster planetarium_camera_adjuster_;
 
@@ -795,12 +803,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // vessel; excluding those keeps that comparison out of reach.
   private void UpdateWarpAccelerationGate() {
     Vessel active_vessel = FlightGlobals.ActiveVessel;
-    // Rails warp locks the controls and zeroes the live throttle, so the value
-    // the player set is only observable while the vessel is unpacked; both the
-    // burn and the test below need it to survive the packing.
-    if (active_vessel != null && !active_vessel.packed) {
-      throttle_before_packing_ = FlightInputHandler.state.mainThrottle;
-    }
+    // `current_rate_index` indexes `physicsWarpRates` in the LOW mode, where it
+    // exceeds `maxPhysicsRate_index` (0) at any physics warp: the mode is what
+    // distinguishes rails warp, and stock takes the controls only there.
+    bool in_rails_warp = TimeWarp.fetch != null &&
+                         TimeWarp.WarpMode == TimeWarp.Modes.HIGH &&
+                         TimeWarp.fetch.current_rate_index >
+                             TimeWarp.fetch.maxPhysicsRate_index;
     // Once the vessel is in rails warp its `geeForce` reads zero, but the
     // threshold is tested anew each frame, so it must stay lifted for the burn
     // to continue.
@@ -809,9 +818,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                 !active_vessel.LandedOrSplashed &&
                 is_manageable(active_vessel) &&
                 plugin_.HasVessel(active_vessel.id.ToString()) &&
-                (TimeWarp.fetch.current_rate_index >
-                     TimeWarp.fetch.maxPhysicsRate_index ||
-                 throttle_before_packing_ > 0);
+                (in_rails_warp || throttle_before_packing_ > 0);
     if (lift) {
       if (stock_warp_g_threshold_ == null) {
         stock_warp_g_threshold_ = TimeWarp.GThreshold;
@@ -819,6 +826,36 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       }
     } else {
       RestoreWarpAccelerationGate();
+    }
+
+    // Stock's rails-warp lock takes the throttle and the guidance mode along
+    // with the rest of the ship controls; an on-rails burn needs both, as the
+    // player trims it and changes its guidance while it runs.  We only ever
+    // narrow a lock stock is already holding, under its own name, so that stock
+    // stays the sole owner of the lock's lifetime and removes it as usual.
+    ControlTypes stock_lock = InputLockManager.GetControlLock(warp_lock_name);
+    if (lift && in_rails_warp && stock_lock != ControlTypes.None) {
+      warp_controls_unlocked_ = true;
+      ControlTypes burn_lock = stock_lock & ~warp_burn_controls;
+      // `SetControlLock` fires `GameEvents.onInputLocksModified`, so we write
+      // only when stock has put its own mask back.
+      if (stock_lock != burn_lock) {
+        InputLockManager.SetControlLock(burn_lock, warp_lock_name);
+      }
+    } else if (warp_controls_unlocked_) {
+      warp_controls_unlocked_ = false;
+      if (stock_lock != ControlTypes.None) {
+        InputLockManager.SetControlLock(
+            stock_lock | warp_burn_controls, warp_lock_name);
+      }
+    }
+
+    // Stock preserves the throttle it locks, but stops feeding it to the
+    // engines; the value is ours to follow while the vessel is unpacked, and
+    // again once we have unlocked it above.
+    if (active_vessel != null &&
+        (!active_vessel.packed || warp_controls_unlocked_)) {
+      throttle_before_packing_ = FlightInputHandler.state.mainThrottle;
     }
   }
 

@@ -47,10 +47,11 @@ internal class OnRailsBurner {
     logged_burn_rate_index_ = -1;
   }
 
-  // `throttle` is the main throttle as of the last frame in which the vessel
-  // was unpacked: rails warp locks the controls and zeroes the live throttle,
-  // and `ModuleEngines.FixedUpdate` returns before `UpdateThrottle` while
-  // warping, so nothing in the game still holds the value the player set.
+  // `throttle` is the main throttle as of the last frame in which it was ours
+  // to read; see `PrincipiaPluginAdapter.UpdateWarpAccelerationGate`.  Stock
+  // keeps the value while it locks the controls, but freezes
+  // `ctrlState.mainThrottle` at pack time and returns from `ModuleEngines`
+  // `FixedUpdate` before `UpdateThrottle`, so the engines stop following it.
   public void HandleWarpFrame(IntPtr plugin,
                               Vessel vessel,
                               string vessel_guid,
