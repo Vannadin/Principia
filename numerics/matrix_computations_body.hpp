@@ -17,6 +17,7 @@
 #include "numerics/transposed_view.hpp"
 #include "numerics/unbounded_arrays.hpp"
 #include "quantities/named_quantities.hpp"
+#include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
 
 namespace principia {
@@ -34,6 +35,7 @@ using namespace principia::numerics::_root_finders;
 using namespace principia::numerics::_transposed_view;
 using namespace principia::numerics::_unbounded_arrays;
 using namespace principia::quantities::_named_quantities;
+using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
 
 // As mentioned in [GV13] section 5.1.4, "It is critical to exploit structure
@@ -977,7 +979,15 @@ ClassicalJacobi(Matrix const& A,  std::int64_t max_iterations, double const ε) 
   auto const A_frobenius_norm = A.FrobeniusNorm();
   V = identity;
   auto diagonalized_A = A;
-  for (std::int64_t k = 0; k < max_iterations; ++k) {
+  // The convergence test below compares against this norm, which a NaN element
+  // defeats: we would rotate until no pivot could be selected at all, reading
+  // and writing around the matrix in release builds.
+  bool const is_diagonalizable = IsFinite(A_frobenius_norm);
+  if (!is_diagonalizable) {
+    LOG(ERROR) << "Diagonalization of a matrix whose Frobenius norm is "
+               << A_frobenius_norm << ": " << A;
+  }
+  for (std::int64_t k = 0; is_diagonalizable && k < max_iterations; ++k) {
     Scalar max_Apq{};
     std::int64_t max_p = -1;
     std::int64_t max_q = -1;
@@ -996,13 +1006,7 @@ ClassicalJacobi(Matrix const& A,  std::int64_t max_iterations, double const ε) 
     if (max_Apq <= ε * A_frobenius_norm) {
       break;
     }
-    if (max_p < 0) {
-      // NaN off-diagonal elements defeat every pivot comparison; we give up
-      // instead of rotating with out-of-bounds pivot indices.  The ε test
-      // above already covers matrices with no off-diagonal element.
-      LOG(ERROR) << "Diagonalization without a valid pivot: " << A;
-      break;
-    }
+    DCHECK_GE(max_p, 0);
 
     auto const J =
         SymmetricSchurDecomposition2By2<Scalar>(diagonalized_A, max_p, max_q);

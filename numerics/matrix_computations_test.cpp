@@ -295,24 +295,36 @@ TYPED_TEST(MatrixComputationsTest, ClassicalJacobi) {
                            4));
 }
 
-TYPED_TEST(MatrixComputationsTest, ClassicalJacobiWithoutPivot) {
+TYPED_TEST(MatrixComputationsTest, ClassicalJacobiWithNonFiniteNorm) {
   using Vector = typename std::tuple_element_t<0, TypeParam>;
   using Matrix = typename std::tuple_element_t<3, TypeParam>;
   double const nan = std::numeric_limits<double>::quiet_NaN();
 
-  Matrix const m4({  1, nan, nan, nan,
-                   nan,   4, nan, nan,
-                   nan, nan,   3, nan,
-                   nan, nan, nan,   2});
+  Matrix const identity({1, 0, 0, 0,
+                         0, 1, 0, 0,
+                         0, 0, 1, 0,
+                         0, 0, 0, 1});
 
-  auto const actual = ClassicalJacobi(m4, /*max_iterations=*/20);
-  EXPECT_THAT(actual.eigenvalues, AlmostEquals(Vector({1, 4, 3, 2}), 0));
-  EXPECT_THAT(actual.rotation,
-              AlmostEquals(Matrix({1, 0, 0, 0,
-                                   0, 1, 0, 0,
-                                   0, 0, 1, 0,
-                                   0, 0, 0, 1}),
-                           0));
+  // No pivot can be selected at all.
+  Matrix const all_nan({  1, nan, nan, nan,
+                        nan,   4, nan, nan,
+                        nan, nan,   3, nan,
+                        nan, nan, nan,   2});
+  auto const actual_all_nan = ClassicalJacobi(all_nan, /*max_iterations=*/20);
+  EXPECT_THAT(actual_all_nan.eigenvalues,
+              AlmostEquals(Vector({1, 4, 3, 2}), 0));
+  EXPECT_THAT(actual_all_nan.rotation, AlmostEquals(identity, 0));
+
+  // Here a pivot can be selected: without the guard the iteration would run to
+  // its last sweep, spreading the NaN and diagonalizing the finite block.
+  Matrix const one_nan({  1, nan,   0,   0,
+                        nan,   4,   5,   0,
+                          0,   5,   3,   0,
+                          0,   0,   0,   2});
+  auto const actual_one_nan = ClassicalJacobi(one_nan, /*max_iterations=*/20);
+  EXPECT_THAT(actual_one_nan.eigenvalues,
+              AlmostEquals(Vector({1, 4, 3, 2}), 0));
+  EXPECT_THAT(actual_one_nan.rotation, AlmostEquals(identity, 0));
 }
 
 TYPED_TEST(MatrixComputationsTest, RayleighQuotient) {
