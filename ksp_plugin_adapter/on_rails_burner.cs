@@ -44,6 +44,7 @@ internal class OnRailsBurner {
   // is reported once again.
   public void ResetWarpStopMessageLatch() {
     warp_stop_message_latched_ = false;
+    burn_was_logged_ = false;
   }
 
   public void HandleWarpFrame(IntPtr plugin,
@@ -256,6 +257,15 @@ internal class OnRailsBurner {
       warp_stop_message_latched_ = false;
       return;
     }
+    // Nothing else here reaches the log, so a burn that never starts and one
+    // that runs normally are otherwise indistinguishable after the fact.
+    // Logged once per burn: the latch below is cleared on every frame that
+    // burns, so this reports the frame that resumed one.
+    if (!burn_was_logged_) {
+      burn_was_logged_ = true;
+      Log.Info("Burning on rails: " + net_thrust + " kN at " + vessel_mass +
+               " t, " + total_mass_flow + " t/s, warp Δt " + Δt + " s");
+    }
     plugin.VesselSetOnRailsBurn(
         vessel_guid,
         net_thrust,
@@ -351,6 +361,8 @@ internal class OnRailsBurner {
 
   private static bool? enabled_;
   private bool warp_stop_message_latched_ = false;
+  // Whether the current burn has been reported; see `HandleWarpFrame`.
+  private bool burn_was_logged_ = false;
 }
 
 }  // namespace ksp_plugin_adapter

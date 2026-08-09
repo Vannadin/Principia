@@ -116,6 +116,9 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // Whether a repositioning has been rejected as out of scale; see
   // `RepositionVesselInScene`.
   private bool repositioning_was_rejected_ = false;
+  // The stock warp acceleration threshold while we hold it lifted; see
+  // `UpdateWarpAccelerationGate`.
+  private double? stock_warp_g_threshold_ = null;
 
   private PlanetariumCameraAdjuster planetarium_camera_adjuster_;
 
@@ -777,6 +780,44 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
   private bool is_manageable_on_rails(Vessel vessel) {
     return vessel.packed && is_manageable(vessel);
+  }
+
+  // Stock clamps the warp rate to physics warp while the active vessel's
+  // `geeForce` exceeds `TimeWarp.GThreshold` (`TimeWarp.getMaxOnRailsRateIdx`),
+  // which is the right call for thrust that the physics engine integrates and
+  // the wrong one for an on-rails burn, applied to the trajectory of a packed
+  // vessel.  We lift the threshold while such a burn is possible, and put it
+  // back as soon as it is not.  `TimeWarp.Update` also compares the threshold
+  // against a squared surface velocity, but only for a landed or splashed
+  // vessel; excluding those keeps that comparison out of reach.
+  private void UpdateWarpAccelerationGate() {
+    Vessel active_vessel = FlightGlobals.ActiveVessel;
+    // Once the vessel is in rails warp its `geeForce` reads zero, but the
+    // threshold is tested anew each frame, so it must stay lifted for the burn
+    // to continue.
+    bool lift = OnRailsBurner.enabled && PluginRunning() &&
+                TimeWarp.fetch != null && active_vessel != null &&
+                !active_vessel.LandedOrSplashed &&
+                is_manageable(active_vessel) &&
+                plugin_.HasVessel(active_vessel.id.ToString()) &&
+                (TimeWarp.fetch.current_rate_index >
+                     TimeWarp.fetch.maxPhysicsRate_index ||
+                 FlightInputHandler.state.mainThrottle > 0);
+    if (lift) {
+      if (stock_warp_g_threshold_ == null) {
+        stock_warp_g_threshold_ = TimeWarp.GThreshold;
+        TimeWarp.GThreshold = double.PositiveInfinity;
+      }
+    } else {
+      RestoreWarpAccelerationGate();
+    }
+  }
+
+  private void RestoreWarpAccelerationGate() {
+    if (stock_warp_g_threshold_ != null) {
+      TimeWarp.GThreshold = stock_warp_g_threshold_.Value;
+      stock_warp_g_threshold_ = null;
+    }
   }
 
   private bool has_active_manageable_vessel() {
@@ -1897,6 +1938,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   }
 
   private void Precalc() {
+    UpdateWarpAccelerationGate();
     if (!PluginRunning()) {
       return;
     }
@@ -3178,6 +3220,8 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   }
 
   private void Cleanup() {
+    // `Precalc` will not run again to do it.
+    RestoreWarpAccelerationGate();
     UnityEngine.Object.Destroy(map_renderer_);
     map_renderer_ = null;
     map_node_pool_.Clear();
