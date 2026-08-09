@@ -52,6 +52,14 @@ SymmetricLinearMultistepIntegrator<Method, ODE_>::Instance::Solve(
 
   // Argument checks.
   int const dimension = previous_steps.back().displacements.size();
+  // The steps come from a message when the instance was deserialized; ones
+  // that disagree with each other or with the problem would have us index past
+  // the end of the shorter ones below.
+  CHECK_EQ(dimension, current_state.positions.size());
+  for (auto const& previous_step : previous_steps) {
+    CHECK_EQ(dimension, previous_step.displacements.size());
+    CHECK_EQ(dimension, previous_step.accelerations.size());
+  }
 
   // Time step.
   CHECK_LT(Time(), step);
