@@ -78,6 +78,14 @@ Rotation<FromFrame, ToFrame> DavenportQMethod(
           R3Element<double>(rotation(0, i), rotation(1, i), rotation(2, i)));
     }
   }
+  if (most_positive_eigenvalue == -Infinity<Weight>) {
+    // No comparison succeeded, so the eigenvalues are all NaN: a non-finite
+    // observation has poisoned the attitude profile matrix.  `eigenvector` is
+    // still the zero quaternion, which is not a rotation and would silently
+    // produce NaNs downstream; we report no rotation at all.
+    LOG(ERROR) << "No attitude from " << size << " observations";
+    eigenvector = Quaternion(1);
+  }
 
   // The conjugation is because [And17] uses active rotations, but our rotations
   // are passive.

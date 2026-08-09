@@ -1,6 +1,7 @@
 #include "numerics/davenport_q_method.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <random>
 #include <vector>
 
@@ -56,6 +57,22 @@ TEST_F(DavenportQMethodTest, Identity) {
   auto const rotation = Rotation<World1, World2>::Identity();
   EXPECT_THAT(DavenportQMethod(vectors1_, vectors1_, weights_),
               AlmostEquals(rotation, 0));
+}
+
+TEST_F(DavenportQMethodTest, NonFiniteObservation) {
+  double const nan = std::numeric_limits<double>::quiet_NaN();
+
+  std::vector<Vector<double, World2>> vectors2;
+  vectors2.reserve(vectors1_.size());
+  for (auto const& vector1 : vectors1_) {
+    vectors2.push_back(Vector<double, World2>(vector1.coordinates()));
+  }
+  // A single non-finite observation poisons the entire attitude profile
+  // matrix, and with it every eigenvalue.
+  vectors2[0] = Vector<double, World2>({nan, nan, nan});
+
+  EXPECT_THAT(DavenportQMethod(vectors1_, vectors2, weights_),
+              AlmostEquals(Rotation<World1, World2>::Identity(), 0));
 }
 
 TEST_F(DavenportQMethodTest, FarFromIdentity) {
