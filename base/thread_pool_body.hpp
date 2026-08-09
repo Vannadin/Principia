@@ -2,6 +2,8 @@
 
 #include "base/thread_pool.hpp"
 
+#include <algorithm>
+#include <cstdint>
 #include <utility>
 
 namespace principia {
@@ -26,7 +28,10 @@ inline void ExecuteAndSetValue<void>(std::function<void()> const& function,
 
 template<typename T>
 ThreadPool<T>::ThreadPool(std::int64_t const pool_size) {
-  for (std::int64_t i = 0; i < pool_size; ++i) {
+  // Callers size themselves from `std::thread::hardware_concurrency`, which is
+  // allowed to return 0; a pool with no thread would never run anything, and
+  // the first `Add` would wait forever.
+  for (std::int64_t i = 0; i < std::max(INT64_C(1), pool_size); ++i) {
     threads_.emplace_back(std::bind(&ThreadPool::DequeueCallAndExecute, this));
   }
 }
