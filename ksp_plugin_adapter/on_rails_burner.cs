@@ -44,14 +44,18 @@ internal class OnRailsBurner {
   // is reported once again.
   public void ResetWarpStopMessageLatch() {
     warp_stop_message_latched_ = false;
-    burn_was_logged_ = false;
+    logged_burn_rate_index_ = -1;
   }
 
+  // `throttle` is the main throttle as of the last frame in which the vessel
+  // was unpacked: rails warp locks the controls and zeroes the live throttle,
+  // and `ModuleEngines.FixedUpdate` returns before `UpdateThrottle` while
+  // warping, so nothing in the game still holds the value the player set.
   public void HandleWarpFrame(IntPtr plugin,
                               Vessel vessel,
                               string vessel_guid,
-                              double Δt) {
-    double throttle = FlightInputHandler.state.mainThrottle;
+                              double Δt,
+                              double throttle) {
 
     // The true current mass and centre of mass of the packed vessel.
     double vessel_mass = 0;  // t.
@@ -258,13 +262,14 @@ internal class OnRailsBurner {
       return;
     }
     // Nothing else here reaches the log, so a burn that never starts and one
-    // that runs normally are otherwise indistinguishable after the fact.
-    // Logged once per burn: the latch below is cleared on every frame that
-    // burns, so this reports the frame that resumed one.
-    if (!burn_was_logged_) {
-      burn_was_logged_ = true;
-      Log.Info("Burning on rails: " + net_thrust + " kN at " + vessel_mass +
-               " t, " + total_mass_flow + " t/s, warp Δt " + Δt + " s");
+    // that runs normally are otherwise indistinguishable after the fact.  One
+    // line per warp rate keeps that bounded while still showing the burn
+    // surviving the rates it is meant to survive.
+    if (logged_burn_rate_index_ != TimeWarp.fetch.current_rate_index) {
+      logged_burn_rate_index_ = TimeWarp.fetch.current_rate_index;
+      Log.Info("Burning on rails at ×" + TimeWarp.CurrentRate + ": " +
+               net_thrust + " kN at " + vessel_mass + " t, " + total_mass_flow +
+               " t/s, throttle " + throttle + ", warp Δt " + Δt + " s");
     }
     plugin.VesselSetOnRailsBurn(
         vessel_guid,
@@ -331,6 +336,7 @@ internal class OnRailsBurner {
     TimeWarp.SetRate(0, instant : true);
     if (!warp_stop_message_latched_) {
       warp_stop_message_latched_ = true;
+      Log.Info("Stopping the warp: " + reason);
       ScreenMessages.PostScreenMessage(
           "[Principia] Engine burn interrupted: " + reason,
           5f,
@@ -361,8 +367,9 @@ internal class OnRailsBurner {
 
   private static bool? enabled_;
   private bool warp_stop_message_latched_ = false;
-  // Whether the current burn has been reported; see `HandleWarpFrame`.
-  private bool burn_was_logged_ = false;
+  // The warp rate at which the current burn was last reported; see
+  // `HandleWarpFrame`.
+  private int logged_burn_rate_index_ = -1;
 }
 
 }  // namespace ksp_plugin_adapter

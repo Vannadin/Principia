@@ -119,6 +119,9 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // The stock warp acceleration threshold while we hold it lifted; see
   // `UpdateWarpAccelerationGate`.
   private double? stock_warp_g_threshold_ = null;
+  // The main throttle as of the last unpacked frame; see
+  // `UpdateWarpAccelerationGate`.
+  private double throttle_before_packing_ = 0;
 
   private PlanetariumCameraAdjuster planetarium_camera_adjuster_;
 
@@ -792,6 +795,12 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // vessel; excluding those keeps that comparison out of reach.
   private void UpdateWarpAccelerationGate() {
     Vessel active_vessel = FlightGlobals.ActiveVessel;
+    // Rails warp locks the controls and zeroes the live throttle, so the value
+    // the player set is only observable while the vessel is unpacked; both the
+    // burn and the test below need it to survive the packing.
+    if (active_vessel != null && !active_vessel.packed) {
+      throttle_before_packing_ = FlightInputHandler.state.mainThrottle;
+    }
     // Once the vessel is in rails warp its `geeForce` reads zero, but the
     // threshold is tested anew each frame, so it must stay lifted for the burn
     // to continue.
@@ -802,7 +811,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                 plugin_.HasVessel(active_vessel.id.ToString()) &&
                 (TimeWarp.fetch.current_rate_index >
                      TimeWarp.fetch.maxPhysicsRate_index ||
-                 FlightInputHandler.state.mainThrottle > 0);
+                 throttle_before_packing_ > 0);
     if (lift) {
       if (stock_warp_g_threshold_ == null) {
         stock_warp_g_threshold_ = TimeWarp.GThreshold;
@@ -1976,7 +1985,8 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                 plugin_,
                 active_vessel,
                 active_vessel_guid,
-                Planetarium.TimeScale * Planetarium.fetch.fixedDeltaTime);
+                Planetarium.TimeScale * Planetarium.fetch.fixedDeltaTime,
+                throttle_before_packing_);
           } else {
             on_rails_burner_.ResetWarpStopMessageLatch();
           }
