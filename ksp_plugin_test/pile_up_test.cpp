@@ -370,6 +370,75 @@ TEST_F(PileUpTest, MidStepIntrinsicForce) {
       AlmostEquals(old_velocity + 0.5 * fixed_step * a, 1));
 }
 
+TEST_F(PileUpTest, NonFiniteApparentMotionIsIgnored) {
+  // The same quasi-empty ephemeris as in `MidStepIntrinsicForce`.
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.emplace_back(make_not_null_unique<MassiveBody>(1 * Kilogram));
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      DegreesOfFreedom<Barycentric>{
+          Barycentric::origin +
+              Displacement<Barycentric>(
+                  {std::pow(2, 100) * Metre, 0 * Metre, 0 * Metre}),
+          Barycentric::unmoving}};
+  Ephemeris<Barycentric> ephemeris{
+      std::move(bodies),
+      initial_state,
+      /*initial_time=*/J2000,
+      /*accuracy_parameters=*/{/*fitting_tolerance=*/1 * Metre,
+                               /*geopotential_tolerance=*/0x1p-24},
+      Ephemeris<Barycentric>::FixedStepParameters{
+          SymplecticRungeKuttaNyströmIntegrator<
+              BlanesMoan2002SRKN6B,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          1 * Second}};
+
+  EXPECT_CALL(deletion_callback_, Call()).Times(1);
+  TestablePileUp pile_up({&p1_, &p2_}, J2000,
+                         DefaultPsychohistoryParameters(),
+                         DefaultHistoryParameters(),
+                         &ephemeris,
+                         deletion_callback_.AsStdFunction());
+  auto const p1_motion = pile_up.actual_part_rigid_motion().at(&p1_);
+  auto const p2_motion = pile_up.actual_part_rigid_motion().at(&p2_);
+
+  // The game reports a sane motion for one part, and for the other the kind of
+  // motion a cheat teleport leaves behind.
+  double const nan = std::numeric_limits<double>::quiet_NaN();
+  pile_up.SetPartApparentRigidMotion(
+      &p1_,
+      RigidMotion<RigidPart, Apparent>::MakeNonRotatingMotion(
+          DegreesOfFreedom<Apparent>(
+              Apparent::origin +
+                  Displacement<Apparent>({1 * Metre, 2 * Metre, 3 * Metre}),
+              Apparent::unmoving)));
+  pile_up.SetPartApparentRigidMotion(
+      &p2_,
+      RigidMotion<RigidPart, Apparent>::MakeNonRotatingMotion(
+          DegreesOfFreedom<Apparent>(
+              Apparent::origin + Displacement<Apparent>({nan * Metre,
+                                                         nan * Metre,
+                                                         nan * Metre}),
+              Apparent::unmoving)));
+
+  pile_up.DeformPileUpIfNeeded(J2000);
+
+  // The tick is discarded whole, rather than applied for the healthy part: the
+  // parts stay where our own solver has them, not where the game reported
+  // them.  Their velocities are not compared, as this branch re-derives them
+  // rigidly.
+  EXPECT_THAT(pile_up.apparent_part_rigid_motion(), IsEmpty());
+  EXPECT_THAT(pile_up.actual_part_rigid_motion().at(&p1_)(
+                  {RigidPart::origin, RigidPart::unmoving}).position(),
+              AlmostEquals(
+                  p1_motion({RigidPart::origin,
+                             RigidPart::unmoving}).position(), 0, 8));
+  EXPECT_THAT(pile_up.actual_part_rigid_motion().at(&p2_)(
+                  {RigidPart::origin, RigidPart::unmoving}).position(),
+              AlmostEquals(
+                  p2_motion({RigidPart::origin,
+                             RigidPart::unmoving}).position(), 0, 8));
+}
+
 TEST_F(PileUpTest, OnRailsBurn) {
   // The same quasi-empty ephemeris as in `MidStepIntrinsicForce`.
   std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;

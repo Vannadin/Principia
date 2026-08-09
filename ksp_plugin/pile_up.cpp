@@ -773,6 +773,23 @@ void PileUp::MakeEulerSolver(
 }
 
 void PileUp::DeformPileUpIfNeeded(Instant const& t) {
+  // The game occasionally reports a non-finite motion for a part, e.g. after a
+  // cheat teleport.  It poisons the mechanical system and the attitude fit of
+  // the entire pile-up, so we discard the tick and propagate the parts with our
+  // own solver.  That is the branch below, which also drops the intrinsic
+  // torque of the step; we prefer losing one step of angular impulse to
+  // integrating a NaN attitude.
+  for (auto const& [part, apparent_part_rigid_motion] :
+       apparent_part_rigid_motion_) {
+    if (!IsFinite(apparent_part_rigid_motion)) {
+      LOG_EVERY_N_SEC(ERROR, 1)
+          << "Ignoring the apparent motion of a pile-up: "
+          << part->ShortDebugString() << " has " << apparent_part_rigid_motion;
+      apparent_part_rigid_motion_.clear();
+      break;
+    }
+  }
+
   if (apparent_part_rigid_motion_.empty()) {
     RigidMotion<PileUpPrincipalAxes, NonRotatingPileUp> const pile_up_motion =
         euler_solver_->MotionAt(
