@@ -629,8 +629,10 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurn) {
   // the y direction commanded in `World` must come out along z.
   EXPECT_THAT(Δv_vector.coordinates().z, RelativeErrorFrom(Δv, Lt(1e-3)));
 
-  // The prediction anticipates the burn continuing until its propellant runs
-  // out.
+  // The prediction coasts: what it answers is where the orbit goes if the
+  // engine is cut now, not where the burn takes the vessel.  Anticipating the
+  // burn to propellant exhaustion gained 4.6 km/s here; the coast turns 275 m/s
+  // of velocity over however far the prediction happens to reach.
   do {
     plugin->UpdatePrediction({vessel_guid});
     using namespace std::chrono_literals;
@@ -641,7 +643,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurn) {
       (vessel.prediction()->back().degrees_of_freedom.velocity() -
        vessel.psychohistory()->back().degrees_of_freedom.velocity())
           .Norm();
-  EXPECT_THAT(predicted_gain, Gt(1000 * Metre / Second));
+  EXPECT_THAT(predicted_gain, Lt(500 * Metre / Second));
 
   // A frame without a burn coasts.
   Velocity<AliceSun> const v2 =
@@ -4108,8 +4110,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
                   μ_planet / post_launch.displacement().Norm(),
               Gt(SpecificEnergy{}));
 
-  // The prediction anticipates the armed burn: at F/m ≈ 3e4 m/s² the next
-  // half hour gains ~5e7 m/s, far beyond anything gravity could impart.
+  // The prediction coasts even with a burn armed: at F/m ≈ 3e4 m/s²
+  // anticipating it would gain ~5e7 m/s over the next half hour, whereas what
+  // gravity imparts out here is metres per second.
   {
     Vessel::MakeSynchronous();
     absl::Cleanup const restore_asynchronous = [] {
@@ -4121,7 +4124,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
     Speed const predicted_gain =
         (vessel.prediction()->EvaluateVelocity(horizon) -
          from_state.degrees_of_freedom.velocity()).Norm();
-    EXPECT_THAT(predicted_gain, Gt(1e6 * Metre / Second));
+    EXPECT_THAT(predicted_gain, Lt(10 * Metre / Second));
   }
 
   // ——— Stage 2: cruise burn under warp to interstellar speed ———
