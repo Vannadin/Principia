@@ -100,10 +100,17 @@ internal class OnRailsBurner {
             : engine.independentThrottle
                   ? engine.independentThrottlePercentage / 100
                   : throttle;
+        // The multipliers are how a failure or a degradation is applied to an
+        // engine—TestFlight reduces the thrust through `multFlow` and the
+        // efficiency through `multIsp`—and stock scales the mass flow by
+        // `multFlow` and the thrust by both, so a burn that ignored them would
+        // undo the damage.
         double engine_thrust = engine.maxThrust *
                                (engine.thrustPercentage / 100) *
-                               engine_throttle;
-        double vacuum_specific_impulse = engine.atmosphereCurve.Evaluate(0);
+                               engine_throttle * engine.multFlow *
+                               engine.multIsp;
+        double vacuum_specific_impulse =
+            engine.atmosphereCurve.Evaluate(0) * engine.multIsp;
         if (engine_thrust <= 0 || vacuum_specific_impulse <= 0) {
           continue;
         }
