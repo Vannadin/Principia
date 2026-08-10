@@ -595,6 +595,27 @@ TEST_F(PluginIntegrationTestWithoutPlugin, OnRailsBurn) {
   Variation<Mass> const mass_flow = thrust / specific_impulse;
   Time const δt = 100 * Second;
 
+  // A direction that is not a number neither collapses under normalization nor
+  // compares equal to zero.  This is before the first catch-up, so clearing the
+  // burn here does not disturb the prediction tested at the end.
+  plugin->SetVesselOnRailsBurn(vessel_guid,
+                               thrust,
+                               specific_impulse,
+                               /*initial_mass=*/1 * Kilogram,
+                               Vector<double, World>({0, 1, 0}),
+                               /*max_duration=*/1 * Hour);
+  plugin->SetVesselOnRailsBurn(
+      vessel_guid,
+      thrust,
+      specific_impulse,
+      /*initial_mass=*/1 * Kilogram,
+      Vector<double, World>({0,
+                             std::numeric_limits<double>::quiet_NaN(),
+                             0}),
+      /*max_duration=*/1 * Hour);
+  EXPECT_FALSE(vessel.part(part_id)->containing_pile_up()->
+                   on_rails_burn().has_value());
+
   // Three frames of burning under warp; the game owns the mass bookkeeping,
   // handing the current mass to each catch-up.
   Mass const m0 = 1 * Kilogram;

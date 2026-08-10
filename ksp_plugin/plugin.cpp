@@ -1155,6 +1155,7 @@ void Plugin::SetVesselOnRailsBurn(GUID const& vessel_guid,
       !(specific_impulse > SpecificImpulse{}) || !IsFinite(specific_impulse) ||
       !(initial_mass > Mass{}) || !IsFinite(initial_mass) ||
       !(max_duration > Time{}) || !IsFinite(max_duration) ||
+      !IsFinite(barycentric_direction) ||
       barycentric_direction == Vector<double, Barycentric>{}) {
     LOG(WARNING) << "Degenerate on-rails burn for vessel "
                  << vessel.ShortDebugString() << ": " << thrust << ", "
