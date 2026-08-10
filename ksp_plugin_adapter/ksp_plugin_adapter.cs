@@ -858,6 +858,11 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     if (active_vessel != null &&
         (!active_vessel.packed || warp_controls_unlocked_)) {
       throttle_before_packing_ = FlightInputHandler.state.mainThrottle;
+      // Stock skips a packed vessel when it pushes the input state onto the
+      // ship, so the gauge would keep showing the pack-time throttle.
+      if (active_vessel.packed) {
+        active_vessel.ctrlState.mainThrottle = (float)throttle_before_packing_;
+      }
     }
   }
 
