@@ -125,6 +125,11 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   // Whether we hold stock's rails-warp lock with the burn controls cleared; see
   // `UpdateWarpAccelerationGate`.
   private bool warp_controls_unlocked_ = false;
+  // Whether we are inside our own write to that lock; see
+  // `NarrowWarpControlLock`.
+  private bool narrowing_warp_lock_ = false;
+  // That lock as it was last seen before we cleared the burn controls from it.
+  private ControlTypes warp_lock_before_narrowing_ = ControlTypes.None;
   // Stock's name for the lock it sets on entering rails warp, and the controls
   // an on-rails burn keeps.
   private const string warp_lock_name = "TimeWarpLock";
@@ -830,23 +835,20 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
     // Stock's rails-warp lock takes the throttle and the guidance mode along
     // with the rest of the ship controls; an on-rails burn needs both, as the
-    // player trims it and changes its guidance while it runs.  We only ever
-    // narrow a lock stock is already holding, under its own name, so that stock
-    // stays the sole owner of the lock's lifetime and removes it as usual.
+    // player trims it and changes its guidance while it runs.
     ControlTypes stock_lock = InputLockManager.GetControlLock(warp_lock_name);
     if (lift && in_rails_warp && stock_lock != ControlTypes.None) {
       warp_controls_unlocked_ = true;
-      ControlTypes burn_lock = stock_lock & ~warp_burn_controls;
-      // `SetControlLock` fires `GameEvents.onInputLocksModified`, so we write
-      // only when stock has put its own mask back.
-      if (stock_lock != burn_lock) {
-        InputLockManager.SetControlLock(burn_lock, warp_lock_name);
-      }
+      NarrowWarpControlLock();
     } else if (warp_controls_unlocked_) {
+      // Cleared first, so that our own event handler does not narrow again what
+      // we are about to give back.  We restore only those controls that were
+      // locked before we cleared them, as another mod may have unlocked some.
       warp_controls_unlocked_ = false;
       if (stock_lock != ControlTypes.None) {
         InputLockManager.SetControlLock(
-            stock_lock | warp_burn_controls, warp_lock_name);
+            stock_lock | (warp_lock_before_narrowing_ & warp_burn_controls),
+            warp_lock_name);
       }
     }
 
@@ -856,6 +858,36 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     if (active_vessel != null &&
         (!active_vessel.packed || warp_controls_unlocked_)) {
       throttle_before_packing_ = FlightInputHandler.state.mainThrottle;
+    }
+  }
+
+  // Stock reasserts its entire warp lock on every frame of a rails warp
+  // (`TimeWarp.FixedUpdate` calls `setRate`), so narrowing it once a frame
+  // loses to whichever runs later; we narrow it again whenever it is set.
+  private void OnInputLocksModified(
+      GameEvents.FromToAction<ControlTypes, ControlTypes> action) {
+    NarrowWarpControlLock();
+  }
+
+  // Clears the controls an on-rails burn keeps from stock's warp lock, under
+  // stock's own name, so that stock stays the owner of the lock's lifetime.
+  private void NarrowWarpControlLock() {
+    if (!warp_controls_unlocked_ || narrowing_warp_lock_) {
+      return;
+    }
+    ControlTypes stock_lock = InputLockManager.GetControlLock(warp_lock_name);
+    ControlTypes burn_lock = stock_lock & ~warp_burn_controls;
+    if (stock_lock == ControlTypes.None || stock_lock == burn_lock) {
+      return;
+    }
+    warp_lock_before_narrowing_ = stock_lock;
+    // We come back here through the event; a mod that reasserts the lock from
+    // it would otherwise recurse with us.
+    narrowing_warp_lock_ = true;
+    try {
+      InputLockManager.SetControlLock(burn_lock, warp_lock_name);
+    } finally {
+      narrowing_warp_lock_ = false;
     }
   }
 
@@ -1061,6 +1093,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                            () => { in_principia_scene_ = false; });
     event_void_holder_.Add(GameEvents.onGUIRnDComplexDespawn,
                            () => { in_principia_scene_ = true; });
+    GameEvents.onInputLocksModified.Add(OnInputLocksModified);
     GameEvents.onCrewOnEva.Add(OnCrewOnEva);
     GameEvents.onPartDeCoupleNewVesselComplete.Add(OnVesselSplit);
     GameEvents.onVesselsUndocking.Add(OnVesselSplit);
@@ -1473,6 +1506,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     Cleanup();
     WindowsDisposal();
     event_void_holder_.RemoveAll();
+    GameEvents.onInputLocksModified.Remove(OnInputLocksModified);
     GameEvents.onCrewOnEva.Remove(OnCrewOnEva);
     GameEvents.onPartDeCoupleNewVesselComplete.Remove(OnVesselSplit);
     GameEvents.onVesselsUndocking.Remove(OnVesselSplit);
@@ -3269,6 +3303,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   private void Cleanup() {
     // `Precalc` will not run again to do it.
     RestoreWarpAccelerationGate();
+    // Nor to stop our lock handler from narrowing a lock outside the flight
+    // scene, where no burn can be running.
+    warp_controls_unlocked_ = false;
+    warp_lock_before_narrowing_ = ControlTypes.None;
     UnityEngine.Object.Destroy(map_renderer_);
     map_renderer_ = null;
     map_node_pool_.Clear();
