@@ -310,12 +310,18 @@ internal class OnRailsBurner {
   // engine thrust axis as it is in World at this frame.
   private static Vector3d CommandedDirection(Vessel vessel,
                                              Vector3d engine_thrust) {
+    // A guidance mode commands the burn only while SAS is on.  We read the
+    // action group rather than `Autopilot.Enabled`, which does not follow it
+    // while the vessel is packed, `Vessel.Update` returning early.
+    if (vessel.Autopilot == null || !vessel.ActionGroups[KSPActionGroup.SAS]) {
+      return engine_thrust;
+    }
     ITargetable target = FlightGlobals.fetch.VesselTarget;
     Vector3d to_target = target == null
         ? Vector3d.zero
         : ((Vector3d)target.GetTransform().position -
            (Vector3d)vessel.ReferenceTransform.position).normalized;
-    switch (vessel.Autopilot?.Mode) {
+    switch (vessel.Autopilot.Mode) {
       case VesselAutopilot.AutopilotMode.Prograde:
         return vessel.obt_velocity.normalized;
       case VesselAutopilot.AutopilotMode.Retrograde:
