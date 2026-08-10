@@ -2480,13 +2480,22 @@ double Ephemeris<Frame>::ToleranceToErrorRatio(
     typename NewtonianMotionEquation::State::Error const& error) {
   Length max_length_error;
   Speed max_speed_error;
+  // `Quantity` is only partially ordered, so `std::max` silently ignores an
+  // error that is not a number and the step could be accepted.  An error that
+  // is not a number is the largest error there is.
   for (auto const& position_error : error.position_error) {
-    max_length_error = std::max(max_length_error,
-                                position_error.Norm());
+    Length const length_error = position_error.Norm();
+    if (!IsFinite(length_error)) {
+      return 0;
+    }
+    max_length_error = std::max(max_length_error, length_error);
   }
   for (auto const& velocity_error : error.velocity_error) {
-    max_speed_error = std::max(max_speed_error,
-                               velocity_error.Norm());
+    Speed const speed_error = velocity_error.Norm();
+    if (!IsFinite(speed_error)) {
+      return 0;
+    }
+    max_speed_error = std::max(max_speed_error, speed_error);
   }
   return std::min(length_integration_tolerance / max_length_error,
                   speed_integration_tolerance / max_speed_error);

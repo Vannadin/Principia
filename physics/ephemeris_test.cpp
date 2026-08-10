@@ -30,6 +30,7 @@
 #include "integrators/embedded_explicit_runge_kutta_nyström_integrator.hpp"
 #include "integrators/integrators.hpp"
 #include "integrators/methods.hpp"
+#include "integrators/ordinary_differential_equations.hpp"
 #include "integrators/symmetric_linear_multistep_integrator.hpp"
 #include "integrators/symplectic_runge_kutta_nyström_integrator.hpp"
 #include "mathematica/logger.hpp"
@@ -80,6 +81,7 @@ using namespace principia::integrators::_embedded_explicit_generalized_runge_kut
 using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_integrators;
 using namespace principia::integrators::_methods;
+using namespace principia::integrators::_ordinary_differential_equations;
 using namespace principia::integrators::_symmetric_linear_multistep_integrator;
 using namespace principia::integrators::_symplectic_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::mathematica::_logger;
@@ -496,6 +498,59 @@ TEST_P(EphemerisTest, EarthProbe) {
               StatusIs(absl::StatusCode::kDeadlineExceeded));
   EXPECT_THAT(ephemeris.t_max(), Eq(old_t_max));
   EXPECT_THAT(trajectory.back().time, Eq(old_t_max));
+}
+
+// A probe whose intrinsic acceleration is not a number: no step is acceptable.
+TEST_P(EphemerisTest, NonFiniteIntrinsicAcceleration) {
+  Length const distance = 1e9 * Metre;
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  std::vector<DegreesOfFreedom<ICRS>> initial_state;
+  Position<ICRS> centre_of_mass;
+  Time period;
+  SetUpEarthMoonSystem(bodies, initial_state, centre_of_mass, period);
+
+  bodies.erase(bodies.begin() + 1);
+  initial_state.erase(initial_state.begin() + 1);
+
+  Position<ICRS> const earth_position = initial_state[0].position();
+  Velocity<ICRS> const earth_velocity = initial_state[0].velocity();
+
+  Ephemeris<ICRS> ephemeris(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      /*accuracy_parameters=*/{/*fitting_tolerance=*/5 * Milli(Metre),
+                               /*geopotential_tolerance=*/0x1p-24},
+      Ephemeris<ICRS>::FixedStepParameters(integrator(), period / 100));
+
+  DiscreteTrajectory<ICRS> trajectory;
+  EXPECT_OK(trajectory.Append(
+      t0_,
+      DegreesOfFreedom<ICRS>(
+          earth_position +
+              Vector<Length, ICRS>({0 * Metre, distance, 0 * Metre}),
+          earth_velocity)));
+  auto const intrinsic_acceleration = [](Instant const& /*t*/) {
+    return Vector<Acceleration, ICRS>(
+        {0 * si::Unit<Acceleration>,
+         std::numeric_limits<double>::quiet_NaN() * si::Unit<Acceleration>,
+         0 * si::Unit<Acceleration>});
+  };
+
+  EXPECT_THAT(ephemeris.FlowWithAdaptiveStep(
+                  &trajectory,
+                  intrinsic_acceleration,
+                  t0_ + period,
+                  Ephemeris<ICRS>::AdaptiveStepParameters(
+                      EmbeddedExplicitRungeKuttaNyströmIntegrator<
+                          DormandالمكاوىPrince1986RKN434FM,
+                          Ephemeris<ICRS>::NewtonianMotionEquation>(),
+                      max_steps,
+                      1e-9 * Metre,
+                      2.6e-15 * Metre / Second),
+                  Ephemeris<ICRS>::unlimited_max_ephemeris_steps),
+              StatusIs(termination_condition::VanishingStepSize));
+  EXPECT_THAT(trajectory.back().time, Eq(t0_));
 }
 
 // The Earth and two massless probes, similar to the previous test but flowing
