@@ -343,6 +343,12 @@ class PlanetariumTest : public ::testing::Test {
   Perspective<Navigation, Camera> const perspective_;
   MockRigidReferenceFrame<Barycentric, Navigation> plotting_frame_;
   Planetarium::PlottingToScaledSpaceConversion plotting_to_scaled_space_;
+  Planetarium::PlottingToScaledSpaceDisplacementConversion const
+      plotting_to_scaled_space_displacement_ =
+          [](Displacement<Navigation> const& displacement) {
+            constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+            return (displacement * inverse_scale_factor).coordinates();
+          };
   RotatingBody<Barycentric> const body_;
   std::vector<not_null<MassiveBody const*>> const bodies_;
   Ephemeris<Barycentric>::FixedStepParameters const ephemeris_parameters_;
@@ -377,6 +383,31 @@ TEST_F(PlanetariumTest, PlottingToScaledSpaceAtInterstellarDistance) {
           world_to_plotting,
           World::origin + to_plotting_origin,
           1 / (6000 * Metre));
+
+  // The displacement conversion is the linear part of the point conversion:
+  // with the scaled-space origin at the image of the plotting origin the two
+  // agree bit for bit, which pins the handedness and the scale factor of the
+  // production factory.
+  auto const plotting_to_scaled_space_displacement =
+      Planetarium::MakePlottingToScaledSpaceDisplacementConversion(
+          world_to_plotting,
+          1 / (6000 * Metre));
+  auto const centred_plotting_to_scaled_space =
+      Planetarium::MakePlottingToScaledSpaceConversion(
+          world_to_plotting,
+          world_to_plotting.Inverse()(Navigation::origin),
+          1 / (6000 * Metre));
+  for (auto const& displacement :
+       {Displacement<Navigation>({1 * Metre, 2 * Metre, 3 * Metre}),
+        Displacement<Navigation>({-4e7 * Metre, 5e7 * Metre, 6e9 * Metre})}) {
+    R3Element<double> const from_displacement =
+        plotting_to_scaled_space_displacement(displacement);
+    R3Element<double> const from_point = centred_plotting_to_scaled_space(
+        t0_, Navigation::origin + displacement);
+    EXPECT_EQ(from_point.x, from_displacement.x);
+    EXPECT_EQ(from_point.y, from_displacement.y);
+    EXPECT_EQ(from_point.z, from_displacement.z);
+  }
 
   // A straight trajectory spanning a gigametre, the scale of a planetary
   // system, sampled uniformly.
@@ -526,6 +557,124 @@ TEST_F(PlanetariumTest, PlotMethod4WithAnchor) {
   EXPECT_TRUE(differs);
 }
 
+// An anchored plot at an interstellar distance from the plotting frame's
+// origin: the vertices must not quantize at the double ULP of that distance,
+// about a kilometre at 9e18 m, neither in the placement conversion nor in
+// the scaled-space conversion.  The trajectory is a small, densely-sampled
+// circle around the origin of `Barycentric`, as an anchored vessel is
+// represented; the placement conversion carries it across the interstellar
+// offset.
+TEST_F(PlanetariumTest, PlotMethod4AnchoredAtInterstellarDistance) {
+  // The radius, the offset and the camera height are chosen so that the
+  // per-plot constants are exactly representable (6.4e18 and 6.4e18 + 8192
+  // are multiples of the ULP, 1024): the plot's absolute registration is then
+  // exact and the assertions below measure pure deformation.  This requires
+  // the plotted span to END at a whole number of periods, so that the
+  // reference — taken at the last time — lands at phase zero, on the ULP
+  // lattice; ending elsewhere reintroduces the registration offset of up to
+  // half an ULP, ~500 m, which is expected and harmless in production but
+  // would fail the absolute tolerance here.
+  Length const radius = 8192 * Metre;
+  DiscreteTrajectory<Barycentric> discrete_trajectory;
+  AppendTrajectoryTimeline(/*from=*/NewCircularTrajectoryTimeline<Barycentric>(
+                                        /*period=*/10 * Second,
+                                        /*r=*/radius,
+                                        /*Δt=*/0.01 * Second,
+                                        /*t1=*/t0_,
+                                        /*t2=*/t0_ + 10 * Second),
+                           /*to=*/discrete_trajectory);
+
+  // Diagonal, so that every coordinate sits at a magnitude where the double
+  // ULP is about a kilometre.
+  Displacement<Barycentric> const interstellar_offset(
+      {6.4e18 * Metre, 6.4e18 * Metre, 0 * Metre});
+  EXPECT_CALL(mock_ephemeris_, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+  ON_CALL(mock_ephemeris_, placement_conversion(_, _, _))
+      .WillByDefault(
+          Return(std::make_pair(interstellar_offset,
+                                Velocity<Barycentric>())));
+
+  // A camera 1e5 m from the centre of the circle, as a map view zoomed onto
+  // the vessel.  Its offset from the centre is along z, whose coordinate is
+  // small, so that `camera - circle_centre` is exact.
+  Displacement<Navigation> const interstellar_offset_in_navigation(
+      {6.4e18 * Metre, 6.4e18 * Metre, 0 * Metre});
+  Position<Navigation> const circle_centre =
+      Navigation::origin + interstellar_offset_in_navigation;
+  Position<Navigation> const camera_position =
+      circle_centre +
+      Displacement<Navigation>({0 * Metre, 0 * Metre, 1e5 * Metre});
+  Perspective<Navigation, Camera> const perspective(
+      RigidTransformation<Navigation, Camera>(
+          camera_position,
+          Camera::origin,
+          Rotation<LeftNavigation, Camera>(
+              Vector<double, LeftNavigation>({1, 0, 0}),
+              Vector<double, LeftNavigation>({0, 0, 1}),
+              Bivector<double, LeftNavigation>({0, -1, 0}))
+                  .Forget<OrthogonalMap>() *
+              Signature<Navigation, LeftNavigation>(
+                  Sign::Positive(),
+                  Sign::Positive(),
+                  DeduceSignReversingOrientation{})
+                  .Forget<OrthogonalMap>())
+          .Forget<Similarity>(),
+      /*focal=*/5 * Metre);
+
+  Planetarium::Parameters const parameters(
+      /*sphere_radius_multiplier=*/1,
+      /*angular_resolution=*/1e-3 * Radian,
+      /*field_of_view=*/90 * Degree);
+  Planetarium const planetarium(parameters,
+                                perspective,
+                                &mock_ephemeris_,
+                                &plotting_frame_,
+                                plotting_to_scaled_space_,
+                                plotting_to_scaled_space_displacement_);
+
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({2 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = Velocity<Barycentric>(),
+      .epoch = t0_};
+
+  std::vector<ScaledSpacePoint> points;
+  R3Element<double> render_anchor;
+  planetarium.PlotMethod4(
+      discrete_trajectory,
+      discrete_trajectory.front().time,
+      discrete_trajectory.back().time,
+      /*reverse=*/false,
+      [&points](ScaledSpacePoint const& p) { points.push_back(p); },
+      /*max_points=*/std::numeric_limits<int>::max(),
+      /*minimal_distance=*/nullptr,
+      Ephemeris<Barycentric>::SubsystemPlacement{/*subsystem=*/0, anchor},
+      &render_anchor);
+
+  // The vertices are camera-relative; translating them by the (exact)
+  // camera-to-centre displacement measures them against the ideal circle.
+  // The tightest budget is the sagitta of the sampling, ~5 cm; the double
+  // ULP of the interstellar distance is four orders of magnitude above the
+  // tolerance.
+  ASSERT_GT(points.size(), 10);
+  for (int i = 0; i < points.size(); ++i) {
+    Displacement<Navigation> const from_camera =
+        Displacement<Navigation>(R3Element<double>(points[i].x,
+                                                   points[i].y,
+                                                   points[i].z) *
+                                 (6000 * Metre));
+    Displacement<Navigation> const from_centre =
+        from_camera + (camera_position - circle_centre);
+    Length const radial_error =
+        Abs(Sqrt(Pow<2>(from_centre.coordinates().x) +
+                 Pow<2>(from_centre.coordinates().y)) - radius);
+    EXPECT_THAT(radial_error, Lt(1 * Metre)) << "vertex " << i;
+    EXPECT_THAT(Abs(from_centre.coordinates().z), Lt(1 * Metre))
+        << "vertex " << i;
+  }
+}
+
 // The render anchor returned by `PlotMethod4` is the camera position: the
 // float vertices then quantize at the ULP of their distance from the camera,
 // which is angularly sub-pixel wherever the camera looks.
@@ -549,7 +698,8 @@ TEST_F(PlanetariumTest, PlotMethod4CameraAnchor) {
                                 perspective_,
                                 &mock_ephemeris_,
                                 &plotting_frame_,
-                                plotting_to_scaled_space_);
+                                plotting_to_scaled_space_,
+                                plotting_to_scaled_space_displacement_);
 
   auto const plot = [&planetarium, &discrete_trajectory](
                         R3Element<double>* const anchor_out) {

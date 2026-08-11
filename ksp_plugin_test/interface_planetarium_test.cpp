@@ -64,7 +64,7 @@ TEST_F(InterfacePlanetariumTest, ConstructionDestruction) {
           Permutation<World, Navigation>(
               Permutation<World, Navigation>::CoordinatePermutation::YXZ)
               .Forget<OrthogonalMap>()).Forget<Similarity>()));
-  EXPECT_CALL(*plugin_, NewPlanetarium(_, _, _))
+  EXPECT_CALL(*plugin_, NewPlanetarium(_, _, _, _))
       .WillOnce(Return(ByMove(std::make_unique<MockPlanetarium>())));
 
   Planetarium const* planetarium =

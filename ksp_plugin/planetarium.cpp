@@ -8,10 +8,15 @@
 #include <vector>
 
 #include "base/algebra.hpp"
+#include "geometry/grassmann.hpp"
 #include "geometry/sign.hpp"
 #include "numerics/elementary_functions.hpp"
+#include "numerics/hermite3.hpp"
+#include "numerics/quadrature.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/similar_motion.hpp"
+#include "quantities/named_quantities.hpp"
+#include "quantities/si.hpp"
 
 namespace principia {
 namespace ksp_plugin {
@@ -19,10 +24,15 @@ namespace _planetarium {
 namespace internal {
 
 using namespace principia::base::_algebra;
+using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_sign;
 using namespace principia::numerics::_elementary_functions;
+using namespace principia::numerics::_hermite3;
+using namespace principia::numerics::_quadrature;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_similar_motion;
+using namespace principia::quantities::_named_quantities;
+using namespace principia::quantities::_si;
 
 namespace {
 constexpr int max_plot_method_2_steps = 10'000;
@@ -42,12 +52,16 @@ Planetarium::Planetarium(
     Perspective<Navigation, Camera> perspective,
     not_null<Ephemeris<Barycentric> const*> const ephemeris,
     not_null<PlottingFrame const*> const plotting_frame,
-    PlottingToScaledSpaceConversion plotting_to_scaled_space)
+    PlottingToScaledSpaceConversion plotting_to_scaled_space,
+    PlottingToScaledSpaceDisplacementConversion
+        plotting_to_scaled_space_displacement)
     : parameters_(parameters),
       perspective_(std::move(perspective)),
       ephemeris_(ephemeris),
       plotting_frame_(plotting_frame),
-      plotting_to_scaled_space_(std::move(plotting_to_scaled_space)) {}
+      plotting_to_scaled_space_(std::move(plotting_to_scaled_space)),
+      plotting_to_scaled_space_displacement_(
+          std::move(plotting_to_scaled_space_displacement)) {}
 
 Planetarium::PlottingToScaledSpaceConversion
 Planetarium::MakePlottingToScaledSpaceConversion(
@@ -63,6 +77,16 @@ Planetarium::MakePlottingToScaledSpaceConversion(
     return ((origin_offset +
              linear_map(plotted_point - Navigation::origin)) *
             inverse_scale_factor).coordinates();
+  };
+}
+
+Planetarium::PlottingToScaledSpaceDisplacementConversion
+Planetarium::MakePlottingToScaledSpaceDisplacementConversion(
+    Similarity<World, Navigation> const& world_to_plotting,
+    Inverse<Length> const& inverse_scale_factor) {
+  return [linear_map = world_to_plotting.Inverse().linear_map(),
+          inverse_scale_factor](Displacement<Navigation> const& displacement) {
+    return (linear_map(displacement) * inverse_scale_factor).coordinates();
   };
 }
 
@@ -326,6 +350,202 @@ void Planetarium::PlotMethod4(
       std::min({last->time, plotting_frame_->t_max(), t_max});
   PlotMethod4(trajectory, begin_time, last_time, reverse, add_point,
               max_points, /*minimal_distance=*/nullptr, placement, anchor_out);
+}
+
+void Planetarium::PlotMethod4Anchored(
+    Trajectory<Barycentric> const& trajectory,
+    Instant const& first_time,
+    Instant const& last_time,
+    bool const reverse,
+    std::function<void(ScaledSpacePoint const&)> const& add_point,
+    int const max_points,
+    Length* const minimal_distance,
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    R3Element<double>& anchor_out) const {
+  // Anchored plotting emits through the linear part of the conversion, which
+  // must therefore be given at construction.
+  CHECK(plotting_to_scaled_space_displacement_ != nullptr);
+  auto const final_time = reverse ? first_time : last_time;
+  auto previous_time = reverse ? last_time : first_time;
+
+  if (minimal_distance != nullptr) {
+    *minimal_distance = Infinity<Length>;
+  }
+
+  Sign const direction = reverse ? Sign::Negative() : Sign::Positive();
+  if (direction * (final_time - previous_time) <= Time{}) {
+    return;
+  }
+
+  Instant const t_ref = last_time;
+
+  // The affine-in-time conversion from the trajectory's placement to the
+  // plotting frame's, exact because it is folded at `t_ref` (see
+  // `TranslatedTrajectory`).  It is applied algebraically below rather than
+  // through a translated trajectory, whose evaluated positions would round at
+  // the magnitude of the offset for each vertex.
+  Displacement<Barycentric> offset;
+  Velocity<Barycentric> velocity_offset;
+  if (Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
+          plotting_frame_->placement();
+      placement != frame_placement) {
+    auto const conversion =
+        ephemeris_->placement_conversion(placement, frame_placement, t_ref);
+    offset = conversion.first;
+    velocity_offset = conversion.second;
+  }
+
+  // Everything at the magnitude of the distance to the plotting frame's
+  // origin is computed once here; only displacements appear per vertex.
+  Position<Barycentric> const q_ref = trajectory.EvaluatePosition(t_ref);
+  SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t_ref =
+      plotting_frame_->ToThisFrameAtTimeSimilarly(t_ref);
+  auto const& similarity_ref = to_plotting_frame_at_t_ref.similarity();
+  Position<Barycentric> const frame_origin_ref =
+      similarity_ref.Inverse()(Navigation::origin);
+  Displacement<Barycentric> const reference = (q_ref + offset) -
+                                              frame_origin_ref;
+  Displacement<Navigation> const reference_in_navigation =
+      similarity_ref.linear_map()(reference);
+  Position<Navigation> const nav_ref = Navigation::origin +
+                                       reference_in_navigation;
+  Displacement<Navigation> const camera_to_reference =
+      nav_ref - perspective_.camera();
+
+  anchor_out = plotting_to_scaled_space_(previous_time, perspective_.camera());
+
+  // Evaluates the trajectory point at `t` as a displacement from the camera,
+  // together with its velocity in the plotting frame.
+  auto const evaluate = [this, &offset, &q_ref, &reference,
+                         &reference_in_navigation, &frame_origin_ref,
+                         &camera_to_reference, t_ref, &trajectory,
+                         &velocity_offset](Instant const& t) {
+    auto const degrees_of_freedom = trajectory.EvaluateDegreesOfFreedom(t);
+    SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t =
+        plotting_frame_->ToThisFrameAtTimeSimilarly(t);
+    auto const& similarity = to_plotting_frame_at_t.similarity();
+    Displacement<Barycentric> const from_reference_in_barycentric =
+        (degrees_of_freedom.position() - q_ref) +
+        velocity_offset * (t - t_ref);
+    Displacement<Barycentric> const frame_origin_motion =
+        similarity.Inverse()(Navigation::origin) - frame_origin_ref;
+    // Exactly zero for an inertial frame, whose linear map does not change;
+    // for a rotating one this is the sweep of the reference, which rounds at
+    // the ULP of the reference distance per vertex — as the legacy path does
+    // — and is dwarfed by the arc the rotation sweeps at that distance.
+    Displacement<Navigation> const sweep =
+        similarity.linear_map()(reference) - reference_in_navigation;
+    Displacement<Navigation> const camera_relative =
+        camera_to_reference + sweep +
+        similarity.linear_map()(from_reference_in_barycentric -
+                                frame_origin_motion);
+    // The position of this degrees of freedom rounds at the magnitude of the
+    // offset, but it only enters the velocity through the angular motion of
+    // the frame, where its error is negligible.
+    Velocity<Navigation> const velocity =
+        to_plotting_frame_at_t(
+            DegreesOfFreedom<Barycentric>(
+                degrees_of_freedom.position() + offset +
+                    velocity_offset * (t - t_ref),
+                degrees_of_freedom.velocity() + velocity_offset)).velocity();
+    return std::make_pair(camera_relative, velocity);
+  };
+
+  // The proper motion of a point seen from the camera, as in `ProperMotion`
+  // but on camera-relative displacements.
+  auto const proper_motion = [](Displacement<Navigation> const& r,
+                                Velocity<Navigation> const& velocity) {
+    return Wedge(r, velocity) / r.Norm²() * Radian;
+  };
+
+  auto const [initial_camera_relative, initial_velocity] =
+      evaluate(previous_time);
+  Displacement<Navigation> previous_camera_relative = initial_camera_relative;
+  Vector<AngularFrequency, Navigation> previous_projected_velocity =
+      proper_motion(previous_camera_relative, initial_velocity) *
+      Normalize(previous_camera_relative);
+
+  Time Δt = final_time - previous_time;
+
+  add_point(ScaledSpacePoint::FromCoordinates(
+      plotting_to_scaled_space_displacement_(previous_camera_relative)));
+  int points_added = 1;
+
+  Instant t;
+  Angle rms_apparent_distance;
+  Displacement<Navigation> camera_relative;
+  Vector<AngularFrequency, Navigation> projected_velocity;
+  Square<Length> minimal_squared_distance = Infinity<Square<Length>>;
+
+  goto estimate_tan²_error;
+
+  while (points_added < max_points &&
+         direction * (previous_time - final_time) < Time{}) {
+    do {
+      // See `PlotMethod4` for the error analysis; this is the same stepping,
+      // on camera-relative displacements.
+      Δt *= 0.9 * Sqrt(parameters_.angular_resolution_ / rms_apparent_distance);
+    estimate_tan²_error:
+      t = previous_time + Δt;
+      if (t == previous_time) {
+        LOG(ERROR) << "At time " << t
+                   << ", step size is effectively zero.  Singularity or "
+                      "stiff system suspected.";
+        return;
+      }
+      if (direction * (t - final_time) > Time{}) {
+        t = final_time;
+        Δt = t - previous_time;
+      }
+
+      auto const evaluated = evaluate(t);
+      camera_relative = evaluated.first;
+      Velocity<Navigation> const& velocity = evaluated.second;
+
+      Velocity<Navigation> const linear_velocity =
+          (camera_relative - previous_camera_relative) / Δt;
+
+      projected_velocity = proper_motion(camera_relative, velocity) *
+                           Normalize(camera_relative);
+      auto const previous_projected_linear_velocity =
+          proper_motion(previous_camera_relative, linear_velocity) *
+          Normalize(previous_camera_relative);
+      auto const projected_linear_velocity =
+          proper_motion(camera_relative, linear_velocity) *
+          Normalize(camera_relative);
+
+      Hermite3<Vector<Angle, Navigation>, Instant> const error_approximation(
+          {previous_time, t},
+          {Vector<Angle, Navigation>{}, Vector<Angle, Navigation>{}},
+          {previous_projected_velocity - previous_projected_linear_velocity,
+           projected_velocity - projected_linear_velocity});
+
+      rms_apparent_distance =
+          Sqrt(GaussLegendre<4>(
+                   [&error_approximation](Instant const& time) {
+                     return error_approximation(time).Norm²();
+                   },
+                   previous_time,
+                   t) /
+               Δt);
+    } while (rms_apparent_distance > parameters_.angular_resolution_);
+
+    previous_time = t;
+    previous_camera_relative = camera_relative;
+    previous_projected_velocity = projected_velocity;
+
+    add_point(ScaledSpacePoint::FromCoordinates(
+        plotting_to_scaled_space_displacement_(camera_relative)));
+    ++points_added;
+
+    if (minimal_distance != nullptr) {
+      minimal_squared_distance =
+          std::min(minimal_squared_distance, camera_relative.Norm²());
+    }
+  }
+  if (minimal_distance != nullptr) {
+    *minimal_distance = Sqrt(minimal_squared_distance);
+  }
 }
 
 std::vector<Sphere<Navigation>> Planetarium::ComputePlottableSpheres(

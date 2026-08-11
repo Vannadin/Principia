@@ -167,6 +167,22 @@ void Planetarium::PlotMethod4(
     *anchor_out = R3Element<double>{};
   }
   if constexpr (std::is_same_v<Frame, Barycentric>) {
+    if (anchor_out != nullptr && ephemeris_->number_of_subsystems() > 1) {
+      // An anchored plot is emitted as displacements from the camera: at
+      // interstellar distances an absolute position formed per vertex rounds
+      // at the double ULP of the distance to the plotting frame's origin,
+      // which deforms the plot; see `PlotMethod4Anchored`.
+      PlotMethod4Anchored(trajectory,
+                          first_time,
+                          last_time,
+                          reverse,
+                          add_point,
+                          max_points,
+                          minimal_distance,
+                          placement,
+                          *anchor_out);
+      return;
+    }
     Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
         plotting_frame_->placement();
     // The conversion into the plotting frame's own placement (affine in time,

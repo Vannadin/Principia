@@ -106,11 +106,16 @@ Planetarium* __cdecl principia__PlanetariumCreate(
           world_to_plotting_affine_map,
           FromXYZ<Position<World>>(scaled_space_origin),
           inverse_scale_factor * (1 / Metre));
+  auto const plotting_to_scaled_space_displacement =
+      Planetarium::MakePlottingToScaledSpaceDisplacementConversion(
+          world_to_plotting_affine_map,
+          inverse_scale_factor * (1 / Metre));
   return m.Return(
       plugin->NewPlanetarium(
           parameters,
           perspective,
-          plotting_to_scaled_space).release());
+          plotting_to_scaled_space,
+          plotting_to_scaled_space_displacement).release());
 }
 
 void __cdecl principia__PlanetariumDelete(

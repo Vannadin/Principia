@@ -80,6 +80,12 @@ class Planetarium {
       std::function<R3Element<double>(Instant const&,
                                       Position<Navigation> const&)>;
 
+  // The linear part of the above, for displacements.  An anchored plot is
+  // emitted through this map so that no absolute position at the magnitude of
+  // an interstellar distance is ever formed per vertex.
+  using PlottingToScaledSpaceDisplacementConversion =
+      std::function<R3Element<double>(Displacement<Navigation> const&)>;
+
   // The conversion used in production.  It never forms the world position of a
   // plotted point: at interstellar distances that position rounds to the ULP of
   // a star's distance, independently for each point, which is a jitter of the
@@ -89,13 +95,24 @@ class Planetarium {
       Position<World> const& scaled_space_origin,
       Inverse<Length> const& inverse_scale_factor);
 
+  // The linear part of the conversion above.
+  static PlottingToScaledSpaceDisplacementConversion
+  MakePlottingToScaledSpaceDisplacementConversion(
+      Similarity<World, Navigation> const& world_to_plotting,
+      Inverse<Length> const& inverse_scale_factor);
+
   // TODO(phl): All this Navigation is weird.  Should it be named Plotting?
   // In particular Navigation vs. NavigationFrame is a mess.
+  // `plotting_to_scaled_space_displacement` must be the linear part of
+  // `plotting_to_scaled_space`; it may only be omitted if no anchored plot is
+  // ever requested.
   Planetarium(Parameters const& parameters,
               Perspective<Navigation, Camera> perspective,
               not_null<Ephemeris<Barycentric> const*> ephemeris,
               not_null<PlottingFrame const*> plotting_frame,
-              PlottingToScaledSpaceConversion plotting_to_scaled_space);
+              PlottingToScaledSpaceConversion plotting_to_scaled_space,
+              PlottingToScaledSpaceDisplacementConversion
+                  plotting_to_scaled_space_displacement = nullptr);
 
   // NOTE: unlike `PlotMethod4`, methods 0–3 feed the trajectory to the
   // plotting frame without any subsystem conversion: they must only be given
@@ -203,6 +220,26 @@ class Planetarium {
       R3Element<double>* anchor_out = nullptr) const;
 
  private:
+  // The displacement-native variant of `PlotMethod4`, used for an anchored
+  // plot.  Everything at the magnitude of the distance to the plotting
+  // frame's origin is folded into per-plot constants, whose rounding — a few
+  // ULPs of that distance — displaces the plot as a whole without deforming
+  // it.  For an inertial plotting frame no such magnitude then survives per
+  // vertex, so the plot does not quantize at the double ULP of that distance;
+  // for a rotating one the sweep of the reference still rounds per vertex at
+  // that ULP, which is not a regression (the legacy path rounds identically)
+  // and is dwarfed by the arc the frame's rotation sweeps at that distance.
+  void PlotMethod4Anchored(
+      Trajectory<Barycentric> const& trajectory,
+      Instant const& first_time,
+      Instant const& last_time,
+      bool reverse,
+      std::function<void(ScaledSpacePoint const&)> const& add_point,
+      int max_points,
+      Length* minimal_distance,
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+      R3Element<double>& anchor_out) const;
+
   // Computes the coordinates of the spheres that represent the `ephemeris_`
   // bodies.  These coordinates are in the `plotting_frame_` at time `now`.
   std::vector<Sphere<Navigation>> ComputePlottableSpheres(
@@ -226,6 +263,8 @@ class Planetarium {
   not_null<Ephemeris<Barycentric> const*> const ephemeris_;
   not_null<PlottingFrame const*> const plotting_frame_;
   PlottingToScaledSpaceConversion plotting_to_scaled_space_;
+  PlottingToScaledSpaceDisplacementConversion
+      plotting_to_scaled_space_displacement_;
 };
 
 inline ScaledSpacePoint ScaledSpacePoint::FromCoordinates(

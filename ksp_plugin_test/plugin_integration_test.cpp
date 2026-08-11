@@ -3807,6 +3807,13 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
                   .coordinates();
           reference.push_back(coordinates);
           return coordinates;
+        },
+        [&reference](Displacement<Navigation> const& displacement) {
+          constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+          auto const coordinates =
+              (displacement * inverse_scale_factor).coordinates();
+          reference.push_back(coordinates);
+          return coordinates;
         });
     std::vector<ScaledSpacePoint> vertices;
     R3Element<double> anchor;
@@ -3824,7 +3831,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
         &anchor);
     ASSERT_GT(vertices.size(), 3);
     // The anchor is the camera position, exactly; its conversion is recorded
-    // as the first `reference` entry, ahead of the vertices.
+    // as the first `reference` entry, ahead of the camera-relative vertex
+    // displacements recorded by the linear conversion.
     ASSERT_EQ(reference.size(), vertices.size() + 1);
     EXPECT_EQ(anchor.x, reference.front().x);
     EXPECT_EQ(anchor.y, reference.front().y);
@@ -3841,9 +3849,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
                                      vertices[i].y,
                                      vertices[i].z);
       double const shape_error_in_metres =
-          (vertex - (reference[i] - anchor)).Norm() * 6000;
+          (vertex - reference[i]).Norm() * 6000;
       double const distance_from_camera_in_metres =
-          (reference[i] - anchor).Norm() * 6000;
+          reference[i].Norm() * 6000;
       EXPECT_LE(shape_error_in_metres,
                 1e-3 + 1.5e-7 * distance_from_camera_in_metres)
           << "origin at " << scaled_space_origin << ", vertex " << i;
@@ -3942,7 +3950,10 @@ TEST_F(PluginIntegrationTestWithoutPlugin, PlotMethod4StockVerticesUnchanged) {
                 .coordinates();
         reference.push_back(coordinates);
         return coordinates;
-      });
+      },
+      // A stock installation never plots anchored, so the linear conversion
+      // is not needed: the legacy path must not touch it.
+      /*plotting_to_scaled_space_displacement=*/nullptr);
   std::vector<ScaledSpacePoint> vertices;
   R3Element<double> anchor(1, 1, 1);
   planetarium->PlotMethod4(
@@ -4427,6 +4438,13 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
                   .coordinates();
           reference.push_back(coordinates);
           return coordinates;
+        },
+        [&reference](Displacement<Navigation> const& displacement) {
+          constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+          auto const coordinates =
+              (displacement * inverse_scale_factor).coordinates();
+          reference.push_back(coordinates);
+          return coordinates;
         });
     std::vector<ScaledSpacePoint> vertices;
     R3Element<double> anchor;
@@ -4466,9 +4484,9 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
                                      vertices[i].y,
                                      vertices[i].z);
       double const shape_error_in_metres =
-          (vertex - (reference[i] - anchor)).Norm() * 6000;
+          (vertex - reference[i]).Norm() * 6000;
       double const distance_from_camera_in_metres =
-          (reference[i] - anchor).Norm() * 6000;
+          reference[i].Norm() * 6000;
       EXPECT_LE(shape_error_in_metres,
                 1e-3 + 1.5e-7 * distance_from_camera_in_metres)
           << "vertex " << i;
