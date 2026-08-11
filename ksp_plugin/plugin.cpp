@@ -108,6 +108,12 @@ constexpr Length subsystem_clustering_threshold = 1e14 * Metre;
 constexpr Acceleration far_field_damping_floor =
     1e-12 * Metre / Pow<2>(Second);
 
+// The floor of the navigation state's void report.  Unlike the damping floor
+// above, which is about our truncation of the far field, this is a claim about
+// the physics — gravity is negligible here — so it must not move when the
+// truncation is tuned.
+constexpr Acceleration void_readout_floor = 1e-12 * Metre / Pow<2>(Second);
+
 Length const& MaxCollisionError() {
   static Length const max_collision_error = []() {
     std::string_view const name = "max_collision_error";
@@ -1275,9 +1281,10 @@ Plugin::NavigationState Plugin::VesselNavigationState(
   };
 
   NavigationState state;
-  state.in_void = ephemeris_->FarFieldIsZero(vessel_dof.position(),
-                                             vessel_subsystem,
-                                             current_time_);
+  state.in_void = ephemeris_->FarFieldIsBelow(void_readout_floor,
+                                              vessel_dof.position(),
+                                              vessel_subsystem,
+                                              current_time_);
   state.nearest_star_distance = Infinity<Length>;
   for (int s = 0; s < ephemeris_->number_of_subsystems(); ++s) {
     // The subsystem's primary — its heaviest body — is the star of the

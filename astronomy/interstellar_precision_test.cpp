@@ -642,6 +642,16 @@ TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
   EXPECT_OK(undamped->Prolong(t0 + Period() / 10));
   EXPECT_FALSE(undamped->FarFieldIsZero(mid_void, /*subsystem=*/0, t0));
 
+  // The player-facing report has a floor of its own: at the damping's floor it
+  // agrees with the cutoff, and it does not move with it — a report at the
+  // actual pull of the stars in the middle of the void still sees them.
+  EXPECT_TRUE(damped->FarFieldIsBelow(
+      far_field_damping_floor, mid_void, /*subsystem=*/0, t0));
+  EXPECT_FALSE(damped->FarFieldIsBelow(
+      far_field_damping_floor, near_star_a, /*subsystem=*/0, t0));
+  EXPECT_FALSE(damped->FarFieldIsBelow(
+      1e-19 * Metre / Pow<2>(Second), mid_void, /*subsystem=*/0, t0));
+
   // The anchor is adopted at the probe, moving with it; the anchored
   // coordinates start small and force-free coasting keeps them exactly there.
   Displacement<ICRS> const anchored_q₀(
