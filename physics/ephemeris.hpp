@@ -214,15 +214,27 @@ class Ephemeris {
   // represented as given.  If `far_field_damping_floor` is strictly positive,
   // the point-mass potential of each body is damped to exactly zero (see
   // `FarFieldDamping`) beyond the distance where its gravitational
-  // acceleration falls below that floor; this only affects the computations
-  // on massless bodies, not the motion of the massive bodies.
+  // acceleration falls below that floor; this cuts both the field seen by
+  // massless bodies and the massive-massive interactions, whose pair
+  // threshold is the farther of the two (see `PairFarFieldDamping`).
+  // If `far_field_damping_epsilon` is strictly positive the massive-massive
+  // cutoff is relative instead: the interaction of a pair is damped to zero
+  // where it falls below `far_field_damping_epsilon` times the characteristic
+  // central acceleration of the body it acts on, and the floor keeps cutting
+  // the field seen by massless bodies.  The
+  // characteristic accelerations are computed from `initial_state` unless
+  // given, in which case they are used verbatim (this is how a deserialized
+  // ephemeris keeps its physics across a save-load cycle).
   Ephemeris(std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies,
             std::vector<DegreesOfFreedom<Frame>> const& initial_state,
             Instant const& initial_time,
             AccuracyParameters const& accuracy_parameters,
             FixedStepParameters fixed_step_parameters,
             std::vector<int> const& subsystems = {},
-            Acceleration const& far_field_damping_floor = {});
+            Acceleration const& far_field_damping_floor = {},
+            double far_field_damping_epsilon = 0,
+            std::vector<Acceleration> const& characteristic_accelerations =
+                {});
 
   virtual ~Ephemeris();
 
@@ -559,14 +571,28 @@ class Ephemeris {
   virtual Instant t_max_locked() const REQUIRES_SHARED(lock_);
 
   // Returns the far-field damping applicable to the pair of massive bodies at
-  // indices `b1` and `b2` in `bodies_`: the one, of the dampings of the two
-  // bodies, whose outer threshold is farther.  Damping the pair as a whole (a
-  // single σ applied to the actions of both bodies) preserves Newton's third
-  // law; using the farther threshold ensures that a small body keeps feeling
-  // a large one beyond its own threshold.  Requires `far_field_damping_` to
-  // be non-empty.
+  // indices `b1` and `b2` in `bodies_`.  With an absolute cutoff this is the
+  // one, of the dampings of the two bodies, whose outer threshold is farther;
+  // with a relative cutoff it is the pair's own damping, whose threshold is
+  // where the interaction falls below `far_field_damping_epsilon_` times the
+  // characteristic acceleration of the body it acts on, whichever direction
+  // survives longer.  Either way a single σ is applied to the actions of both
+  // bodies, which preserves Newton's third law.  Requires
+  // `far_field_damping_` to be non-empty.
   FarFieldDamping const& PairFarFieldDamping(std::size_t b1,
                                              std::size_t b2) const;
+
+  // Fills `pair_far_field_damping_` from `characteristic_acceleration_` and
+  // `far_field_damping_epsilon_`.
+  void BuildPairFarFieldDamping();
+
+  // The characteristic central acceleration of each body: the pull of its
+  // dominant attractor, taken at the apoapsis of the osculating orbit around
+  // it; zero (= exempt) for a body unbound from its dominant attractor.
+  // Parallel to `bodies`.
+  static std::vector<Acceleration> ComputeCharacteristicAccelerations(
+      std::vector<not_null<std::unique_ptr<MassiveBody const>>> const& bodies,
+      std::vector<DegreesOfFreedom<Frame>> const& initial_state);
 
   // Computes the Jacobian of the acceleration field between one body, `body1`
   // (with index `b1` in the `positions` and `jacobians` arrays) and the bodies
@@ -878,6 +904,20 @@ class Ephemeris {
   // The far-field damping of each body, parallel to `bodies_`.  Empty if the
   // far field is not damped.
   std::vector<FarFieldDamping> far_field_damping_;
+
+  // The relative cutoff given at construction; zero if the massive-massive
+  // cutoff is absolute.
+  double far_field_damping_epsilon_ = 0;
+
+  // The characteristic central acceleration each body is held against,
+  // parallel to `bodies_`; a zero entry exempts the body from the relative
+  // cutoff (an unbound body has no apoapsis to characterize it).  Empty
+  // unless the cutoff is relative.
+  std::vector<Acceleration> characteristic_acceleration_;
+
+  // The damping of each pair of bodies, indexed by `b1 * bodies_.size() + b2`.
+  // Empty unless the cutoff is relative.
+  std::vector<FarFieldDamping> pair_far_field_damping_;
 
   not_null<
       std::unique_ptr<Checkpointer<serialization::Ephemeris>>> checkpointer_;

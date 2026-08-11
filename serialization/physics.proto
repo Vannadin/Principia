@@ -217,6 +217,14 @@ message Ephemeris {
   // the local origin of the subsystem.  Added in NearStars.
   repeated Pair subsystem_barycentre = 17;
   optional Point subsystem_barycentre_time = 18;  // Added in NearStars.
+  // Absent unless the massive-massive cutoff is relative; see
+  // `PairFarFieldDamping`.  Added in NearStars.
+  optional double far_field_damping_epsilon = 19;
+  // One per body, parallel to `body`, when the cutoff is relative: the
+  // characteristic central acceleration each body is held against.  Written
+  // rather than recomputed so that the physics does not drift across a
+  // save-load cycle.  Added in NearStars.
+  repeated Quantity characteristic_acceleration = 20;
 
   // Pre-Fatou.
   reserved 11;

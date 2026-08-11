@@ -144,6 +144,59 @@ Ephemeris<Frame>::AccuracyParameters::ReadFromMessage(
       message.geopotential_tolerance());
 }
 
+// Taking the apoapsis errs on the side of keeping interactions: an eccentric
+// body is held against the weakest pull it ever feels.
+template<typename Frame>
+std::vector<Acceleration> Ephemeris<Frame>::ComputeCharacteristicAccelerations(
+    std::vector<not_null<std::unique_ptr<MassiveBody const>>> const& bodies,
+    std::vector<DegreesOfFreedom<Frame>> const& initial_state) {
+  std::vector<Acceleration> characteristic_accelerations(bodies.size());
+  for (int j = 0; j < bodies.size(); ++j) {
+    std::optional<int> dominant;
+    Acceleration strongest_pull;
+    for (int i = 0; i < bodies.size(); ++i) {
+      if (i == j) {
+        continue;
+      }
+      Square<Length> const d² = (initial_state[i].position() -
+                                 initial_state[j].position()).Norm²();
+      if (d² == Square<Length>{}) {
+        // Coincident bodies are alternates of one another, not attractors.
+        continue;
+      }
+      Acceleration const pull = bodies[i]->gravitational_parameter() / d²;
+      if (pull > strongest_pull) {
+        strongest_pull = pull;
+        dominant = i;
+      }
+    }
+    if (!dominant.has_value()) {
+      continue;
+    }
+    GravitationalParameter const μ =
+        bodies[*dominant]->gravitational_parameter() +
+        bodies[j]->gravitational_parameter();
+    Displacement<Frame> const r =
+        initial_state[j].position() - initial_state[*dominant].position();
+    Velocity<Frame> const v =
+        initial_state[j].velocity() - initial_state[*dominant].velocity();
+    SpecificEnergy const specific_energy = v.Norm²() / 2 - μ / r.Norm();
+    if (specific_energy >= SpecificEnergy{}) {
+      continue;
+    }
+    Length const semi_major_axis = -μ / (2 * specific_energy);
+    // h² = r²v² − (r·v)², the square of the specific angular momentum.
+    auto const h² = r.Norm²() * v.Norm²() - Pow<2>(InnerProduct(r, v));
+    double const eccentricity =
+        Sqrt(std::max(0.0, 1 - h² / (μ * semi_major_axis)));
+    Length const apoapsis_distance = semi_major_axis * (1 + eccentricity);
+    characteristic_accelerations[j] =
+        bodies[*dominant]->gravitational_parameter() /
+        Pow<2>(apoapsis_distance);
+  }
+  return characteristic_accelerations;
+}
+
 template<typename Frame>
 Ephemeris<Frame>::Ephemeris(
     std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies,
@@ -152,10 +205,13 @@ Ephemeris<Frame>::Ephemeris(
     AccuracyParameters const& accuracy_parameters,
     FixedStepParameters fixed_step_parameters,
     std::vector<int> const& subsystems,
-    Acceleration const& far_field_damping_floor)
+    Acceleration const& far_field_damping_floor,
+    double const far_field_damping_epsilon,
+    std::vector<Acceleration> const& characteristic_accelerations)
     : accuracy_parameters_(accuracy_parameters),
       fixed_step_parameters_(std::move(fixed_step_parameters)),
       far_field_damping_floor_(far_field_damping_floor),
+      far_field_damping_epsilon_(far_field_damping_epsilon),
       checkpointer_(
           make_not_null_unique<Checkpointer<serialization::Ephemeris>>(
               MakeCheckpointerWriter(),
@@ -168,6 +224,27 @@ Ephemeris<Frame>::Ephemeris(
       reanimator_clientele_(/*default_key=*/InfiniteFuture) {
   CHECK(!bodies.empty());
   CHECK_EQ(bodies.size(), initial_state.size());
+
+  // A body's dominant attractor sits at 1/√ε of its pair's outer threshold,
+  // and the sigmoid shell starts at a third of it: ε must stay below 1/9 or
+  // the strongest pull a body feels would itself be damped.
+  CHECK(far_field_damping_epsilon_ == 0 ||
+        (IsFinite(far_field_damping_epsilon_) &&
+         far_field_damping_epsilon_ > 0 &&
+         far_field_damping_epsilon_ < 1.0 / 9.0))
+      << far_field_damping_epsilon_;
+  if (far_field_damping_epsilon_ > 0) {
+    // The relative cutoff refines the massive-massive pair cutoff only; the
+    // massless bodies and the void readout stay on the absolute floor.
+    CHECK_GT(far_field_damping_floor_, Acceleration{});
+    if (characteristic_accelerations.empty()) {
+      characteristic_acceleration_ =
+          ComputeCharacteristicAccelerations(bodies, initial_state);
+    } else {
+      CHECK_EQ(characteristic_accelerations.size(), bodies.size());
+      characteristic_acceleration_ = characteristic_accelerations;
+    }
+  }
 
   // The local origin of each subsystem is anchored at the initial position of
   // the first body of that subsystem.
@@ -297,6 +374,18 @@ Ephemeris<Frame>::Ephemeris(
       far_field_damping_.emplace_back(
           Sqrt(body->gravitational_parameter() / far_field_damping_floor_));
     }
+  }
+
+  if (far_field_damping_epsilon_ > 0) {
+    // `characteristic_acceleration_` was computed parallel to `bodies`;
+    // reorder it to parallel `bodies_`.
+    std::vector<Acceleration> reordered(bodies_.size());
+    for (int i = 0; i < bodies_.size(); ++i) {
+      reordered[i] = characteristic_acceleration_[
+          FindOrDie(unowned_bodies_indices_, bodies_[i].get())];
+    }
+    characteristic_acceleration_ = std::move(reordered);
+    BuildPairFarFieldDamping();
   }
 
   absl::ReaderMutexLock l(&lock_);  // For locking checks.
@@ -485,8 +574,9 @@ template<typename Frame>
 bool Ephemeris<Frame>::FarFieldIsZero(Position<Frame> const& position,
                                       int const subsystem,
                                       Instant const& t) const {
-  // The same thresholds as the damping, so that this test and the cutoff agree
-  // bit for bit.
+  // The same thresholds as the damping of the field seen by massless bodies,
+  // so that this test and that cutoff agree bit for bit.  (The
+  // massive-massive cutoff may be relative, see `PairFarFieldDamping`.)
   return FarFieldIsBelow(
       [this](std::size_t const b) {
         return far_field_damping_[b].outer_threshold²();
@@ -1303,6 +1393,13 @@ void Ephemeris<Frame>::WriteToMessage(
     far_field_damping_floor_.WriteToMessage(
         message->mutable_far_field_damping_floor());
   }
+  if (far_field_damping_epsilon_ > 0) {
+    message->set_far_field_damping_epsilon(far_field_damping_epsilon_);
+    for (auto const& unowned_body : unowned_bodies_) {
+      characteristic_acceleration_[bodies_indices_.at(unowned_body)]
+          .WriteToMessage(message->add_characteristic_acceleration());
+    }
+  }
   LOG(INFO) << NAMED(message->SpaceUsedLong());
   LOG(INFO) << NAMED(message->ByteSizeLong());
 }
@@ -1354,6 +1451,28 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
         Acceleration::ReadFromMessage(message.far_field_damping_floor());
   }
 
+  // The characteristic accelerations must come from the message: recomputing
+  // them from the (restored, evolved) state would silently change the physics
+  // across a save-load cycle.
+  CHECK_EQ(message.has_far_field_damping_epsilon(),
+           message.characteristic_acceleration_size() > 0);
+  double const far_field_damping_epsilon =
+      message.has_far_field_damping_epsilon()
+          ? message.far_field_damping_epsilon()
+          : 0;
+  std::vector<Acceleration> characteristic_accelerations;
+  characteristic_accelerations.reserve(
+      message.characteristic_acceleration_size());
+  for (auto const& characteristic_acceleration :
+       message.characteristic_acceleration()) {
+    Acceleration const a =
+        Acceleration::ReadFromMessage(characteristic_acceleration);
+    // A non-finite or negative value would flow into the thresholds as a NaN
+    // that `std::max` silently drops; a corrupt save must fail here instead.
+    CHECK(IsFinite(a) && a >= Acceleration{}) << a;
+    characteristic_accelerations.push_back(a);
+  }
+
   // Dummy initial state and time.  We'll overwrite them later.
   std::vector<DegreesOfFreedom<Frame>> const initial_state(
       bodies.size(),
@@ -1366,7 +1485,9 @@ not_null<std::unique_ptr<Ephemeris<Frame>>> Ephemeris<Frame>::ReadFromMessage(
                        accuracy_parameters,
                        fixed_step_parameters,
                        subsystems,
-                       far_field_damping_floor);
+                       far_field_damping_floor,
+                       far_field_damping_epsilon,
+                       characteristic_accelerations);
 
   // The origin offsets and barycentres computed by the constructor are wrong
   // because the initial state is a dummy; overwrite them from the message.
@@ -1726,11 +1847,52 @@ template<typename Frame>
 FarFieldDamping const& Ephemeris<Frame>::PairFarFieldDamping(
     std::size_t const b1,
     std::size_t const b2) const {
+  if (!pair_far_field_damping_.empty()) {
+    return pair_far_field_damping_[b1 * bodies_.size() + b2];
+  }
   FarFieldDamping const& damping1 = far_field_damping_[b1];
   FarFieldDamping const& damping2 = far_field_damping_[b2];
   return damping1.outer_threshold²() >= damping2.outer_threshold²()
              ? damping1
              : damping2;
+}
+
+template<typename Frame>
+void Ephemeris<Frame>::BuildPairFarFieldDamping() {
+  std::int64_t const n = bodies_.size();
+  pair_far_field_damping_.resize(n * n);
+  for (std::int64_t b1 = 0; b1 < n; ++b1) {
+    for (std::int64_t b2 = b1 + 1; b2 < n; ++b2) {
+      Acceleration const& a1 = characteristic_acceleration_[b1];
+      Acceleration const& a2 = characteristic_acceleration_[b2];
+      if (a1 == Acceleration{} || a2 == Acceleration{}) {
+        // An exempted body is never cut off from anything: the default
+        // damping is the identity.
+        continue;
+      }
+      // The pair is damped to zero where the interaction falls below
+      // `far_field_damping_epsilon_` times the characteristic acceleration
+      // of the body it acts on, in whichever direction survives longer; a
+      // consequence is that no body is ever cut off from its dominant
+      // attractor, by a margin of 1/ε in acceleration (1/√ε in distance),
+      // taken on the epoch osculating orbit.
+      Square<Length> const outer_threshold² =
+          std::max(bodies_[b1]->gravitational_parameter() / a2,
+                   bodies_[b2]->gravitational_parameter() / a1) /
+          far_field_damping_epsilon_;
+      if (!(outer_threshold² > Square<Length>{}) ||
+          !IsFinite(outer_threshold²)) {
+        // The threshold can overflow for a nearly-unbound body; not cutting
+        // is the conservative direction, and a NaN must not reach the
+        // sigmoid, whose comparisons would silently ignore it.
+        continue;
+      }
+      pair_far_field_damping_[b1 * n + b2] =
+          FarFieldDamping(Sqrt(outer_threshold²));
+      pair_far_field_damping_[b2 * n + b1] =
+          pair_far_field_damping_[b1 * n + b2];
+    }
+  }
 }
 
 template<typename Frame>

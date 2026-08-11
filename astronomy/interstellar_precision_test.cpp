@@ -26,7 +26,9 @@
 #include "physics/discrete_trajectory.hpp"
 #include "physics/ephemeris.hpp"
 #include "physics/massive_body.hpp"
+#include "physics/oblate_body.hpp"
 #include "physics/rigid_motion.hpp"
+#include "physics/rotating_body.hpp"
 #include "physics/sector.hpp"
 #include "physics/solar_system.hpp"
 #include "quantities/astronomy.hpp"
@@ -65,7 +67,9 @@ using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
+using namespace principia::physics::_oblate_body;
 using namespace principia::physics::_rigid_motion;
+using namespace principia::physics::_rotating_body;
 using namespace principia::physics::_sector;
 using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_astronomy;
@@ -103,12 +107,15 @@ class InterstellarPrecisionTest : public ::testing::Test {
   // Constructs an ephemeris containing the two systems.  If `subsystems` is
   // empty all the positions are represented in a single frame; otherwise each
   // system is represented relative to its own local origin.  If
-  // `far_field_damping_floor` is strictly positive, the far field seen by
-  // massless bodies is damped (see `FarFieldDamping`).
+  // `far_field_damping_floor` is strictly positive, the far field is damped
+  // (see `FarFieldDamping`), both as seen by massless bodies and between the
+  // massive bodies; if `far_field_damping_epsilon` is strictly positive as
+  // well, the massive-massive cutoff is relative instead.
   static not_null<std::unique_ptr<Ephemeris<ICRS>>> MakeEphemeris(
       std::vector<int> const& subsystems,
       Acceleration const& far_field_damping_floor = {},
-      Velocity<ICRS> const& remote_system_velocity = {}) {
+      Velocity<ICRS> const& remote_system_velocity = {},
+      double const far_field_damping_epsilon = 0) {
     Instant const t0;
     Displacement<ICRS> const to_remote_system = ToRemoteSystem();
 
@@ -155,7 +162,8 @@ class InterstellarPrecisionTest : public ::testing::Test {
                 Ephemeris<ICRS>::NewtonianMotionEquation>(),
             /*step=*/Period() / 1000),
         subsystems,
-        far_field_damping_floor);
+        far_field_damping_floor,
+        far_field_damping_epsilon);
   }
 
   // Evolves a massless probe in a circular orbit around each star for 10 years
@@ -1021,6 +1029,332 @@ TEST_F(InterstellarPrecisionTest, Serialization) {
   serialization::Ephemeris second_message;
   ephemeris_read->WriteToMessage(&second_message);
   EXPECT_THAT(message, EqualsProto(second_message));
+}
+
+// With a relative cutoff, a pair is damped to zero where its interaction
+// falls below ε times the characteristic central acceleration of the body it
+// acts on.  A feather-weight perturber that the absolute floor keeps is cut,
+// and nothing else about the victim's acceleration changes.
+TEST_F(InterstellarPrecisionTest, RelativeFarFieldCutoff) {
+  Instant const t0;
+  Acceleration const floor = 1e-12 * Metre / Pow<2>(Second);
+  double const ε = 1e-8;
+
+  // A star, a tightly-bound victim, and a perturber whose pull on the victim,
+  // ~1e-11 m/s², sits between the absolute floor and ε times the victim's
+  // central acceleration of ~4e-2 m/s².
+  auto const make_three_body_ephemeris =
+      [&floor, &t0](double const epsilon, bool const with_perturber) {
+        std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+        bodies.push_back(make_not_null_unique<MassiveBody>(
+            MassiveBody::Parameters("star", μ_star)));
+        bodies.push_back(make_not_null_unique<MassiveBody>(
+            MassiveBody::Parameters("victim",
+                                    1 * Pow<3>(Metre) / Pow<2>(Second))));
+        std::vector<DegreesOfFreedom<ICRS>> initial_state{
+            {ICRS::origin, ICRS::unmoving},
+            {ICRS::origin +
+                 Displacement<ICRS>({1e8 * Metre, 0 * Metre, 0 * Metre}),
+             Velocity<ICRS>({0 * Metre / Second,
+                             Sqrt(μ_star / (1e8 * Metre)),
+                             0 * Metre / Second})}};
+        if (with_perturber) {
+          bodies.push_back(make_not_null_unique<MassiveBody>(
+              MassiveBody::Parameters("perturber", 1e-6 * μ_star)));
+          initial_state.push_back(
+              {ICRS::origin +
+                   Displacement<ICRS>({6.4e9 * Metre, 0 * Metre, 0 * Metre}),
+               Velocity<ICRS>({0 * Metre / Second,
+                               Sqrt(μ_star / (6.4e9 * Metre)),
+                               0 * Metre / Second})});
+        }
+        return make_not_null_unique<Ephemeris<ICRS>>(
+            std::move(bodies),
+            initial_state,
+            t0,
+            Ephemeris<ICRS>::AccuracyParameters(
+                /*fitting_tolerance=*/0.1 * Milli(Metre),
+                /*geopotential_tolerance=*/0x1p-24),
+            Ephemeris<ICRS>::FixedStepParameters(
+                SymmetricLinearMultistepIntegrator<
+                    QuinlanTremaine1990Order12,
+                    Ephemeris<ICRS>::NewtonianMotionEquation>(),
+                /*step=*/10 * Second),
+            /*subsystems=*/std::vector<int>{},
+            floor,
+            epsilon);
+      };
+
+  auto const relative = make_three_body_ephemeris(ε, /*with_perturber=*/true);
+  auto const absolute = make_three_body_ephemeris(0, /*with_perturber=*/true);
+  auto const two_body = make_three_body_ephemeris(ε, /*with_perturber=*/false);
+  EXPECT_OK(relative->Prolong(t0 + 1000 * Second));
+  EXPECT_OK(absolute->Prolong(t0 + 1000 * Second));
+  EXPECT_OK(two_body->Prolong(t0 + 1000 * Second));
+  auto const& victim = relative->bodies()[1];
+
+  // The relative cutoff removes the perturber and only the perturber: the
+  // acceleration matches an ephemeris where it does not exist, to within the
+  // Chebyshev fitting noise of the positions, which is two decades below the
+  // perturber's ~1e-11 m/s² pull.
+  EXPECT_THAT((two_body->ComputeGravitationalAccelerationOnMassiveBody(
+                   two_body->bodies()[1], t0) -
+               relative->ComputeGravitationalAccelerationOnMassiveBody(
+                   victim, t0)).Norm(),
+              Lt(1e-13 * Metre / Pow<2>(Second)));
+
+  // The absolute floor keeps the perturber, whose pull is above it.
+  Vector<Acceleration, ICRS> const perturber_term =
+      absolute->ComputeGravitationalAccelerationOnMassiveBody(
+          absolute->bodies()[1], t0) -
+      relative->ComputeGravitationalAccelerationOnMassiveBody(victim, t0);
+  EXPECT_THAT(perturber_term.Norm(),
+              AllOf(Gt(9.5e-12 * Metre / Pow<2>(Second)),
+                    Lt(1.05e-11 * Metre / Pow<2>(Second))));
+}
+
+// The characteristic acceleration is taken at the apoapsis, and the sigmoid
+// shell of a relative pair threshold behaves like the absolute one: a victim
+// on an eccentric orbit meets a perturber sitting on its shell, whose damped
+// pull carries the factor σ − σ′r ≈ 2.3 at mid-shell.  Holding the
+// contribution in a band around that value pins three things at once: the
+// apoapsis (a periapsis-based threshold cuts this pair entirely), the max()
+// symmetrization (the min side would also cut it), and the σ path of the
+// relative table.
+TEST_F(InterstellarPrecisionTest, RelativeFarFieldShellAndApoapsis) {
+  Instant const t0;
+  Acceleration const floor = 1e-12 * Metre / Pow<2>(Second);
+  double const ε = 1e-8;
+
+  // The victim starts at the apoapsis of an e = 0.36 orbit (tangential
+  // velocity at 0.8 of circular), so its apoapsis distance is exactly 1e8 m
+  // and its characteristic acceleration is exactly μ_star / (1e8 m)².  The
+  // perturber sits 7.06e8 m away, at x ≈ 0.56 of the pair's sigmoid shell,
+  // which spans [3.33e8 m, 1e9 m].
+  auto const make = [&floor, &t0](double const epsilon,
+                                  bool const with_perturber) {
+    std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("star", μ_star)));
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("victim",
+                                1 * Pow<3>(Metre) / Pow<2>(Second))));
+    std::vector<DegreesOfFreedom<ICRS>> initial_state{
+        {ICRS::origin, ICRS::unmoving},
+        {ICRS::origin +
+             Displacement<ICRS>({1e8 * Metre, 0 * Metre, 0 * Metre}),
+         Velocity<ICRS>({0 * Metre / Second,
+                         0.8 * Sqrt(μ_star / (1e8 * Metre)),
+                         0 * Metre / Second})}};
+    if (with_perturber) {
+      bodies.push_back(make_not_null_unique<MassiveBody>(
+          MassiveBody::Parameters("perturber", 1e-6 * μ_star)));
+      initial_state.push_back(
+          {ICRS::origin +
+               Displacement<ICRS>({8.06e8 * Metre, 0 * Metre, 0 * Metre}),
+           Velocity<ICRS>({0 * Metre / Second,
+                           Sqrt(μ_star / (8.06e8 * Metre)),
+                           0 * Metre / Second})});
+    }
+    return make_not_null_unique<Ephemeris<ICRS>>(
+        std::move(bodies),
+        initial_state,
+        t0,
+        Ephemeris<ICRS>::AccuracyParameters(
+            /*fitting_tolerance=*/0.1 * Milli(Metre),
+            /*geopotential_tolerance=*/0x1p-24),
+        Ephemeris<ICRS>::FixedStepParameters(
+            SymmetricLinearMultistepIntegrator<
+                QuinlanTremaine1990Order12,
+                Ephemeris<ICRS>::NewtonianMotionEquation>(),
+            /*step=*/10 * Second),
+        /*subsystems=*/std::vector<int>{},
+        floor,
+        epsilon);
+  };
+
+  auto const relative = make(ε, /*with_perturber=*/true);
+  auto const two_body = make(ε, /*with_perturber=*/false);
+  EXPECT_OK(relative->Prolong(t0 + 1000 * Second));
+  EXPECT_OK(two_body->Prolong(t0 + 1000 * Second));
+
+  // The raw pull is 8.0e-10 m/s²; on the shell it contributes
+  // (σ − σ′r) ≈ 2.3 times that.  Cutting it entirely (periapsis or min())
+  // gives zero and keeping it undamped gives 1.0 — both outside the band.
+  Acceleration const raw_pull = 1e-6 * μ_star / Pow<2>(7.06e8 * Metre);
+  EXPECT_THAT((relative->ComputeGravitationalAccelerationOnMassiveBody(
+                   relative->bodies()[1], t0) -
+               two_body->ComputeGravitationalAccelerationOnMassiveBody(
+                   two_body->bodies()[1], t0)).Norm(),
+              AllOf(Gt(1.5 * raw_pull), Lt(3.0 * raw_pull)));
+}
+
+// A body unbound from its dominant attractor has no apoapsis to characterize
+// it and is exempted from the relative cutoff: it keeps feeling everything,
+// however far, where the absolute floor would have cut it loose.
+TEST_F(InterstellarPrecisionTest, RelativeFarFieldUnboundExemption) {
+  Instant const t0;
+  Acceleration const floor = 1e-12 * Metre / Pow<2>(Second);
+
+  auto const make_comet_ephemeris = [&floor, &t0](double const epsilon) {
+    std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("star", μ_star)));
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("comet",
+                                1 * Pow<3>(Metre) / Pow<2>(Second))));
+    // Radially outbound at more than twice the escape velocity.
+    std::vector<DegreesOfFreedom<ICRS>> const initial_state{
+        {ICRS::origin, ICRS::unmoving},
+        {ICRS::origin +
+             Displacement<ICRS>({1e15 * Metre, 0 * Metre, 0 * Metre}),
+         Velocity<ICRS>(
+             {2 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second})}};
+    return make_not_null_unique<Ephemeris<ICRS>>(
+        std::move(bodies),
+        initial_state,
+        t0,
+        Ephemeris<ICRS>::AccuracyParameters(
+            /*fitting_tolerance=*/0.1 * Milli(Metre),
+            /*geopotential_tolerance=*/0x1p-24),
+        Ephemeris<ICRS>::FixedStepParameters(
+            SymmetricLinearMultistepIntegrator<
+                QuinlanTremaine1990Order12,
+                Ephemeris<ICRS>::NewtonianMotionEquation>(),
+            /*step=*/1 * JulianYear),
+        /*subsystems=*/std::vector<int>{},
+        floor,
+        epsilon);
+  };
+
+  // The absolute floor cuts the star loose from the comet at this distance.
+  auto const absolute = make_comet_ephemeris(0);
+  EXPECT_OK(absolute->Prolong(t0 + 20 * JulianYear));
+  EXPECT_EQ(absolute->ComputeGravitationalAccelerationOnMassiveBody(
+                absolute->bodies()[1], t0),
+            (Vector<Acceleration, ICRS>{}));
+
+  // The relative cutoff exempts the unbound comet.
+  auto const relative = make_comet_ephemeris(1e-8);
+  EXPECT_OK(relative->Prolong(t0 + 20 * JulianYear));
+  EXPECT_THAT(relative->ComputeGravitationalAccelerationOnMassiveBody(
+                  relative->bodies()[1], t0).Norm(),
+              AllOf(Gt(3e-16 * Metre / Pow<2>(Second)),
+                    Lt(5e-16 * Metre / Pow<2>(Second))));
+}
+
+// The relative cutoff survives serialization: ε and the characteristic
+// accelerations are written rather than recomputed, so that the physics does
+// not drift across a save-load cycle.  The star is oblate and listed second,
+// so that the internal body order differs from the input order and the
+// characteristic accelerations — all decades apart — pin the permutation on
+// the wire.
+TEST_F(InterstellarPrecisionTest, RelativeFarFieldSerialization) {
+  Instant const t0;
+  Acceleration const floor = 1e-12 * Metre / Pow<2>(Second);
+
+  // A planet at 1e8 m, an oblate star, and an outer body whose ~1e-11 m/s²
+  // pull on the planet the absolute floor keeps and the relative cutoff
+  // discards, so that ε being honoured after a reload is visible in the
+  // trajectories.
+  auto const make = [&floor, &t0](double const epsilon) {
+    std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("planet",
+                                1 * Pow<3>(Metre) / Pow<2>(Second))));
+    bodies.push_back(make_not_null_unique<OblateBody<ICRS>>(
+        μ_star,
+        RotatingBody<ICRS>::Parameters(/*mean_radius=*/1e7 * Metre,
+                                       /*reference_angle=*/1 * Radian,
+                                       /*reference_instant=*/t0,
+                                       /*angular_frequency=*/
+                                       1e-3 * Radian / Second,
+                                       /*right_ascension_of_pole=*/0 * Radian,
+                                       /*declination_of_pole=*/π / 2 * Radian),
+        OblateBody<ICRS>::Parameters(/*j2=*/1e-6,
+                                     /*reference_radius=*/1e7 * Metre)));
+    bodies.push_back(make_not_null_unique<MassiveBody>(
+        MassiveBody::Parameters("outer", 1e-6 * μ_star)));
+    std::vector<DegreesOfFreedom<ICRS>> const initial_state{
+        {ICRS::origin +
+             Displacement<ICRS>({1e8 * Metre, 0 * Metre, 0 * Metre}),
+         Velocity<ICRS>({0 * Metre / Second,
+                         Sqrt(μ_star / (1e8 * Metre)),
+                         0 * Metre / Second})},
+        {ICRS::origin, ICRS::unmoving},
+        {ICRS::origin +
+             Displacement<ICRS>({6.4e9 * Metre, 0 * Metre, 0 * Metre}),
+         Velocity<ICRS>({0 * Metre / Second,
+                         Sqrt(μ_star / (6.4e9 * Metre)),
+                         0 * Metre / Second})}};
+    return make_not_null_unique<Ephemeris<ICRS>>(
+        std::move(bodies),
+        initial_state,
+        t0,
+        Ephemeris<ICRS>::AccuracyParameters(
+            /*fitting_tolerance=*/0.1 * Milli(Metre),
+            /*geopotential_tolerance=*/0x1p-24),
+        Ephemeris<ICRS>::FixedStepParameters(
+            SymmetricLinearMultistepIntegrator<
+                QuinlanTremaine1990Order12,
+                Ephemeris<ICRS>::NewtonianMotionEquation>(),
+            /*step=*/10 * Second),
+        /*subsystems=*/std::vector<int>{},
+        floor,
+        epsilon);
+  };
+
+  Instant const t_final = t0 + 200'000 * Second;
+  auto const ephemeris = make(/*epsilon=*/1e-8);
+  EXPECT_OK(ephemeris->Prolong(t_final));
+
+  serialization::Ephemeris message;
+  ephemeris->WriteToMessage(&message);
+  EXPECT_TRUE(message.has_far_field_damping_epsilon());
+  EXPECT_EQ(3, message.characteristic_acceleration_size());
+
+  // The characteristic accelerations are in input order — planet held by the
+  // star at ~4e-2, star held by the outer body at ~1e-11, outer held by the
+  // star at ~1e-5 — and a permutation of any two of them lands decades away.
+  auto const characteristic_acceleration = [&message](int const i) {
+    return Acceleration::ReadFromMessage(
+        message.characteristic_acceleration(i));
+  };
+  Acceleration const unit = 1 * Metre / Pow<2>(Second);
+  EXPECT_THAT(characteristic_acceleration(0),
+              AllOf(Gt(1e-2 * unit), Lt(1e-1 * unit)));
+  EXPECT_THAT(characteristic_acceleration(1),
+              AllOf(Gt(1e-12 * unit), Lt(1e-10 * unit)));
+  EXPECT_THAT(characteristic_acceleration(2),
+              AllOf(Gt(1e-6 * unit), Lt(1e-4 * unit)));
+
+  auto const ephemeris_read = Ephemeris<ICRS>::ReadFromMessage(
+      /*desired_t_min=*/InfiniteFuture, message);
+  EXPECT_OK(ephemeris_read->Prolong(ephemeris->t_max()));
+  for (Instant t = ephemeris->t_min(); t <= ephemeris->t_max();
+       t += (ephemeris->t_max() - ephemeris->t_min()) / 100) {
+    EXPECT_OK(ephemeris_read->Prolong(t));
+    for (int b = 0; b < 3; ++b) {
+      EXPECT_EQ(ephemeris->trajectory(ephemeris->bodies()[b])
+                    ->EvaluateDegreesOfFreedom(t),
+                ephemeris_read->trajectory(ephemeris_read->bodies()[b])
+                    ->EvaluateDegreesOfFreedom(t));
+    }
+  }
+
+  serialization::Ephemeris second_message;
+  ephemeris_read->WriteToMessage(&second_message);
+  EXPECT_THAT(message, EqualsProto(second_message));
+
+  // And ε is not decorative: the same roster with the absolute criterion
+  // keeps the outer body's pull on the planet and drifts away measurably.
+  auto const absolute = make(/*epsilon=*/0);
+  EXPECT_OK(absolute->Prolong(t_final));
+  EXPECT_THAT((ephemeris->trajectory(ephemeris->bodies()[0])
+                   ->EvaluatePosition(t_final) -
+               absolute->trajectory(absolute->bodies()[0])
+                   ->EvaluatePosition(t_final)).Norm(),
+              Gt(1 * Milli(Metre)));
 }
 
 // A/B measurement harness for damping the far field within a single subsystem:
