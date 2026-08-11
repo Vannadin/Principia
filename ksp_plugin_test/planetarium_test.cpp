@@ -77,6 +77,7 @@ using ::testing::AllOf;
 using ::testing::Ge;
 using ::testing::Invoke;
 using ::testing::Le;
+using ::testing::Lt;
 using ::testing::Return;
 using ::testing::ReturnRef;
 using ::testing::SizeIs;
@@ -352,6 +353,57 @@ class PlanetariumTest : public ::testing::Test {
   MockContinuousTrajectory<Barycentric> continuous_trajectory_;
   MockEphemeris<Barycentric> mock_ephemeris_;
 };
+
+// The production conversion, at a distance where forming the world position of
+// a plotted point would round it to kilometres.  A straight trajectory must
+// still come out straight: the rounding of that position is independent for
+// each point, so it deforms the plot rather than displacing it.
+TEST_F(PlanetariumTest, PlottingToScaledSpaceAtInterstellarDistance) {
+  // 900 light years, at which the ULP of a world position is about 2 km.
+  Length const d = 8.5e18 * Metre;
+  Displacement<World> const to_plotting_origin({d, d / 2, d / 3});
+  // `World` is left-handed and `Navigation` right-handed, as in production.
+  Similarity<World, Navigation> const world_to_plotting =
+      RigidTransformation<World, Navigation>(
+          World::origin + to_plotting_origin,
+          Navigation::origin,
+          Signature<World, Navigation>(
+              Sign::Positive(),
+              Sign::Positive(),
+              DeduceSignReversingOrientation{}).Forget<OrthogonalMap>())
+          .Forget<Similarity>();
+  auto const plotting_to_scaled_space =
+      Planetarium::MakePlottingToScaledSpaceConversion(
+          world_to_plotting,
+          World::origin + to_plotting_origin,
+          1 / (6000 * Metre));
+
+  // A straight trajectory spanning a gigametre, the scale of a planetary
+  // system, sampled uniformly.
+  Displacement<Navigation> const direction(
+      {1 * Metre, 2 * Metre, 3 * Metre});
+  std::vector<R3Element<double>> points;
+  for (int i = 0; i <= 100; ++i) {
+    points.push_back(plotting_to_scaled_space(
+        t0_, Navigation::origin + i * 1e7 * direction));
+  }
+
+  // The chords between the first and the last point and each intermediate one
+  // are all parallel to the trajectory, so the deviation from the straight line
+  // is the norm of the rejection.  It is measured in scaled space, where a
+  // metre is 1 / 6000.
+  R3Element<double> const chord = points.back() - points.front();
+  double max_deviation = 0;
+  for (auto const& point : points) {
+    R3Element<double> const from_first = point - points.front();
+    max_deviation = std::max(
+        max_deviation,
+        (from_first - Dot(from_first, chord) / Dot(chord, chord) * chord).
+            Norm());
+  }
+  // A metre in scaled space.  The old conversion deviated by hundreds of them.
+  EXPECT_THAT(max_deviation, Lt(1 / 6000.0));
+}
 
 TEST_F(PlanetariumTest, PlotMethod0) {
   DiscreteTrajectory<Barycentric> discrete_trajectory;

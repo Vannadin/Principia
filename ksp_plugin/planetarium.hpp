@@ -2,12 +2,14 @@
 
 #include <vector>
 
+#include "base/algebra.hpp"
 #include "base/not_null.hpp"
 #include "geometry/instant.hpp"
 #include "geometry/perspective.hpp"
 #include "geometry/r3_element.hpp"
 #include "geometry/rp2_point.hpp"
 #include "geometry/space.hpp"
+#include "geometry/space_transformations.hpp"
 #include "geometry/sphere.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "physics/degrees_of_freedom.hpp"
@@ -21,12 +23,14 @@ namespace ksp_plugin {
 namespace _planetarium {
 namespace internal {
 
+using namespace principia::base::_algebra;
 using namespace principia::base::_not_null;
 using namespace principia::geometry::_instant;
 using namespace principia::geometry::_perspective;
 using namespace principia::geometry::_r3_element;
 using namespace principia::geometry::_rp2_point;
 using namespace principia::geometry::_space;
+using namespace principia::geometry::_space_transformations;
 using namespace principia::geometry::_sphere;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::physics::_degrees_of_freedom;
@@ -75,6 +79,15 @@ class Planetarium {
   using PlottingToScaledSpaceConversion =
       std::function<R3Element<double>(Instant const&,
                                       Position<Navigation> const&)>;
+
+  // The conversion used in production.  It never forms the world position of a
+  // plotted point: at interstellar distances that position rounds to the ULP of
+  // a star's distance, independently for each point, which is a jitter of the
+  // shape of the plot and not a displacement of it.
+  static PlottingToScaledSpaceConversion MakePlottingToScaledSpaceConversion(
+      Similarity<World, Navigation> const& world_to_plotting,
+      Position<World> const& scaled_space_origin,
+      Inverse<Length> const& inverse_scale_factor);
 
   // TODO(phl): All this Navigation is weird.  Should it be named Plotting?
   // In particular Navigation vs. NavigationFrame is a mess.

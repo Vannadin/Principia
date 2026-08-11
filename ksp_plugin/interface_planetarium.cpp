@@ -102,14 +102,10 @@ Planetarium* __cdecl principia__PlanetariumCreate(
       focal * Metre);
 
   auto const plotting_to_scaled_space =
-      [plotting_to_world = world_to_plotting_affine_map.Inverse(),
-       scaled_space_origin = FromXYZ<Position<World>>(scaled_space_origin),
-       inverse_scale_factor = inverse_scale_factor * (1 / Metre)](
-          Instant const&,
-          Position<Navigation> const& plotted_point) {
-        return ((plotting_to_world(plotted_point) - scaled_space_origin) *
-                inverse_scale_factor).coordinates();
-      };
+      Planetarium::MakePlottingToScaledSpaceConversion(
+          world_to_plotting_affine_map,
+          FromXYZ<Position<World>>(scaled_space_origin),
+          inverse_scale_factor * (1 / Metre));
   return m.Return(
       plugin->NewPlanetarium(
           parameters,

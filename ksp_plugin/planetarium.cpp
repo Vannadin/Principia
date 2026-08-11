@@ -49,6 +49,23 @@ Planetarium::Planetarium(
       plotting_frame_(plotting_frame),
       plotting_to_scaled_space_(std::move(plotting_to_scaled_space)) {}
 
+Planetarium::PlottingToScaledSpaceConversion
+Planetarium::MakePlottingToScaledSpaceConversion(
+    Similarity<World, Navigation> const& world_to_plotting,
+    Position<World> const& scaled_space_origin,
+    Inverse<Length> const& inverse_scale_factor) {
+  auto const plotting_to_world = world_to_plotting.Inverse();
+  return [linear_map = plotting_to_world.linear_map(),
+          origin_offset =
+              plotting_to_world(Navigation::origin) - scaled_space_origin,
+          inverse_scale_factor](Instant const&,
+                                Position<Navigation> const& plotted_point) {
+    return ((origin_offset +
+             linear_map(plotted_point - Navigation::origin)) *
+            inverse_scale_factor).coordinates();
+  };
+}
+
 RP2Lines<Length, Camera> Planetarium::PlotMethod0(
     DiscreteTrajectory<Barycentric> const& trajectory,
     DiscreteTrajectory<Barycentric>::iterator const /*begin*/,
