@@ -1091,7 +1091,9 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
                << control->bodies()[i]->name();
   }
 
-  for (Acceleration const floor : {1e-14 * Metre / Pow<2>(Second),
+  for (Acceleration const floor : {1e-16 * Metre / Pow<2>(Second),
+                                   1e-15 * Metre / Pow<2>(Second),
+                                   1e-14 * Metre / Pow<2>(Second),
                                    1e-13 * Metre / Pow<2>(Second),
                                    1e-12 * Metre / Pow<2>(Second)}) {
     auto const damped = make_ephemeris(step, floor);
