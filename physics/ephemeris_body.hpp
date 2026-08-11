@@ -485,39 +485,6 @@ template<typename Frame>
 bool Ephemeris<Frame>::FarFieldIsZero(Position<Frame> const& position,
                                       int const subsystem,
                                       Instant const& t) const {
-  // The same thresholds as the damping, so that this test and the cutoff agree
-  // bit for bit.
-  return FarFieldIsBelow(
-      [this](std::size_t const b) {
-        return far_field_damping_[b].outer_threshold²();
-      },
-      position,
-      subsystem,
-      t);
-}
-
-template<typename Frame>
-bool Ephemeris<Frame>::FarFieldIsBelow(Acceleration const& floor,
-                                       Position<Frame> const& position,
-                                       int const subsystem,
-                                       Instant const& t) const {
-  // The distance at which a body's point-mass field falls to `floor`, which is
-  // how the damping derives its own thresholds.
-  return FarFieldIsBelow(
-      [this, floor](std::size_t const b) {
-        return bodies_[b]->gravitational_parameter() / floor;
-      },
-      position,
-      subsystem,
-      t);
-}
-
-template<typename Frame>
-template<typename Threshold²>
-bool Ephemeris<Frame>::FarFieldIsBelow(Threshold² const& threshold²,
-                                       Position<Frame> const& position,
-                                       int const subsystem,
-                                       Instant const& t) const {
   if (far_field_damping_.empty()) {
     return false;
   }
@@ -525,14 +492,15 @@ bool Ephemeris<Frame>::FarFieldIsBelow(Threshold² const& threshold²,
   CHECK_LT(subsystem, subsystem_origin_offset_.size());
   absl::ReaderMutexLock l(&lock_);
   auto const within_far_field = [&](std::size_t const b) {
-    // The same arithmetic as the massless-acceleration kernel.
+    // The same arithmetic as the massless-acceleration kernel, so that this
+    // test and the damping cutoff agree bit for bit.
     Displacement<Frame> Δq =
         trajectories_[b]->EvaluatePositionLocked(t) - position;
     if (int const s1 = subsystem_of_body_[b]; s1 != subsystem) {
       Δq = AddInterSubsystemOffset(inter_subsystem_offset(s1, subsystem, t),
                                    Δq);
     }
-    return Δq.Norm²() < threshold²(b);
+    return Δq.Norm²() < far_field_damping_[b].outer_threshold²();
   };
   // A position near a star is rejected by that star: check the bodies of its
   // own subsystem first, so that the common case costs a handful of tests.

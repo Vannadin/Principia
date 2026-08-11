@@ -294,16 +294,6 @@ class Ephemeris {
                               int subsystem,
                               Instant const& t) const EXCLUDES(lock_);
 
-  // Same, but for the distance at which the field of each body falls below
-  // `floor` rather than the one at which the damping cuts it off.  This is what
-  // a report to the player must use: it says that gravity is negligible there,
-  // which is a claim about the physics and not about our truncation of it, and
-  // it therefore does not move when the truncation is made finer.
-  virtual bool FarFieldIsBelow(Acceleration const& floor,
-                               Position<Frame> const& position,
-                               int subsystem,
-                               Instant const& t) const EXCLUDES(lock_);
-
   // Returns the trajectory for the given `body`.
   virtual not_null<ContinuousTrajectory<Frame> const*> trajectory(
       not_null<MassiveBody const*> body) const;
@@ -798,14 +788,6 @@ class Ephemeris {
       std::int64_t max_ephemeris_steps) EXCLUDES(lock_);
 
   // Fills `inter_subsystem_offsets_` from `subsystem_origin_offset_`.
-  // The shared implementation of the two tests above; `threshold²` gives the
-  // square of the distance beyond which a body is ignored, by index.
-  template<typename Threshold²>
-  bool FarFieldIsBelow(Threshold² const& threshold²,
-                       Position<Frame> const& position,
-                       int subsystem,
-                       Instant const& t) const EXCLUDES(lock_);
-
   void ComputeInterSubsystemOffsets();
 
   // Computes an estimate of the ratio `tolerance / error`.

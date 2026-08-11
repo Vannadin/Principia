@@ -109,14 +109,6 @@ class MockEphemeris : public Ephemeris<Frame> {
               (Position<Frame> const& position, int subsystem, Instant const& t),
               (const, override));
 
-  MOCK_METHOD(bool,
-              FarFieldIsBelow,
-              (Acceleration const& floor,
-               Position<Frame> const& position,
-               int subsystem,
-               Instant const& t),
-              (const, override));
-
   MOCK_METHOD((Vector<Acceleration, Frame>),
               ComputeGravitationalAccelerationOnMasslessBody,
               (Position<Frame> const& position,
