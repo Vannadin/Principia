@@ -2,6 +2,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -17,6 +18,7 @@
 #include "integrators/embedded_explicit_runge_kutta_nyström_integrator.hpp"
 #include "integrators/methods.hpp"
 #include "integrators/symmetric_linear_multistep_integrator.hpp"
+#include "integrators/symplectic_runge_kutta_nyström_integrator.hpp"
 #include "numerics/elementary_functions.hpp"
 #include "physics/apsides.hpp"
 #include "physics/body_centred_body_direction_reference_frame.hpp"
@@ -26,6 +28,7 @@
 #include "physics/massive_body.hpp"
 #include "physics/rigid_motion.hpp"
 #include "physics/sector.hpp"
+#include "physics/solar_system.hpp"
 #include "quantities/astronomy.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
@@ -54,6 +57,7 @@ using namespace principia::geometry::_space;
 using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_methods;
 using namespace principia::integrators::_symmetric_linear_multistep_integrator;
+using namespace principia::integrators::_symplectic_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_apsides;
 using namespace principia::physics::_body_centred_body_direction_reference_frame;  // NOLINT
@@ -63,6 +67,7 @@ using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_sector;
+using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_astronomy;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
@@ -1016,6 +1021,86 @@ TEST_F(InterstellarPrecisionTest, Serialization) {
   serialization::Ephemeris second_message;
   ephemeris_read->WriteToMessage(&second_message);
   EXPECT_THAT(message, EqualsProto(second_message));
+}
+
+// A/B measurement harness for damping the far field within a single subsystem:
+// the real solar system is integrated with and without damping from the same
+// initial state, and the divergence is compared against the integrator's own
+// step error, measured the same way by halving the step.  A floor whose
+// divergence sits below that yardstick discards only what the integrator does
+// not know.  This is a measurement, not a regression test; run it manually
+// with --gtest_also_run_disabled_tests.
+TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
+  SolarSystem<ICRS> const solar_system(
+      SOLUTION_DIR / "astronomy" / "sol_gravity_model.proto.txt",
+      SOLUTION_DIR / "astronomy" /
+          "sol_initial_state_jd_2433282_500000000.proto.txt");
+  Instant const t0 = solar_system.epoch();
+  Instant const t_final = t0 + 10 * JulianYear;
+
+  auto const make_ephemeris =
+      [&solar_system](Time const& step,
+                      Acceleration const& far_field_damping_floor) {
+        std::vector<DegreesOfFreedom<ICRS>> initial_state;
+        for (std::string const& name : solar_system.names()) {
+          initial_state.push_back(solar_system.degrees_of_freedom(name));
+        }
+        return make_not_null_unique<Ephemeris<ICRS>>(
+            solar_system.MakeAllMassiveBodies(),
+            initial_state,
+            solar_system.epoch(),
+            Ephemeris<ICRS>::AccuracyParameters(
+                /*fitting_tolerance=*/1 * Milli(Metre),
+                /*geopotential_tolerance=*/0x1p-24),
+            Ephemeris<ICRS>::FixedStepParameters(
+                SymplecticRungeKuttaNyströmIntegrator<
+                    BlanesMoan2002SRKN14A,
+                    Ephemeris<ICRS>::NewtonianMotionEquation>(),
+                step),
+            /*subsystems=*/std::vector<int>{},
+            far_field_damping_floor);
+      };
+
+  auto const max_divergence = [t0, t_final](Ephemeris<ICRS> const& a,
+                                            Ephemeris<ICRS> const& b,
+                                            std::string& body_name) {
+    Length max{};
+    for (Instant t = t0; t <= t_final; t += 30 * Day) {
+      for (int i = 0; i < a.bodies().size(); ++i) {
+        Length const Δq = (a.trajectory(a.bodies()[i])->EvaluatePosition(t) -
+                           b.trajectory(b.bodies()[i])->EvaluatePosition(t))
+                              .Norm();
+        if (Δq > max) {
+          max = Δq;
+          body_name = a.bodies()[i]->name();
+        }
+      }
+    }
+    return max;
+  };
+
+  Time const step = 35 * Minute;
+  auto const control = make_ephemeris(step, Acceleration{});
+  EXPECT_OK(control->Prolong(t_final));
+
+  auto const halved = make_ephemeris(step / 2, Acceleration{});
+  EXPECT_OK(halved->Prolong(t_final));
+  std::string yardstick_body;
+  Length const yardstick = max_divergence(*control, *halved, yardstick_body);
+  LOG(ERROR) << "Step-halving yardstick over 10 a: " << yardstick << " at "
+             << yardstick_body;
+
+  for (Acceleration const floor : {1e-14 * Metre / Pow<2>(Second),
+                                   1e-13 * Metre / Pow<2>(Second),
+                                   1e-12 * Metre / Pow<2>(Second)}) {
+    auto const damped = make_ephemeris(step, floor);
+    EXPECT_OK(damped->Prolong(t_final));
+    std::string body_name;
+    Length const divergence = max_divergence(*control, *damped, body_name);
+    LOG(ERROR) << "Floor " << floor << ": divergence " << divergence << " at "
+               << body_name << " = " << divergence / yardstick
+               << " yardsticks";
+  }
 }
 
 #endif
