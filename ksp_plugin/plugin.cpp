@@ -105,8 +105,21 @@ constexpr Length subsystem_clustering_threshold = 1e14 * Metre;
 // below the separation of the stellar subsystems and well above the size of
 // any of them: a vessel near one star still feels a close binary companion in
 // full.
+// The floor is what the truncation discards, and it discards it as a field that
+// is nearly uniform over a subsystem, so what remains of it is the tidal part,
+// which over a year moves the bodies of a system relative to each other by
+// about 0.4 mm at this value—below the integration tolerance, which it exceeded
+// at 1e-12.  Lowering it further buys nothing that the tolerance can see, and
+// each factor of 100 admits half again as many pairs.
 constexpr Acceleration far_field_damping_floor =
-    1e-12 * Metre / Pow<2>(Second);
+    1e-13 * Metre / Pow<2>(Second);
+
+// The field below which we tell the player that they are in the void.  This is
+// a statement about the physics, so it does not follow the floor above, which
+// is a statement about our truncation of it: making the truncation finer must
+// not shrink the void.  For a solar-mass star this is ~1.2 ly, so the void is
+// most of the way between neighbouring stars.
+constexpr Acceleration void_readout_floor = 1e-12 * Metre / Pow<2>(Second);
 
 Length const& MaxCollisionError() {
   static Length const max_collision_error = []() {
@@ -1275,9 +1288,10 @@ Plugin::NavigationState Plugin::VesselNavigationState(
   };
 
   NavigationState state;
-  state.in_void = ephemeris_->FarFieldIsZero(vessel_dof.position(),
-                                             vessel_subsystem,
-                                             current_time_);
+  state.in_void = ephemeris_->FarFieldIsBelow(void_readout_floor,
+                                              vessel_dof.position(),
+                                              vessel_subsystem,
+                                              current_time_);
   state.nearest_star_distance = Infinity<Length>;
   for (int s = 0; s < ephemeris_->number_of_subsystems(); ++s) {
     // The subsystem's primary — its heaviest body — is the star of the
