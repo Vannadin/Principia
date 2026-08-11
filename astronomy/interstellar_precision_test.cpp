@@ -1061,19 +1061,16 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
             far_field_damping_floor);
       };
 
-  auto const max_divergence = [t0, t_final](Ephemeris<ICRS> const& a,
-                                            Ephemeris<ICRS> const& b,
-                                            std::string& body_name) {
-    Length max{};
+  // The largest position divergence of each body between two ephemerides.
+  auto const divergences = [t0, t_final](Ephemeris<ICRS> const& a,
+                                         Ephemeris<ICRS> const& b) {
+    std::vector<Length> max(a.bodies().size());
     for (Instant t = t0; t <= t_final; t += 30 * Day) {
       for (int i = 0; i < a.bodies().size(); ++i) {
-        Length const Δq = (a.trajectory(a.bodies()[i])->EvaluatePosition(t) -
-                           b.trajectory(b.bodies()[i])->EvaluatePosition(t))
-                              .Norm();
-        if (Δq > max) {
-          max = Δq;
-          body_name = a.bodies()[i]->name();
-        }
+        max[i] = std::max(
+            max[i],
+            (a.trajectory(a.bodies()[i])->EvaluatePosition(t) -
+             b.trajectory(b.bodies()[i])->EvaluatePosition(t)).Norm());
       }
     }
     return max;
@@ -1083,22 +1080,39 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
   auto const control = make_ephemeris(step, Acceleration{});
   EXPECT_OK(control->Prolong(t_final));
 
+  // The yardstick is per body: comparing global maxima would let the step
+  // error of a fast inner moon launder the damping's harm to a slow outer
+  // body, whose own step error is far smaller.
   auto const halved = make_ephemeris(step / 2, Acceleration{});
   EXPECT_OK(halved->Prolong(t_final));
-  std::string yardstick_body;
-  Length const yardstick = max_divergence(*control, *halved, yardstick_body);
-  LOG(ERROR) << "Step-halving yardstick over 10 a: " << yardstick << " at "
-             << yardstick_body;
+  std::vector<Length> const yardstick = divergences(*control, *halved);
+  for (int i = 0; i < yardstick.size(); ++i) {
+    LOG(ERROR) << "Yardstick over 10 a: " << yardstick[i] << " at "
+               << control->bodies()[i]->name();
+  }
 
   for (Acceleration const floor : {1e-14 * Metre / Pow<2>(Second),
                                    1e-13 * Metre / Pow<2>(Second),
                                    1e-12 * Metre / Pow<2>(Second)}) {
     auto const damped = make_ephemeris(step, floor);
     EXPECT_OK(damped->Prolong(t_final));
-    std::string body_name;
-    Length const divergence = max_divergence(*control, *damped, body_name);
-    LOG(ERROR) << "Floor " << floor << ": divergence " << divergence << " at "
-               << body_name << " = " << divergence / yardstick
+    std::vector<Length> const divergence = divergences(*control, *damped);
+    double worst_ratio = 0;
+    int worst = 0;
+    for (int i = 0; i < divergence.size(); ++i) {
+      if (yardstick[i] > Length{} &&
+          divergence[i] / yardstick[i] > worst_ratio) {
+        worst_ratio = divergence[i] / yardstick[i];
+        worst = i;
+      }
+      LOG(ERROR) << "Floor " << floor << ": "
+                 << control->bodies()[i]->name() << " diverges "
+                 << divergence[i] << " = "
+                 << (yardstick[i] > Length{} ? divergence[i] / yardstick[i]
+                                             : 0.0) << " yardsticks";
+    }
+    LOG(ERROR) << "Floor " << floor << ": worst "
+               << control->bodies()[worst]->name() << " at " << worst_ratio
                << " yardsticks";
   }
 }
