@@ -1374,7 +1374,8 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
 
   auto const make_ephemeris =
       [&solar_system](Time const& step,
-                      Acceleration const& far_field_damping_floor) {
+                      Acceleration const& far_field_damping_floor,
+                      double const far_field_damping_epsilon) {
         std::vector<DegreesOfFreedom<ICRS>> initial_state;
         for (std::string const& name : solar_system.names()) {
           initial_state.push_back(solar_system.degrees_of_freedom(name));
@@ -1392,7 +1393,8 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
                     Ephemeris<ICRS>::NewtonianMotionEquation>(),
                 step),
             /*subsystems=*/std::vector<int>{},
-            far_field_damping_floor);
+            far_field_damping_floor,
+            far_field_damping_epsilon);
       };
 
   // The largest position divergence of each body between two ephemerides.
@@ -1411,13 +1413,13 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
   };
 
   Time const step = 35 * Minute;
-  auto const control = make_ephemeris(step, Acceleration{});
+  auto const control = make_ephemeris(step, Acceleration{}, 0);
   EXPECT_OK(control->Prolong(t_final));
 
   // The yardstick is per body: comparing global maxima would let the step
   // error of a fast inner moon launder the damping's harm to a slow outer
   // body, whose own step error is far smaller.
-  auto const halved = make_ephemeris(step / 2, Acceleration{});
+  auto const halved = make_ephemeris(step / 2, Acceleration{}, 0);
   EXPECT_OK(halved->Prolong(t_final));
   std::vector<Length> const yardstick = divergences(*control, *halved);
   for (int i = 0; i < yardstick.size(); ++i) {
@@ -1430,7 +1432,7 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
                                    1e-14 * Metre / Pow<2>(Second),
                                    1e-13 * Metre / Pow<2>(Second),
                                    1e-12 * Metre / Pow<2>(Second)}) {
-    auto const damped = make_ephemeris(step, floor);
+    auto const damped = make_ephemeris(step, floor, 0);
     EXPECT_OK(damped->Prolong(t_final));
     std::vector<Length> const divergence = divergences(*control, *damped);
     double worst_ratio = 0;
@@ -1448,6 +1450,32 @@ TEST_F(InterstellarPrecisionTest, DISABLED_FarFieldDampingSweep) {
                                              : 0.0) << " yardsticks";
     }
     LOG(ERROR) << "Floor " << floor << ": worst "
+               << control->bodies()[worst]->name() << " at " << worst_ratio
+               << " yardsticks";
+  }
+
+  // The same measurement for the relative criterion; the floor only carries
+  // the massless damping and the pair cutoff is ε.
+  for (double const ε : {1e-6, 1e-8, 1e-10, 1e-12}) {
+    auto const damped =
+        make_ephemeris(step, 1e-12 * Metre / Pow<2>(Second), ε);
+    EXPECT_OK(damped->Prolong(t_final));
+    std::vector<Length> const divergence = divergences(*control, *damped);
+    double worst_ratio = 0;
+    int worst = 0;
+    for (int i = 0; i < divergence.size(); ++i) {
+      if (yardstick[i] > Length{} &&
+          divergence[i] / yardstick[i] > worst_ratio) {
+        worst_ratio = divergence[i] / yardstick[i];
+        worst = i;
+      }
+      LOG(ERROR) << "Epsilon " << ε << ": "
+                 << control->bodies()[i]->name() << " diverges "
+                 << divergence[i] << " = "
+                 << (yardstick[i] > Length{} ? divergence[i] / yardstick[i]
+                                             : 0.0) << " yardsticks";
+    }
+    LOG(ERROR) << "Epsilon " << ε << ": worst "
                << control->bodies()[worst]->name() << " at " << worst_ratio
                << " yardsticks";
   }
