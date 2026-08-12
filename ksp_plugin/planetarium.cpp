@@ -469,10 +469,8 @@ void Planetarium::PlotMethod4Anchored(
 
   auto const [initial_reference_relative, initial_velocity] =
       evaluate(previous_time);
-  Displacement<Navigation> previous_reference_relative =
-      initial_reference_relative;
   Displacement<Navigation> previous_camera_relative =
-      camera_to_reference + previous_reference_relative;
+      camera_to_reference + initial_reference_relative;
   Vector<AngularFrequency, Navigation> previous_projected_velocity =
       proper_motion(previous_camera_relative, initial_velocity) *
       Normalize(previous_camera_relative);
@@ -545,7 +543,6 @@ void Planetarium::PlotMethod4Anchored(
     } while (rms_apparent_distance > parameters_.angular_resolution_);
 
     previous_time = t;
-    previous_reference_relative = reference_relative;
     previous_camera_relative = camera_relative;
     previous_projected_velocity = projected_velocity;
 

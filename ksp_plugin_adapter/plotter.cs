@@ -138,6 +138,7 @@ class Plotter {
                        is_burn
                            ? adapter_.burn_style
                            : adapter_.flight_plan_style,
+                       /*registration_reference_world=*/null,
                        main_reference);
         }
       }
@@ -382,6 +383,11 @@ class Plotter {
         // The anchor is the camera's absolute scaled-space position.
         translation += SceneMappingCorrection(
             correction_reference_world.Value);
+      } else {
+        // A nonzero anchor is meaningless without the reference it was
+        // reported against; drawing it raw would put the mesh at the
+        // scaled-space origin.
+        return;
       }
     }
     // If the lines are drawn in layer 31 (Vectors), which sounds more

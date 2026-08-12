@@ -754,6 +754,11 @@ TEST_F(PlanetariumTest, PlotMethod4AnchoredRegistration) {
       .velocity = Velocity<Barycentric>(),
       .epoch = t0_};
 
+  // The registration is deliberately NOT a point of the plot: it is the
+  // centre of the circle, as a vessel's present position is not a point of
+  // its flight plan.  A registration taken from the plot instead would place
+  // the mesh a radius away, which is the defect this parameter exists to
+  // prevent.
   std::vector<ScaledSpacePoint> points;
   R3Element<double> render_anchor;
   planetarium.PlotMethod4(
@@ -768,16 +773,15 @@ TEST_F(PlanetariumTest, PlotMethod4AnchoredRegistration) {
       &render_anchor,
       Planetarium::Registration{
           .time = discrete_trajectory.front().time,
-          .position = discrete_trajectory.front().degrees_of_freedom
-                          .position()});
+          .position = Barycentric::origin});
 
   // The scene's mapping of the reference, which the adapter supplies from the
   // vessel's own scene position.  The scene keeps its origin in the
   // neighbourhood it is drawing — that is what scaled space is for — so we
-  // model it with the origin at the circle's centre: an interstellar absolute
-  // never appears, which is the very thing this path exists not to form.
-  // The reference is the plot's first point, the circle at phase zero.
-  R3Element<double> const scene_reference(radius / (6000 * Metre), 0, 0);
+  // model it with the origin at the circle's centre, which is the reference:
+  // an interstellar absolute never appears, which is the very thing this path
+  // exists not to form.
+  R3Element<double> const scene_reference{};
 
   ASSERT_GT(points.size(), 10);
   for (int i = 0; i < points.size(); ++i) {
@@ -789,6 +793,10 @@ TEST_F(PlanetariumTest, PlotMethod4AnchoredRegistration) {
         Abs(Sqrt(Pow<2>(from_centre.coordinates().x) +
                  Pow<2>(from_centre.coordinates().y)) - radius);
     EXPECT_THAT(radial_error, Lt(1 * Metre)) << "vertex " << i;
+    // The camera is offset along z, so an error along the view axis is the
+    // one a radial check cannot see.
+    EXPECT_THAT(Abs(from_centre.coordinates().z), Lt(1 * Metre))
+        << "vertex " << i;
   }
 }
 
