@@ -65,12 +65,14 @@ class Renderer {
   };
 
   // Where the plotted object is in the plotting frame at the time of the
-  // rendering, and where the scene puts it.  A `World` rendering anchored on
-  // that pair is exact to the ULP of the local geometry; anchored on the Sun,
-  // as it is when no registration is given, it forms for every point two
-  // cancelling terms at the magnitude of the distance to the Sun — 9e18 m at a
-  // kiloparsec, where the ULP is a kilometre — and it does so afresh each
-  // frame, as the Sun and the frame drift, so the points shake.
+  // rendering, and where the scene puts it.  Anchored on the Sun, as it is when
+  // no registration is given, the affine part of the `World` map is a
+  // difference of two positions at the magnitude of the distance to the Sun —
+  // 9e18 m at 950 light-years, where the ULP is a kilometre.  That difference
+  // is formed once per rendering, so the points keep their shape and the whole
+  // set is translated; but it is formed afresh each frame, as the Sun's scene
+  // position and the frame drift, so the set shakes.  Anchored on this pair the
+  // map forms no such difference: both members are near the plotted object.
   struct WorldRegistration {
     Position<Navigation> navigation;
     Position<World> world;

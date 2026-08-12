@@ -492,8 +492,10 @@ TEST_F(RendererTest, RenderDistinguishedPointsInWorldRegisteredOnTheVessel) {
               Barycentric::origin),
           .world = World::origin});
   ASSERT_EQ(1, registered.size());
-  EXPECT_THAT((registered.begin()->second.position() - expected).Norm(),
-              Lt(1 * Milli(Metre)));
+  // Exactly, not approximately: the subtraction of the two operands is exact
+  // (they are within a factor of two), and the same linear map is then applied
+  // to the same bits the expectation uses.
+  EXPECT_THAT(registered.begin()->second.position(), AlmostEquals(expected, 0));
 
   auto const unregistered = renderer_.RenderDistinguishedPointsInWorld(
       rendering_time,
@@ -501,10 +503,14 @@ TEST_F(RendererTest, RenderDistinguishedPointsInWorldRegisteredOnTheVessel) {
       sun_world_position,
       planetarium_rotation);
   ASSERT_EQ(1, unregistered.size());
-  // The sum quantizes at 1024 m there, so the frame's own 700 m is lost
-  // wholesale rather than approximated; the residual here is 1724 m.
+  // The void-scale sum quantizes at 1024 m, so the frame's own 700 m cannot
+  // survive it.  The residual measures 1724 m, but only ~324 m of that is the
+  // quantization itself — the rest comes from the rotation's own rounding of a
+  // 2⁶² m displacement, which a change of compiler or of contraction could
+  // move.  The bound is therefore set below every plausible outcome and still
+  // far above the registered path, which is exact.
   EXPECT_THAT((unregistered.begin()->second.position() - expected).Norm(),
-              Gt(1 * Kilo(Metre)));
+              Gt(300 * Metre));
 }
 
 TEST_F(RendererTest, Serialization) {

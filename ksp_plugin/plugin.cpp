@@ -1441,6 +1441,13 @@ void Plugin::ExtendPredictionForFlightPlan(GUID const& vessel_guid) const {
 std::optional<Renderer::WorldRegistration> Plugin::SceneRegistration(
     GUID const& vessel_guid,
     Position<World> const& world_position) const {
+  // With a single subsystem no position is void-scale, so the Sun-anchored
+  // rendering is already exact and we leave it bit for bit — as the anchored
+  // plotting paths do.  Registering there would also move the altitudes read
+  // out of the markers, which are computed from these positions.
+  if (ephemeris_->number_of_subsystems() <= 1) {
+    return std::nullopt;
+  }
   Vessel const& vessel = *FindOrDie(vessels_, vessel_guid);
   auto const& trajectory = vessel.trajectory();
   if (trajectory.empty() ||

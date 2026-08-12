@@ -3251,8 +3251,15 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
       renderer.RenderBarycentricTrajectoryInPlotting(psychohistory->begin(),
                                                      psychohistory->end(),
                                                      drifter->placement());
-  Position<Navigation> const camera =
+  // The camera is deliberately NOT at the vessel: with camera, reference and
+  // the plan's first point all coincident, the test cannot tell a plot anchored
+  // on the plotted object from one anchored on the camera — which is the very
+  // confusion that reverted the first attempt at this contract.
+  Position<Navigation> const reference_in_navigation =
       plotted_psychohistory.back().degrees_of_freedom.position();
+  Position<Navigation> const camera =
+      reference_in_navigation +
+      Displacement<Navigation>({1e6 * Metre, 2e6 * Metre, 3e6 * Metre});
 
   constexpr double inverse_scale_factor = 1.0 / 6000;
   Similarity<World, Navigation> const world_to_plotting =
@@ -3290,13 +3297,33 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
       &anchor);
 
   ASSERT_GT(vertex_count, 1);
-  auto const norm = [](auto const& p) {
-    return R3Element<double>(p.x, p.y, p.z).Norm();
+  // `XYZ` and `ScaledSpacePoint` are interface PODs without arithmetic.
+  auto const r3 = [](auto const& p) {
+    return R3Element<double>(p.x, p.y, p.z);
   };
-  EXPECT_THAT(norm(anchor), Lt(1.0));
-  EXPECT_THAT(norm(vertices[0]), Lt(1.0));
+  // What the adapter draws: the scene's mapping of the reference, plus the
+  // anchor, plus the vertex.  The plan starts at the vessel, which IS the
+  // reference, so the last two must cancel — this is the contract itself, and
+  // it stays sharp now that the camera is elsewhere.  The floor is the float
+  // format of a vertex, not our arithmetic: the anchor carries the displacement
+  // to the camera in double and the vertex carries it back in float, so a few
+  // float ULPs of the camera distance is all the cancellation can be worth
+  // (~2 m here, measured 16 mm).  The pre-fix error is 3.3e12 scaled units, so
+  // a reintroduced kilometre is still caught by three orders.
+  // The bound is built from the fixture's camera offset, not from the measured
+  // vertex: a tolerance that scales with the quantity under test would relax
+  // itself in exactly the case it must catch.
+  EXPECT_THAT((r3(anchor) + r3(vertices[0])).Norm(),
+              Lt(4 * std::numeric_limits<float>::epsilon() *
+                 (camera - reference_in_navigation).Norm() *
+                 inverse_scale_factor / Metre));
+  // The anchor is the camera as a displacement from the reference, so it is the
+  // camera offset above, not zero: a plot that ignored the camera would pass
+  // the assertion above trivially.
+  EXPECT_THAT(r3(anchor).Norm(),
+              AllOf(Gt(1e6 / 6000 * 0.9), Lt(1e7 / 6000)));
   // The coast itself, so that a plot collapsed to the reference would not pass.
-  EXPECT_THAT(norm(vertices[vertex_count - 1]),
+  EXPECT_THAT((r3(vertices[vertex_count - 1]) - r3(vertices[0])).Norm(),
               AllOf(Gt(1e2), Lt(1e5)));
 }
 

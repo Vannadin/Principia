@@ -48,6 +48,36 @@ using namespace principia::quantities::_si;
 
 namespace {
 
+// Where the anchor of a registered plot is written, or null if there is no
+// registration.  The consumer of these plots picks the convention it decodes
+// the anchor with from the reference it holds, not from what we did here, so a
+// nonzero anchor must always be the registered one: without a registration we
+// ask for no anchor at all and plot absolutely, as we did before anchoring
+// existed.  The alternative — anchoring on the camera's absolute position while
+// the consumer reassembles a displacement — translates the whole plot by the
+// reference, which is a void-scale quantity in the tracking station.
+R3Element<double>* AnchorFor(
+    std::optional<Planetarium::Registration> const& registration,
+    R3Element<double>& anchor_coordinates) {
+  return registration.has_value() ? &anchor_coordinates : nullptr;
+}
+
+// The same for a celestial, whose trajectory is a continuous one and whose
+// coordinates carry no anchor.
+std::optional<Planetarium::Registration> CelestialRegistration(
+    Plugin const& plugin,
+    Celestial const& celestial) {
+  auto const& trajectory = celestial.trajectory();
+  Instant const t = plugin.CurrentTime();
+  if (t < trajectory.t_min() || t > trajectory.t_max()) {
+    return std::nullopt;
+  }
+  return Planetarium::Registration{
+      .time = t,
+      .position = celestial.current_position(t),
+      .placement = {celestial.subsystem(), std::nullopt}};
+}
+
 // The registration point of a vessel's plot: where the vessel is now, which
 // is where the scene draws it.  Absent if the vessel is not where we are
 // looking: a trajectory may be empty, or lag the current time while it catches
@@ -175,6 +205,7 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
 
   Vessel const& vessel = *plugin->GetVessel(vessel_guid);
   CHECK(vessel.has_flight_plan()) << vessel_guid;
+  auto const registration = VesselRegistration(*plugin, vessel);
   auto const segment = vessel.flight_plan().GetSegment(index);
   // TODO(egg): this is ugly; we should centralize rendering.
   // If this is a burn and we cannot render the beginning of the burn, we
@@ -194,8 +225,8 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
         },
         vertices_size,
         vessel.flight_plan().placement(),
-        &anchor_coordinates,
-        VesselRegistration(*plugin, vessel));
+        AnchorFor(registration, anchor_coordinates),
+        registration);
   }
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
@@ -221,6 +252,7 @@ void __cdecl principia__PlanetariumPlotPrediction(
   R3Element<double> anchor_coordinates;
 
   auto const vessel = plugin->GetVessel(vessel_guid);
+  auto const registration = VesselRegistration(*plugin, *vessel);
   auto const prediction = vessel->prediction();
   planetarium->PlotMethod4(
       *prediction,
@@ -233,8 +265,8 @@ void __cdecl principia__PlanetariumPlotPrediction(
       },
       vertices_size,
       vessel->placement(),
-      &anchor_coordinates,
-      VesselRegistration(*plugin, *vessel));
+      AnchorFor(registration, anchor_coordinates),
+      registration);
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
 }
@@ -274,6 +306,7 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
     return m.Return();
   } else {
     auto const vessel = plugin->GetVessel(vessel_guid);
+    auto const registration = VesselRegistration(*plugin, *vessel);
     auto const& trajectory = vessel->trajectory();
     auto const& psychohistory = vessel->psychohistory();
 
@@ -296,8 +329,8 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
         },
         vertices_size,
         vessel->placement(),
-        &anchor_coordinates,
-        VesselRegistration(*plugin, *vessel));
+        AnchorFor(registration, anchor_coordinates),
+        registration);
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   }
@@ -338,6 +371,7 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
   } else {
     auto const& celestial = plugin->GetCelestial(celestial_index);
     auto const& celestial_trajectory = celestial.trajectory();
+    auto const registration = CelestialRegistration(*plugin, celestial);
     Instant const desired_first_time =
         plugin->CurrentTime() - max_history_length * Second;
 
@@ -360,15 +394,8 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
         vertices_size,
         &minimal_distance,
         {celestial.subsystem(), std::nullopt},
-        &anchor_coordinates,
-        celestial_trajectory.t_min() <= plugin->CurrentTime() &&
-                plugin->CurrentTime() <= celestial_trajectory.t_max()
-            ? std::make_optional(Planetarium::Registration{
-                  .time = plugin->CurrentTime(),
-                  .position =
-                      celestial.current_position(plugin->CurrentTime()),
-                  .placement = {celestial.subsystem(), std::nullopt}})
-            : std::nullopt);
+        AnchorFor(registration, anchor_coordinates),
+        registration);
     *minimal_distance_from_camera = minimal_distance / Metre;
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
@@ -418,6 +445,7 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
             : prediction_final_time;
     auto const& celestial = plugin->GetCelestial(celestial_index);
     auto const& celestial_trajectory = celestial.trajectory();
+    auto const registration = CelestialRegistration(*plugin, celestial);
     // No need to request reanimation here because the current time of the
     // plugin is necessarily covered.
     Length minimal_distance;
@@ -432,15 +460,8 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
         vertices_size,
         &minimal_distance,
         {celestial.subsystem(), std::nullopt},
-        &anchor_coordinates,
-        celestial_trajectory.t_min() <= plugin->CurrentTime() &&
-                plugin->CurrentTime() <= celestial_trajectory.t_max()
-            ? std::make_optional(Planetarium::Registration{
-                  .time = plugin->CurrentTime(),
-                  .position =
-                      celestial.current_position(plugin->CurrentTime()),
-                  .placement = {celestial.subsystem(), std::nullopt}})
-            : std::nullopt);
+        AnchorFor(registration, anchor_coordinates),
+        registration);
     *minimal_distance_from_camera = minimal_distance / Metre;
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
