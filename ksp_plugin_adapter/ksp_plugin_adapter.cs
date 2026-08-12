@@ -201,6 +201,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
   private KSP.UI.Screens.SpaceTracking space_tracking_;
   private Guid? last_tracking_station_selection_;
+  // The vessels whose stock orbit we have reported as inexpressible, so that we
+  // report each of them once.
+  private readonly HashSet<Guid> inexpressible_stock_orbits_ =
+      new HashSet<Guid>();
 
   private KSP.UI.Screens.SpaceTracking space_tracking {
     get {
@@ -2622,13 +2626,9 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                              last_guidance_manœuvre_ !=
                              first_future_manœuvre_index;
         last_guidance_manœuvre_ = first_future_manœuvre_index;
-        // The solver is absent on a vessel whose stock orbit KSP cannot express,
-        // where we take its patched conics away; the guidance node lives in that
-        // solver, so there is nowhere to put it.
         if (!skip_guidance &&
             flight_planner_.show_guidance &&
-            !IsNaN(guidance) &&
-            active_vessel.patchedConicSolver != null) {
+            !IsNaN(guidance)) {
           // The user wants to show the guidance node, and that node was
           // properly computed by the C++ code.
           PatchedConicSolver solver = active_vessel.patchedConicSolver;
@@ -2671,11 +2671,8 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     }
     if (guidance_node_ != null) {
       // We may end up here with a guidance node created for another vessel when
-      // switching vessels, see #3873.  The solver may also be gone, having been
-      // taken off a vessel whose stock orbit KSP cannot express; the node went
-      // with it, so there is nothing left to remove.
-      if (active_vessel.patchedConicSolver != null &&
-          active_vessel.patchedConicSolver.maneuverNodes.Contains(
+      // switching vessels, see #3873.
+      if (active_vessel.patchedConicSolver.maneuverNodes.Contains(
               guidance_node_)) {
         guidance_node_.RemoveSelf();
       }
@@ -2838,51 +2835,54 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
             : OrbitRenderer.DrawMode.OFF;
   }
 
-  // Takes KSP's patched-conic solver, renderer and targeter off a vessel whose
-  // stock orbit its own hierarchy cannot express.  `DetachPatchedConicsSolver`
-  // saves the manoeuvre-node data — both paths that re-attach reload it — and
-  // destroys those three components, which own every time this orbit would have
-  // KSP format, and the targeter as much as the renderer.
-  //
-  // It also restores the plain ellipse, which we then turn back off: at void
-  // radius that ellipse is a circle of interstellar radius captioned with a
-  // nineteen-digit apoapsis, and in the tracking station nothing else would
-  // suppress it, since the option deliberately does not run there.  Drawing
-  // nothing is the honest rendering of an orbit KSP cannot express.
-  //
-  // KSP re-attaches in `Vessel.MakeActive` and in `SpaceTracking.SetVessel`, so
-  // this runs again on a vessel switch or a tracking-station selection; it is
-  // idempotent, and one frame of stock rendering precedes it, since our hook is
-  // in `OnPreCull`, after `LateUpdate`.
-  private void DetachStockOrbitMachineryIfInVoid(Vessel vessel) {
-    if (!vessel.PatchedConicsAttached) {
-      return;
+  // Whether KSP can express this vessel's stock orbit at all.  Its hierarchy's
+  // root has an unbounded sphere of influence, so a vessel in the interstellar
+  // void is given the stock sun as a parent and an orbit of void radius, whose
+  // period runs to 1e19 s; the patched-conic captions then form the year count
+  // as an int, which saturates and cannot be negated, once per apsis per frame.
+  // Nothing renders such an orbit usefully either, so it is suppressed like an
+  // unwanted one — but in every scene, and whatever the option says, since here
+  // the display is not a preference but an impossibility.
+  // Asked once per vessel per frame by the caller and handed on.  KSP's
+  // hierarchy gives a vessel in the void the root body as a parent, its sphere
+  // of influence being unbounded, so a stock orbit whose times are of void scale
+  // has the sun for a parent; testing that first keeps the judgement — which
+  // crosses the interface, takes the ephemeris lock exclusively to prolong it,
+  // and walks every body — off the whole in-system fleet.
+  private bool stock_orbit_is_inexpressible(Vessel vessel) {
+    if (vessel.orbitDriver?.referenceBody != Planetarium.fetch.Sun) {
+      return false;
     }
     string vessel_guid = vessel.id.ToString();
-    if (!plugin_.HasVessel(vessel_guid) || !plugin_.VesselIsInVoid(vessel_guid)) {
-      return;
+    // The judgement declines for a vessel we do not have yet, or one inserted
+    // but not caught up, and that reads the same as a vessel near a star; we
+    // therefore say so once, so that the absence of the storm can be told apart
+    // from the absence of the suppression.
+    if (!plugin_.HasVessel(vessel_guid) ||
+        !plugin_.VesselIsInVoid(vessel_guid)) {
+      return false;
     }
-    Log.Info("Detaching the stock patched conics of " + vessel.vesselName +
-             ": its stock orbit is of void radius, which KSP cannot express");
-    vessel.DetachPatchedConicsSolver();
-    if (vessel.orbitDriver != null && vessel.orbitDriver.Renderer != null) {
-      vessel.orbitDriver.Renderer.drawMode = OrbitRenderer.DrawMode.OFF;
-      vessel.orbitDriver.Renderer.drawIcons = OrbitRenderer.DrawIcons.OBJ;
-      vessel.orbitDriver.Renderer.drawNodes = false;
+    if (inexpressible_stock_orbits_.Add(vessel.id)) {
+      Log.Info("Suppressing the stock orbit display of " + vessel.vesselName +
+               ": KSP cannot express an orbit of void radius about " +
+               vessel.orbitDriver.referenceBody.name);
     }
+    return true;
   }
 
-  private void RemoveStockTrajectoriesIfNeeded(Vessel vessel) {
+  private void RemoveStockTrajectoriesIfNeeded(Vessel vessel,
+                                               bool inexpressible) {
     if (vessel.patchedConicRenderer != null) {
       vessel.patchedConicRenderer.relativityMode =
           PatchRendering.RelativityMode.RELATIVE;
     }
 
-    if ((main_window_.display_patched_conics  &&
-         plotting_frame_selector_.frame_type == BODY_CENTRED_NON_ROTATING &&
-         plotting_frame_selector_.Centre() ==
-            vessel.orbitDriver.orbit.referenceBody) ||
-        !is_manageable(vessel)) {
+    if (!inexpressible &&
+        ((main_window_.display_patched_conics  &&
+          plotting_frame_selector_.frame_type == BODY_CENTRED_NON_ROTATING &&
+          plotting_frame_selector_.Centre() ==
+             vessel.orbitDriver.orbit.referenceBody) ||
+         !is_manageable(vessel))) {
       vessel.orbitDriver.Renderer.drawMode =
           vessel.PatchedConicsAttached
               ? OrbitRenderer.DrawMode.OFF
@@ -2993,21 +2993,14 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       // event...
       vessel.mapObject.uiNode.OnClick -= OnVesselNodeClick;
       vessel.mapObject.uiNode.OnClick += OnVesselNodeClick;
-      // KSP's hierarchy has no room for a vessel in the interstellar void: its
-      // root's sphere of influence is unbounded, so the vessel is given the
-      // stock sun as a parent and a stock orbit of interstellar radius, whose
-      // period runs to 1e19 s.  Nothing renders that orbit usefully, and the
-      // patched-conic machinery throws on it every frame — its captions form
-      // the year count as an int, which saturates and then cannot be negated.
-      // So we take that machinery off such a vessel entirely, in every scene:
-      // this must not be governed by the option below, which decides what to
-      // show, whereas here KSP cannot express the orbit at all.
-      DetachStockOrbitMachineryIfInVoid(vessel);
       // Our lines are not visible in the tracking station even when their
       // vertices plot, so nothing may be suppressed there: the stock lines
-      // are the only orbit display that scene has.
-      if (HighLogic.LoadedScene != GameScenes.TRACKSTATION) {
-        RemoveStockTrajectoriesIfNeeded(vessel);
+      // are the only orbit display that scene has.  An orbit KSP cannot express
+      // is the exception, since there is no display to preserve — see
+      // `stock_orbit_is_inexpressible`.
+      bool inexpressible = stock_orbit_is_inexpressible(vessel);
+      if (HighLogic.LoadedScene != GameScenes.TRACKSTATION || inexpressible) {
+        RemoveStockTrajectoriesIfNeeded(vessel, inexpressible);
       }
     }
     string main_vessel_guid = PredictedVessel()?.id.ToString();
