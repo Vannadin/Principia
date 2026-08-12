@@ -1438,6 +1438,22 @@ void Plugin::ExtendPredictionForFlightPlan(GUID const& vessel_guid) const {
   }
 }
 
+bool Plugin::VesselIsInVoid(GUID const& vessel_guid) const {
+  CHECK(!initializing_);
+  Vessel const& vessel = *FindOrDie(vessels_, vessel_guid);
+  // The vessel's position with its anchor folded in, as the void readout takes
+  // it; an anchored vessel's stored coordinates are near its own origin.
+  Position<Barycentric> position =
+      vessel.psychohistory()->back().degrees_of_freedom.position();
+  if (auto const& anchor = vessel.placement().anchor; anchor.has_value()) {
+    position += anchor->OffsetAt(current_time_);
+  }
+  return ephemeris_->FarFieldIsBelow(void_readout_floor,
+                                     position,
+                                     vessel.placement().subsystem,
+                                     current_time_);
+}
+
 std::optional<Renderer::WorldRegistration> Plugin::SceneRegistration(
     GUID const& vessel_guid,
     Position<World> const& world_position) const {

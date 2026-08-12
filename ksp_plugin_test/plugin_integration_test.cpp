@@ -3128,6 +3128,101 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidPredictionCoasts) {
   EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
 }
 
+// The void regime judgement that keeps KSP's own orbit machinery off a vessel
+// whose stock orbit KSP's hierarchy cannot express.  It must distinguish a
+// vessel near a star from one in the deep void, and it must be silent in a
+// single-subsystem game, where the far field is not damped at all and every
+// stock orbit is expressible: that is what keeps stock KSP untouched.
+TEST_F(PluginIntegrationTestWithoutPlugin, VesselIsInVoidJudgesTheRegime) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_near = "near";
+  plugin->InsertOrKeepVessel(guid_near, "near", star_a, /*loaded=*/false,
+                             inserted);
+  plugin->InsertUnloadedPart(
+      501, "part-near", guid_near,
+      {Displacement<AliceSun>({1e9 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           11 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a, /*loaded=*/false,
+                             inserted);
+  plugin->InsertUnloadedPart(
+      502, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+
+  EXPECT_FALSE(plugin->VesselIsInVoid(guid_near));
+  EXPECT_TRUE(plugin->VesselIsInVoid(guid_void));
+}
+
+// The same coordinates in a single-subsystem system.  The vessel is 2e16 m from
+// the only star, so any distance-based rule would call it void; the judgement is
+// nevertheless false, because with one subsystem there is no far-field damping
+// and KSP's own hierarchy has a body at the root that expresses this orbit.
+// Were this true, a stock game would lose its patched conics.  A plugin holds a
+// global configuration saver, so only one may exist at a time; hence a second
+// test rather than a second plugin.
+TEST_F(PluginIntegrationTestWithoutPlugin, VesselIsNeverInVoidWithOneSubsystem) {
+  Index const star_a = 0;
+  GUID const guid_void = "drifter";
+  bool inserted;
+  auto stock = std::make_unique<Plugin>("JD2451545.0", "JD2451545.0",
+                                        1 * Radian);
+  {
+    serialization::GravityModel::Body gravity_model;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name                    : "star A"
+           gravitational_parameter : "1.3e20 m^3/s^2"
+           reference_instant       : "JD2451545.0"
+           mean_radius             : "1e6 m"
+           axis_right_ascension    : "0 deg"
+           axis_declination        : "90 deg"
+           reference_angle         : "0 rad"
+           angular_frequency       : "1 rad/s")",
+        &gravity_model));
+    serialization::InitialState::Cartesian::Body initial_state;
+    CHECK(google::protobuf::TextFormat::ParseFromString(
+        R"(name : "star A"
+           x    : "0 m"
+           y    : "0 m"
+           z    : "0 m"
+           vx   : "0 m/s"
+           vy   : "0 m/s"
+           vz   : "0 m/s")",
+        &initial_state));
+    stock->InsertCelestialAbsoluteCartesian(star_a,
+                                            /*parent_index=*/std::nullopt,
+                                            gravity_model,
+                                            initial_state);
+  }
+  stock->EndInitialization();
+  stock->InsertOrKeepVessel(guid_void, "drifter", star_a, /*loaded=*/false,
+                            inserted);
+  stock->InsertUnloadedPart(
+      503, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>()});
+  stock->PrepareToReportCollisions();
+  stock->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    stock->CatchUpLaggingVessels(collided_vessels);
+  }
+  EXPECT_FALSE(stock->VesselIsInVoid(guid_void));
+}
+
 // R1/WS6-5/6: a flight plan created from an anchored void vessel must coast
 // weightlessly, not plunge.  Its coast segment is flowed from the near-origin
 // anchored coordinates by `FlightPlan::CoastSegment`; the pre-fix code carried

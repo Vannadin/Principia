@@ -447,6 +447,13 @@ class Plugin {
   // and cover the actual final time of the flight plan.
   virtual void ExtendPredictionForFlightPlan(GUID const& vessel_guid) const;
 
+  // Whether the vessel is in the far field of every body — the interstellar
+  // void.  This is the same judgement the void readout makes, but without the
+  // nearest-star survey, so that it can be asked of the whole fleet every
+  // frame.  Always false where the far field is not damped at all, i.e. in a
+  // single-subsystem game.
+  virtual bool VesselIsInVoid(GUID const& vessel_guid) const;
+
   // The registration for a `World` rendering of a plot of the vessel with the
   // given GUID: where the vessel is in the plotting frame now, paired with
   // `world_position`, where the caller reports the scene draws it.  Absent if

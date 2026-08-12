@@ -187,6 +187,16 @@ QP __cdecl principia__VesselGetWorldDegreesOfFreedom(
       plugin->CurrentTime())));
 }
 
+// Whether the vessel is in the interstellar void; see
+// `Plugin::VesselIsInVoid`.  The caller uses this to keep KSP's own machinery
+// off a vessel whose stock orbit its hierarchy cannot express.
+bool __cdecl principia__VesselIsInVoid(Plugin const* const plugin,
+                                       char const* const vessel_guid) {
+  journal::Method<journal::VesselIsInVoid> m({plugin, vessel_guid});
+  CHECK(plugin != nullptr);
+  return m.Return(plugin->VesselIsInVoid(vessel_guid));
+}
+
 AdaptiveStepParameters __cdecl
 principia__VesselGetPredictionAdaptiveStepParameters(
     Plugin const* const plugin,

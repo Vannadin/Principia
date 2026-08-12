@@ -293,7 +293,7 @@ message OrbitAnalysis {
 }
 
 message Method {
-  extensions 5000 to 5999;  // Last used: 5227.
+  extensions 5000 to 5999;  // Last used: 5228.
 }
 
 message ActivatePlayer {
@@ -2901,6 +2901,22 @@ message VesselGetNavigationState {
   }
   optional In in = 1;
   optional Out out = 2;
+}
+
+message VesselIsInVoid {
+  extend Method {
+    optional VesselIsInVoid extension = 5228;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin const",
+                                 (is_subject) = true];
+    required string vessel_guid = 2;
+  }
+  message Return {
+    required bool result = 1;
+  }
+  optional In in = 1;
+  optional Return return = 3;
 }
 
 message VesselGetPlacement {

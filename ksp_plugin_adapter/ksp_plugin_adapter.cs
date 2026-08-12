@@ -2831,6 +2831,25 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
             : OrbitRenderer.DrawMode.OFF;
   }
 
+  // Takes KSP's patched-conic solver, renderer and targeter off a vessel whose
+  // stock orbit its own hierarchy cannot express.  `DetachPatchedConicsSolver`
+  // saves the manoeuvre-node data, destroys those three components and restores
+  // the plain ellipse, so the vessel keeps a stock display; the ellipse is then
+  // suppressed by the option like any other, since at void radius it is not
+  // worth drawing.  Idempotent: KSP only re-attaches in `Vessel.MakeActive`.
+  private void DetachStockOrbitMachineryIfInVoid(Vessel vessel) {
+    if (!vessel.PatchedConicsAttached) {
+      return;
+    }
+    string vessel_guid = vessel.id.ToString();
+    if (!plugin_.HasVessel(vessel_guid) || !plugin_.VesselIsInVoid(vessel_guid)) {
+      return;
+    }
+    Log.Info("Detaching the stock patched conics of " + vessel.vesselName +
+             ": its stock orbit is of void radius, which KSP cannot express");
+    vessel.DetachPatchedConicsSolver();
+  }
+
   private void RemoveStockTrajectoriesIfNeeded(Vessel vessel) {
     if (vessel.patchedConicRenderer != null) {
       vessel.patchedConicRenderer.relativityMode =
@@ -2952,6 +2971,16 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       // event...
       vessel.mapObject.uiNode.OnClick -= OnVesselNodeClick;
       vessel.mapObject.uiNode.OnClick += OnVesselNodeClick;
+      // KSP's hierarchy has no room for a vessel in the interstellar void: its
+      // root's sphere of influence is unbounded, so the vessel is given the
+      // stock sun as a parent and a stock orbit of interstellar radius, whose
+      // period runs to 1e19 s.  Nothing renders that orbit usefully, and the
+      // patched-conic machinery throws on it every frame — its captions form
+      // the year count as an int, which saturates and then cannot be negated.
+      // So we take that machinery off such a vessel entirely, in every scene:
+      // this must not be governed by the option below, which decides what to
+      // show, whereas here KSP cannot express the orbit at all.
+      DetachStockOrbitMachineryIfInVoid(vessel);
       // Our lines are not visible in the tracking station even when their
       // vertices plot, so nothing may be suppressed there: the stock lines
       // are the only orbit display that scene has.
