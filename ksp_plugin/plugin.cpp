@@ -1440,7 +1440,16 @@ void Plugin::ExtendPredictionForFlightPlan(GUID const& vessel_guid) const {
 
 bool Plugin::VesselIsInVoid(GUID const& vessel_guid) const {
   CHECK(!initializing_);
+  // The judgement evaluates the bodies at `current_time_`, which is fatal
+  // outside their domain; prolonging is a no-op when it is already covered, and
+  // is what the void readout does before the same call.  A vessel with no
+  // psychohistory yet — inserted but not caught up — has no position to judge,
+  // and this is asked of the whole fleet, not just the active vessel.
+  ephemeris_->Prolong(current_time_).IgnoreError();
   Vessel const& vessel = *FindOrDie(vessels_, vessel_guid);
+  if (vessel.psychohistory()->empty()) {
+    return false;
+  }
   // The vessel's position with its anchor folded in, as the void readout takes
   // it; an anchored vessel's stored coordinates are near its own origin.
   Position<Barycentric> position =

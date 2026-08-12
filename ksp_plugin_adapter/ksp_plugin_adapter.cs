@@ -2622,9 +2622,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                              last_guidance_manœuvre_ !=
                              first_future_manœuvre_index;
         last_guidance_manœuvre_ = first_future_manœuvre_index;
+        // The solver is absent on a vessel whose stock orbit KSP cannot express,
+        // where we take its patched conics away; the guidance node lives in that
+        // solver, so there is nowhere to put it.
         if (!skip_guidance &&
             flight_planner_.show_guidance &&
-            !IsNaN(guidance)) {
+            !IsNaN(guidance) &&
+            active_vessel.patchedConicSolver != null) {
           // The user wants to show the guidance node, and that node was
           // properly computed by the C++ code.
           PatchedConicSolver solver = active_vessel.patchedConicSolver;
@@ -2667,8 +2671,11 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     }
     if (guidance_node_ != null) {
       // We may end up here with a guidance node created for another vessel when
-      // switching vessels, see #3873.
-      if (active_vessel.patchedConicSolver.maneuverNodes.Contains(
+      // switching vessels, see #3873.  The solver may also be gone, having been
+      // taken off a vessel whose stock orbit KSP cannot express; the node went
+      // with it, so there is nothing left to remove.
+      if (active_vessel.patchedConicSolver != null &&
+          active_vessel.patchedConicSolver.maneuverNodes.Contains(
               guidance_node_)) {
         guidance_node_.RemoveSelf();
       }
@@ -2833,10 +2840,20 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
   // Takes KSP's patched-conic solver, renderer and targeter off a vessel whose
   // stock orbit its own hierarchy cannot express.  `DetachPatchedConicsSolver`
-  // saves the manoeuvre-node data, destroys those three components and restores
-  // the plain ellipse, so the vessel keeps a stock display; the ellipse is then
-  // suppressed by the option like any other, since at void radius it is not
-  // worth drawing.  Idempotent: KSP only re-attaches in `Vessel.MakeActive`.
+  // saves the manoeuvre-node data — both paths that re-attach reload it — and
+  // destroys those three components, which own every time this orbit would have
+  // KSP format, and the targeter as much as the renderer.
+  //
+  // It also restores the plain ellipse, which we then turn back off: at void
+  // radius that ellipse is a circle of interstellar radius captioned with a
+  // nineteen-digit apoapsis, and in the tracking station nothing else would
+  // suppress it, since the option deliberately does not run there.  Drawing
+  // nothing is the honest rendering of an orbit KSP cannot express.
+  //
+  // KSP re-attaches in `Vessel.MakeActive` and in `SpaceTracking.SetVessel`, so
+  // this runs again on a vessel switch or a tracking-station selection; it is
+  // idempotent, and one frame of stock rendering precedes it, since our hook is
+  // in `OnPreCull`, after `LateUpdate`.
   private void DetachStockOrbitMachineryIfInVoid(Vessel vessel) {
     if (!vessel.PatchedConicsAttached) {
       return;
@@ -2848,6 +2865,11 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     Log.Info("Detaching the stock patched conics of " + vessel.vesselName +
              ": its stock orbit is of void radius, which KSP cannot express");
     vessel.DetachPatchedConicsSolver();
+    if (vessel.orbitDriver != null && vessel.orbitDriver.Renderer != null) {
+      vessel.orbitDriver.Renderer.drawMode = OrbitRenderer.DrawMode.OFF;
+      vessel.orbitDriver.Renderer.drawIcons = OrbitRenderer.DrawIcons.OBJ;
+      vessel.orbitDriver.Renderer.drawNodes = false;
+    }
   }
 
   private void RemoveStockTrajectoriesIfNeeded(Vessel vessel) {

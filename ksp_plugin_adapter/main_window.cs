@@ -222,7 +222,7 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
                                   style: Style.Info(
                                       UnityEngine.GUI.skin.label));
       history_length_.Render(enabled : true);
-      if (FlightGlobals.ActiveVessel?.orbitTargeter != null &&
+      if (FlightGlobals.ActiveVessel != null &&
           (MapView.MapIsEnabled ||
            FlightGlobals.fetch.VesselTarget?.GetVessel() != null)) {
         show_selection_ui_ = true;
@@ -527,7 +527,7 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
         text  : L10N.CacheFormat(
             "#Principia_MainWindow_KspFeature_DisplayPatchedConics"));
     if (MapView.MapIsEnabled &&
-        FlightGlobals.ActiveVessel?.orbitTargeter != null) {
+        FlightGlobals.ActiveVessel != null) {
       using (new UnityEngine.GUILayout.HorizontalScope()) {
         selecting_target_celestial_ = UnityEngine.GUILayout.Toggle(
             selecting_target_celestial_,

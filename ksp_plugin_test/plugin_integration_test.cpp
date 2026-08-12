@@ -3169,9 +3169,11 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VesselIsInVoidJudgesTheRegime) {
 
 // The same coordinates in a single-subsystem system.  The vessel is 2e16 m from
 // the only star, so any distance-based rule would call it void; the judgement is
-// nevertheless false, because with one subsystem there is no far-field damping
-// and KSP's own hierarchy has a body at the root that expresses this orbit.
-// Were this true, a stock game would lose its patched conics.  A plugin holds a
+// nevertheless false, because with one subsystem there is no far-field damping.
+// This is a scope decision, not a statement about KSP: stock's root sphere of
+// influence is unbounded too, and a stock vessel this far from Kerbol overflows
+// the same formatter.  We simply do not reach into a game that has no far field
+// to speak of, so such a game is left exactly as it was.  A plugin holds a
 // global configuration saver, so only one may exist at a time; hence a second
 // test rather than a second plugin.
 TEST_F(PluginIntegrationTestWithoutPlugin, VesselIsNeverInVoidWithOneSubsystem) {
