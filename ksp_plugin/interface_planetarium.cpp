@@ -16,8 +16,10 @@
 #include "journal/method.hpp"
 #include "journal/profiles.hpp"  // 🧙 For generated profiles.
 #include "ksp_plugin/frames.hpp"
+#include "ksp_plugin/celestial.hpp"
 #include "ksp_plugin/planetarium.hpp"
 #include "ksp_plugin/renderer.hpp"
+#include "ksp_plugin/vessel.hpp"
 #include "physics/discrete_trajectory.hpp"
 #include "physics/ephemeris.hpp"
 #include "quantities/quantities.hpp"
@@ -36,11 +38,26 @@ using namespace principia::geometry::_space_transformations;
 using namespace principia::journal::_method;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_planetarium;
+using namespace principia::ksp_plugin::_celestial;
 using namespace principia::ksp_plugin::_renderer;
+using namespace principia::ksp_plugin::_vessel;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
+
+namespace {
+
+// The registration point of a vessel's plot: where the vessel is now, which
+// is where the scene draws it.  Its subsystem placement is the vessel's, the
+// same as that of every trajectory we plot for it.
+Planetarium::Registration VesselRegistration(Plugin const& plugin,
+                                             Vessel const& vessel) {
+  Instant const t = plugin.CurrentTime();
+  return {.time = t, .position = vessel.trajectory().EvaluatePosition(t)};
+}
+
+}  // namespace
 
 Planetarium* __cdecl principia__PlanetariumCreate(
     Plugin const* const plugin,
@@ -168,7 +185,8 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
         },
         vertices_size,
         {vessel.flight_plan().placement().subsystem, std::nullopt},
-        &anchor_coordinates);
+        &anchor_coordinates,
+        VesselRegistration(*plugin, vessel));
   }
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
@@ -206,7 +224,8 @@ void __cdecl principia__PlanetariumPlotPrediction(
       },
       vertices_size,
       vessel->placement(),
-      &anchor_coordinates);
+      &anchor_coordinates,
+      VesselRegistration(*plugin, *vessel));
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
 }
@@ -268,7 +287,8 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
         },
         vertices_size,
         vessel->placement(),
-        &anchor_coordinates);
+        &anchor_coordinates,
+        VesselRegistration(*plugin, *vessel));
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   }
@@ -331,7 +351,10 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
         vertices_size,
         &minimal_distance,
         {celestial.subsystem(), std::nullopt},
-        &anchor_coordinates);
+        &anchor_coordinates,
+        Planetarium::Registration{
+            .time = plugin->CurrentTime(),
+            .position = celestial.current_position(plugin->CurrentTime())});
     *minimal_distance_from_camera = minimal_distance / Metre;
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
@@ -395,7 +418,10 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
         vertices_size,
         &minimal_distance,
         {celestial.subsystem(), std::nullopt},
-        &anchor_coordinates);
+        &anchor_coordinates,
+        Planetarium::Registration{
+            .time = plugin->CurrentTime(),
+            .position = celestial.current_position(plugin->CurrentTime())});
     *minimal_distance_from_camera = minimal_distance / Metre;
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();

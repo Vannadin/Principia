@@ -1,5 +1,6 @@
 #pragma once
 
+#include <optional>
 #include <vector>
 
 #include "base/algebra.hpp"
@@ -85,6 +86,18 @@ class Planetarium {
   // an interstellar distance is ever formed per vertex.
   using PlottingToScaledSpaceDisplacementConversion =
       std::function<R3Element<double>(Displacement<Navigation> const&)>;
+
+  // The point against which an anchored plot is registered: a position both
+  // the plotter and its consumer can name, at a time at which both know it.
+  // It need not lie on the plotted trajectory — it is the plotted vessel or
+  // body at the present, which is where the scene draws that object — and
+  // the plot is reported as displacements from it, so that neither side ever
+  // expresses it in scaled space across the distance to the plotting frame's
+  // origin.  `position` is in the same placement as the plotted trajectory.
+  struct Registration final {
+    Instant time;
+    Position<Barycentric> position;
+  };
 
   // The conversion used in production.  It never forms the world position of a
   // plotted point: at interstellar distances that position rounds to the ULP of
@@ -201,11 +214,12 @@ class Planetarium {
       int max_points,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
           Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
-      R3Element<double>* anchor_out = nullptr) const;
+      R3Element<double>* anchor_out = nullptr,
+      std::optional<Registration> const& registration = std::nullopt) const;
 
   // The same method, operating on the `Trajectory` interface for any frame that
-  // can be converted to `Navigation`.  `placement` is only meaningful when
-  // `Frame` is `Barycentric`.
+  // can be converted to `Navigation`.  `placement` and `registration` are only
+  // meaningful when `Frame` is `Barycentric`.
   template<typename Frame>
   void PlotMethod4(
       Trajectory<Frame> const& trajectory,
@@ -217,7 +231,8 @@ class Planetarium {
       Length* minimal_distance = nullptr,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
           Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
-      R3Element<double>* anchor_out = nullptr) const;
+      R3Element<double>* anchor_out = nullptr,
+      std::optional<Registration> const& registration = std::nullopt) const;
 
  private:
   // The displacement-native variant of `PlotMethod4`, used for an anchored
@@ -238,7 +253,8 @@ class Planetarium {
       int max_points,
       Length* minimal_distance,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement,
-      R3Element<double>& anchor_out) const;
+      R3Element<double>& anchor_out,
+      Registration const& registration) const;
 
   // Computes the coordinates of the spheres that represent the `ephemeris_`
   // bodies.  These coordinates are in the `plotting_frame_` at time `now`.

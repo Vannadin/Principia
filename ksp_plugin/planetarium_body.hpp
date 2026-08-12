@@ -162,12 +162,14 @@ void Planetarium::PlotMethod4(
     int const max_points,
     Length* const minimal_distance,
     Ephemeris<Barycentric>::SubsystemPlacement const& placement,
-    R3Element<double>* const anchor_out) const {
+    R3Element<double>* const anchor_out,
+    std::optional<Registration> const& registration) const {
   if (anchor_out != nullptr) {
     *anchor_out = R3Element<double>{};
   }
   if constexpr (std::is_same_v<Frame, Barycentric>) {
-    if (anchor_out != nullptr && ephemeris_->number_of_subsystems() > 1) {
+    if (anchor_out != nullptr && registration.has_value() &&
+        ephemeris_->number_of_subsystems() > 1) {
       // An anchored plot is emitted as displacements from the camera: at
       // interstellar distances an absolute position formed per vertex rounds
       // at the double ULP of the distance to the plotting frame's origin,
@@ -180,7 +182,8 @@ void Planetarium::PlotMethod4(
                           max_points,
                           minimal_distance,
                           placement,
-                          *anchor_out);
+                          *anchor_out,
+                          *registration);
       return;
     }
     Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
@@ -234,7 +237,11 @@ void Planetarium::PlotMethod4(
   // viewpoint — whereas an anchor on the geometry lets the end of a long
   // trajectory far from it quantize visibly as the camera closes in on it.
   // Subtracting a zero anchor leaves the vertices bit-identical to the
-  // absolute rendering.
+  // absolute rendering.  NOTE that this anchor is an absolute position,
+  // whereas the anchored path above reports a displacement from the
+  // registration point: the two conventions are indistinguishable in the one
+  // vector the consumer receives, so it must know which of them it asked for.
+  // Only a plot without a registration reaches this one, i.e. equipotentials.
   R3Element<double> anchor{};
   if (anchor_out != nullptr && ephemeris_->number_of_subsystems() > 1) {
     anchor = plotting_to_scaled_space_(previous_time, perspective_.camera());

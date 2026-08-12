@@ -50,6 +50,7 @@ class Plotter {
           out XYZ anchor);
       DrawLineMesh(equipotential_meshes_[i], vertex_count, anchor, colour,
                    GLLines.Style.Solid,
+                   /*registration_reference_world=*/null,
                    equipotential_reference?.position);
     }
   }
@@ -267,12 +268,27 @@ class Plotter {
     }
   }
 
+  // An anchored mesh is emitted relative to the plot's own reference, which
+  // is the plotted vessel at the present — the very position the scene draws
+  // its icon at.  Drawing the mesh at the scene's own mapping of that
+  // position registers the two exactly: neither side has to express the
+  // reference in scaled space across the interstellar distance to the
+  // plotting frame's origin, where that expression would round to a
+  // kilometre and shift the whole line off the icon.
+  private static Vector3d SceneReferenceTranslation(Vector3d reference_world,
+                                                   XYZ camera_from_reference) {
+    return (Vector3d)ScaledSpace.LocalToScaledSpace(reference_world) +
+           (Vector3d)camera_from_reference;
+  }
+
   // The scene's world-to-scaled transform and the affine map given to the
   // planetarium disagree by the float32 rounding of the transform state —
   // ~1e8 m at interstellar magnitudes.  Rebasing a mesh by this correction,
   // evaluated at a reference near its geometry, draws it through the scene's
   // own mapping there, so the disagreement is common-mode with the icons and
-  // sprites the lines are compared against.
+  // sprites the lines are compared against.  This is the convention of the
+  // plots that carry no registration, whose anchor is the camera's absolute
+  // scaled-space position.
   private static Vector3d SceneMappingCorrection(Vector3d reference_world) {
     return (Vector3d)ScaledSpace.LocalToScaledSpace(reference_world) -
            (reference_world - GLLines.current_scaled_space_origin) *
@@ -284,14 +300,15 @@ class Plotter {
                             XYZ anchor,
                             UnityEngine.Color colour,
                             GLLines.Style style,
-                            Vector3d? scene_reference_world = null) {
+                            Vector3d? registration_reference_world = null,
+                            Vector3d? correction_reference_world = null) {
     // Construct the mesh on the first call because Unity doesn't want us to do
     // that at construction.
     if (mesh == null) {
       mesh = MakeDynamicMesh();
     }
     DrawLineMesh(mesh, vertex_count, anchor, colour, style,
-                 scene_reference_world);
+                 registration_reference_world, correction_reference_world);
   }
 
   private void DrawLineMesh(UnityEngine.Mesh mesh,
@@ -299,7 +316,8 @@ class Plotter {
                             XYZ anchor,
                             UnityEngine.Color colour,
                             GLLines.Style style,
-                            Vector3d? scene_reference_world = null) {
+                            Vector3d? registration_reference_world = null,
+                            Vector3d? correction_reference_world = null) {
     if (vertex_count > VertexBuffer.size) {
       Log.Fatal("Trying to draw " +
                 vertex_count +
@@ -341,15 +359,30 @@ class Plotter {
                         : UnityEngine.MeshTopology.LineStrip,
                     submesh: 0);
     mesh.RecalculateBounds();
-    // The vertices are relative to the anchor, whose single float rounding
-    // here is common-mode over the mesh; drawing at the anchor reassembles
-    // their scaled-space positions.  A nonzero anchor is rebased on the
-    // scene's own mapping at the reference; zero is the stock bit-identical
-    // path, left untouched.
+    // The vertices are relative to the camera, which bounds their float
+    // rounding by the ULP of their distance from it, angularly sub-pixel from
+    // any viewpoint.  An anchored plot reports the camera as a displacement
+    // from the plot's own reference — the plotted vessel at the present, the
+    // very position the scene draws its icon at — so drawing at the scene's
+    // mapping of that position, plus the displacement — the camera's own
+    // scene position — reassembles the plot through the scene's own
+    // arithmetic: the camera term cancels and neither
+    // side ever expresses a point in scaled space across the distance to the
+    // plotting frame's origin, where it would round to a kilometre.  A zero
+    // anchor is the stock bit-identical path, left untouched.
     Vector3d translation = (Vector3d)anchor;
-    if (scene_reference_world.HasValue &&
-        (anchor.x != 0 || anchor.y != 0 || anchor.z != 0)) {
-      translation += SceneMappingCorrection(scene_reference_world.Value);
+    if (anchor.x != 0 || anchor.y != 0 || anchor.z != 0) {
+      if (registration_reference_world.HasValue) {
+        // The anchor is the camera as a displacement from the plot's own
+        // registration point; the scene's mapping of that point plus the
+        // displacement is the camera's own scene position.
+        translation = SceneReferenceTranslation(
+            registration_reference_world.Value, anchor);
+      } else if (correction_reference_world.HasValue) {
+        // The anchor is the camera's absolute scaled-space position.
+        translation += SceneMappingCorrection(
+            correction_reference_world.Value);
+      }
     }
     // If the lines are drawn in layer 31 (Vectors), which sounds more
     // appropriate, they vanish when zoomed out.  Layer 9 works; pay no
