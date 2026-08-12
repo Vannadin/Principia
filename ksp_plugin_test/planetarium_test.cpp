@@ -536,7 +536,8 @@ TEST_F(PlanetariumTest, PlotMethod4WithAnchor) {
             Planetarium::Registration{
                 .time = discrete_trajectory.front().time,
                 .position = discrete_trajectory.front().degrees_of_freedom
-                                .position()});
+                                .position(),
+                .placement = placement});
         return points;
       };
 
@@ -659,7 +660,8 @@ TEST_F(PlanetariumTest, PlotMethod4AnchoredAtInterstellarDistance) {
       Planetarium::Registration{
           .time = discrete_trajectory.front().time,
           .position = discrete_trajectory.front().degrees_of_freedom
-                          .position()});
+                          .position(),
+          .placement = {/*subsystem=*/0, anchor}});
 
   // The vertices are camera-relative; translating them by the (exact)
   // camera-to-centre displacement measures them against the ideal circle.
@@ -773,7 +775,8 @@ TEST_F(PlanetariumTest, PlotMethod4AnchoredRegistration) {
       &render_anchor,
       Planetarium::Registration{
           .time = discrete_trajectory.front().time,
-          .position = Barycentric::origin});
+          .position = Barycentric::origin,
+          .placement = {/*subsystem=*/0, anchor}});
 
   // The scene's mapping of the reference, which the adapter supplies from the
   // vessel's own scene position.  The scene keeps its origin in the
@@ -844,7 +847,8 @@ TEST_F(PlanetariumTest, PlotMethod4ReferenceAnchor) {
         Planetarium::Registration{
             .time = discrete_trajectory.front().time,
             .position = discrete_trajectory.front().degrees_of_freedom
-                            .position()});
+                            .position(),
+            .placement = Ephemeris<Barycentric>::SubsystemPlacement::Stock()});
     return points;
   };
 

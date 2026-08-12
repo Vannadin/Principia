@@ -402,8 +402,16 @@ void Planetarium::PlotMethod4Anchored(
   }
 
   // Everything at the magnitude of the distance to the plotting frame's
-  // origin is computed once here; only displacements appear per vertex.
-  Position<Barycentric> const q_ref = registration.position;
+  // origin is computed once here; only displacements appear per vertex.  The
+  // registration is brought into the trajectory's placement on the sector
+  // lattice, where two anchors difference exactly.
+  Position<Barycentric> q_ref = registration.position;
+  if (registration.placement != placement) {
+    q_ref += ephemeris_
+                 ->placement_conversion(
+                     registration.placement, placement, t_ref)
+                 .first;
+  }
   SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t_ref =
       plotting_frame_->ToThisFrameAtTimeSimilarly(t_ref);
   auto const& similarity_ref = to_plotting_frame_at_t_ref.similarity();

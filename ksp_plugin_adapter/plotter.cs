@@ -138,7 +138,6 @@ class Plotter {
                        is_burn
                            ? adapter_.burn_style
                            : adapter_.flight_plan_style,
-                       /*registration_reference_world=*/null,
                        main_reference);
         }
       }

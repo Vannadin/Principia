@@ -49,12 +49,10 @@ using namespace principia::quantities::_si;
 namespace {
 
 // The registration point of a vessel's plot: where the vessel is now, which
-// is where the scene draws it.  Only for the trajectories represented in the
-// vessel's own placement — the flight plan drops its anchor when it is
-// plotted, so its coordinates are not these.  Absent if the vessel is not
-// where we are looking: a trajectory may be empty, or lag the current time
-// while it catches up, and plotting unregistered is better than evaluating
-// out of the domain, which is fatal.
+// is where the scene draws it.  Absent if the vessel is not where we are
+// looking: a trajectory may be empty, or lag the current time while it catches
+// up, and plotting unregistered is better than evaluating out of the domain,
+// which is fatal.
 std::optional<Planetarium::Registration> VesselRegistration(
     Plugin const& plugin,
     Vessel const& vessel) {
@@ -64,7 +62,8 @@ std::optional<Planetarium::Registration> VesselRegistration(
     return std::nullopt;
   }
   return Planetarium::Registration{.time = t,
-                                   .position = trajectory.EvaluatePosition(t)};
+                                   .position = trajectory.EvaluatePosition(t),
+                                   .placement = vessel.placement()};
 }
 
 }  // namespace
@@ -194,12 +193,9 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
           vertices[(*vertex_count)++] = vertex;
         },
         vertices_size,
-        // NOTE that this drops the flight plan's anchor, so the plotted
-        // coordinates are not in the vessel's placement and the vessel's
-        // present position is not a reference for them; until that is
-        // reconciled this plot keeps the unregistered convention.
-        {vessel.flight_plan().placement().subsystem, std::nullopt},
-        &anchor_coordinates);
+        vessel.flight_plan().placement(),
+        &anchor_coordinates,
+        VesselRegistration(*plugin, vessel));
   }
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
@@ -370,7 +366,8 @@ void __cdecl principia__PlanetariumPlotCelestialPastTrajectory(
             ? std::make_optional(Planetarium::Registration{
                   .time = plugin->CurrentTime(),
                   .position =
-                      celestial.current_position(plugin->CurrentTime())})
+                      celestial.current_position(plugin->CurrentTime()),
+                  .placement = {celestial.subsystem(), std::nullopt}})
             : std::nullopt);
     *minimal_distance_from_camera = minimal_distance / Metre;
     *anchor = ToXYZ(anchor_coordinates);
@@ -441,7 +438,8 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
             ? std::make_optional(Planetarium::Registration{
                   .time = plugin->CurrentTime(),
                   .position =
-                      celestial.current_position(plugin->CurrentTime())})
+                      celestial.current_position(plugin->CurrentTime()),
+                  .placement = {celestial.subsystem(), std::nullopt}})
             : std::nullopt);
     *minimal_distance_from_camera = minimal_distance / Metre;
     *anchor = ToXYZ(anchor_coordinates);

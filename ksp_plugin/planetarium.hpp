@@ -93,10 +93,13 @@ class Planetarium {
   // body at the present, which is where the scene draws that object — and
   // the plot is reported as displacements from it, so that neither side ever
   // expresses it in scaled space across the distance to the plotting frame's
-  // origin.  `position` is in the same placement as the plotted trajectory.
+  // origin.  `position` is in `placement`, which need not be that of the
+  // plotted trajectory: a flight plan is registered on the vessel that flies
+  // it, and the two are anchored separately.
   struct Registration final {
     Instant time;
     Position<Barycentric> position;
+    Ephemeris<Barycentric>::SubsystemPlacement placement;
   };
 
   // The conversion used in production.  It never forms the world position of a

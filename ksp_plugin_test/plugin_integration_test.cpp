@@ -35,6 +35,7 @@
 #include "integrators/methods.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/identification.hpp"
+#include "ksp_plugin/interface.hpp"
 #include "ksp_plugin/part.hpp"
 #include "ksp_plugin/planetarium.hpp"
 #include "numerics/elementary_functions.hpp"
@@ -3189,6 +3190,116 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidFlightPlanCoasts) {
   EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
 }
 
+// The plot of an anchored void vessel's flight plan must land on the vessel.
+// The plan is represented in the vessel's placement, anchor included, and is
+// registered on the vessel: the plot is reported as displacements from where
+// the vessel is now, which is where the scene draws it.  With the camera at
+// the ship, the first vertex and the anchor that carries it are therefore both
+// zero, while the coast a plotted hour later is ~1800 scaled units away.
+// Plotting the plan in `{subsystem, nullopt}` — dropping the anchor, as this
+// call did — instead drew it at the subsystem's origin, ~2e16 m from the ship,
+// which is 3e12 scaled units in both quantities below.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       AnchoredVoidFlightPlanPlotsAtTheVessel) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      302, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+  ASSERT_TRUE(drifter->placement().anchor.has_value());
+
+  drifter->CreateFlightPlan(
+      drifter->trajectory().back().time + 1 * Hour,
+      1 * Kilogram,
+      Ephemeris<Barycentric>::AdaptiveStepParameters(
+          EmbeddedExplicitRungeKuttaNyströmIntegrator<
+              DormandالمكاوىPrince1986RKN434FM,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*max_steps=*/1000,
+          /*length_integration_tolerance=*/1 * Milli(Metre),
+          /*speed_integration_tolerance=*/1 * Milli(Metre) / Second),
+      Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters(
+          EmbeddedExplicitGeneralizedRungeKuttaNyströmIntegrator<
+              Fine1987RKNG34,
+              Ephemeris<Barycentric>::GeneralizedNewtonianMotionEquation>(),
+          /*max_steps=*/1000,
+          /*length_integration_tolerance=*/1 * Milli(Metre),
+          /*speed_integration_tolerance=*/1 * Milli(Metre) / Second));
+  ASSERT_TRUE(drifter->has_flight_plan());
+
+  // The camera sits at the ship, as it does when one looks at one's own plan.
+  auto const& renderer = plugin->renderer();
+  auto const& psychohistory = drifter->psychohistory();
+  auto const plotted_psychohistory =
+      renderer.RenderBarycentricTrajectoryInPlotting(psychohistory->begin(),
+                                                     psychohistory->end(),
+                                                     drifter->placement());
+  Position<Navigation> const camera =
+      plotted_psychohistory.back().degrees_of_freedom.position();
+
+  constexpr double inverse_scale_factor = 1.0 / 6000;
+  Similarity<World, Navigation> const world_to_plotting =
+      renderer.WorldToPlotting(plugin->CurrentTime(),
+                               World::origin,
+                               plugin->PlanetariumRotation());
+  auto const planetarium = plugin->NewPlanetarium(
+      Planetarium::Parameters(/*sphere_radius_multiplier=*/1.0,
+                              /*angular_resolution=*/1e-4 * Radian,
+                              /*field_of_view=*/π / 2 * Radian),
+      Perspective<Navigation, Camera>(
+          RigidTransformation<Navigation, Camera>(
+              camera,
+              Camera::origin,
+              Signature<Navigation, Camera>::CentralInversion()
+                  .Forget<OrthogonalMap>()).Forget<Similarity>(),
+          /*focal=*/1 * Metre),
+      Planetarium::MakePlottingToScaledSpaceConversion(
+          world_to_plotting, World::origin, inverse_scale_factor / Metre),
+      Planetarium::MakePlottingToScaledSpaceDisplacementConversion(
+          world_to_plotting, inverse_scale_factor / Metre));
+
+  std::vector<ScaledSpacePoint> vertices(100);
+  int vertex_count = 0;
+  interface::XYZ anchor;
+  interface::principia__PlanetariumPlotFlightPlanSegment(
+      planetarium.get(),
+      plugin.get(),
+      guid_void.c_str(),
+      /*index=*/0,
+      /*t_max=*/nullptr,
+      vertices.data(),
+      vertices.size(),
+      &vertex_count,
+      &anchor);
+
+  ASSERT_GT(vertex_count, 1);
+  auto const norm = [](auto const& p) {
+    return R3Element<double>(p.x, p.y, p.z).Norm();
+  };
+  EXPECT_THAT(norm(anchor), Lt(1.0));
+  EXPECT_THAT(norm(vertices[0]), Lt(1.0));
+  // The coast itself, so that a plot collapsed to the reference would not pass.
+  EXPECT_THAT(norm(vertices[vertex_count - 1]),
+              AllOf(Gt(1e2), Lt(1e5)));
+}
+
 // WS6-6 (capstone): two vessels a few metres apart deep in the inter-stellar
 // void each adopt their own anchor.  The anchor is what makes a mm-scale
 // rendezvous representable at all: a vessel's *stored* coordinates stay near
@@ -3831,8 +3942,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
         &anchor,
         Planetarium::Registration{
             .time = trajectory.front().time,
-            .position =
-                trajectory.front().degrees_of_freedom.position()});
+            .position = trajectory.front().degrees_of_freedom.position(),
+            .placement = vessel.placement()});
     ASSERT_GT(vertices.size(), 3);
     // The anchor is the camera position, exactly; its conversion is recorded
     // as the first `reference` entry, ahead of the camera-relative vertex
@@ -4466,8 +4577,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
         &anchor,
         Planetarium::Registration{
             .time = all_segments.front().time,
-            .position =
-                all_segments.front().degrees_of_freedom.position()});
+            .position = all_segments.front().degrees_of_freedom.position(),
+            .placement = flight_plan.placement()});
     // Seen from a star-B-centred camera the void-distant plan subtends a tiny
     // angle, so the adaptive sampling emits only the two endpoints — which
     // suffice here: the far endpoint carries the whole void span.
