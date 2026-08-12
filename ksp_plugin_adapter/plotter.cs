@@ -267,16 +267,17 @@ class Plotter {
     }
   }
 
-  // The scene's world-to-scaled transform and the affine map given to the
-  // planetarium disagree by the float32 rounding of the transform state —
-  // ~1e8 m at interstellar magnitudes.  Rebasing a mesh by this correction,
-  // evaluated at a reference near its geometry, draws it through the scene's
-  // own mapping there, so the disagreement is common-mode with the icons and
-  // sprites the lines are compared against.
-  private static Vector3d SceneMappingCorrection(Vector3d reference_world) {
-    return (Vector3d)ScaledSpace.LocalToScaledSpace(reference_world) -
-           (reference_world - GLLines.current_scaled_space_origin) *
-               ScaledSpace.InverseScaleFactor;
+  // An anchored mesh is emitted relative to the plot's own reference, which
+  // is the plotted vessel at the present — the very position the scene draws
+  // its icon at.  Drawing the mesh at the scene's own mapping of that
+  // position registers the two exactly: neither side has to express the
+  // reference in scaled space across the interstellar distance to the
+  // plotting frame's origin, where that expression would round to a
+  // kilometre and shift the whole line off the icon.
+  private static Vector3d SceneReferenceTranslation(Vector3d reference_world,
+                                                   XYZ camera_from_reference) {
+    return (Vector3d)ScaledSpace.LocalToScaledSpace(reference_world) +
+           (Vector3d)camera_from_reference;
   }
 
   private void DrawLineMesh(ref UnityEngine.Mesh mesh,
@@ -341,15 +342,22 @@ class Plotter {
                         : UnityEngine.MeshTopology.LineStrip,
                     submesh: 0);
     mesh.RecalculateBounds();
-    // The vertices are relative to the anchor, whose single float rounding
-    // here is common-mode over the mesh; drawing at the anchor reassembles
-    // their scaled-space positions.  A nonzero anchor is rebased on the
-    // scene's own mapping at the reference; zero is the stock bit-identical
-    // path, left untouched.
+    // The vertices are relative to the camera, which bounds their float
+    // rounding by the ULP of their distance from it, angularly sub-pixel from
+    // any viewpoint.  An anchored plot reports the camera as a displacement
+    // from the plot's own reference — the plotted vessel at the present, the
+    // very position the scene draws its icon at — so drawing at the scene's
+    // mapping of that position, plus the displacement — the camera's own
+    // scene position — reassembles the plot through the scene's own
+    // arithmetic: the camera term cancels and neither
+    // side ever expresses a point in scaled space across the distance to the
+    // plotting frame's origin, where it would round to a kilometre.  A zero
+    // anchor is the stock bit-identical path, left untouched.
     Vector3d translation = (Vector3d)anchor;
     if (scene_reference_world.HasValue &&
         (anchor.x != 0 || anchor.y != 0 || anchor.z != 0)) {
-      translation += SceneMappingCorrection(scene_reference_world.Value);
+      translation = SceneReferenceTranslation(scene_reference_world.Value,
+                                              anchor);
     }
     // If the lines are drawn in layer 31 (Vectors), which sounds more
     // appropriate, they vanish when zoomed out.  Layer 9 works; pay no

@@ -675,10 +675,116 @@ TEST_F(PlanetariumTest, PlotMethod4AnchoredAtInterstellarDistance) {
   }
 }
 
-// The render anchor returned by `PlotMethod4` is the camera position: the
-// float vertices then quantize at the ULP of their distance from the camera,
-// which is angularly sub-pixel wherever the camera looks.
-TEST_F(PlanetariumTest, PlotMethod4CameraAnchor) {
+// Registration, which is what the anchor exists for: the adapter reassembles
+// a vertex as `scene(reference) + anchor + vertex`, and the plot must land
+// where the scene puts the reference, whatever the plotting frame's origin is
+// doing.  Feeding the reassembly a scene mapping that is exact by
+// construction leaves only our own arithmetic, and at an interstellar
+// distance from the plotting origin that arithmetic must still place the plot
+// to the metre — which it can only do because the camera term cancels
+// between the anchor and the vertices instead of being evaluated across that
+// distance.
+TEST_F(PlanetariumTest, PlotMethod4AnchoredRegistration) {
+  Length const radius = 8192 * Metre;
+  DiscreteTrajectory<Barycentric> discrete_trajectory;
+  AppendTrajectoryTimeline(/*from=*/NewCircularTrajectoryTimeline<Barycentric>(
+                                        /*period=*/10 * Second,
+                                        /*r=*/radius,
+                                        /*Δt=*/0.01 * Second,
+                                        /*t1=*/t0_,
+                                        /*t2=*/t0_ + 10 * Second),
+                           /*to=*/discrete_trajectory);
+
+  Displacement<Barycentric> const interstellar_offset(
+      {6.4e18 * Metre, 6.4e18 * Metre, 0 * Metre});
+  EXPECT_CALL(mock_ephemeris_, number_of_subsystems())
+      .WillRepeatedly(Return(2));
+  ON_CALL(mock_ephemeris_, placement_conversion(_, _, _))
+      .WillByDefault(
+          Return(std::make_pair(interstellar_offset,
+                                Velocity<Barycentric>())));
+
+  Displacement<Navigation> const interstellar_offset_in_navigation(
+      {6.4e18 * Metre, 6.4e18 * Metre, 0 * Metre});
+  Position<Navigation> const circle_centre =
+      Navigation::origin + interstellar_offset_in_navigation;
+  Position<Navigation> const camera_position =
+      circle_centre +
+      Displacement<Navigation>({0 * Metre, 0 * Metre, 1e5 * Metre});
+  Perspective<Navigation, Camera> const perspective(
+      RigidTransformation<Navigation, Camera>(
+          camera_position,
+          Camera::origin,
+          Rotation<LeftNavigation, Camera>(
+              Vector<double, LeftNavigation>({1, 0, 0}),
+              Vector<double, LeftNavigation>({0, 0, 1}),
+              Bivector<double, LeftNavigation>({0, -1, 0}))
+                  .Forget<OrthogonalMap>() *
+              Signature<Navigation, LeftNavigation>(
+                  Sign::Positive(),
+                  Sign::Positive(),
+                  DeduceSignReversingOrientation{})
+                  .Forget<OrthogonalMap>())
+          .Forget<Similarity>(),
+      /*focal=*/5 * Metre);
+
+  Planetarium::Parameters const parameters(
+      /*sphere_radius_multiplier=*/1,
+      /*angular_resolution=*/1e-3 * Radian,
+      /*field_of_view=*/90 * Degree);
+  Planetarium const planetarium(parameters,
+                                perspective,
+                                &mock_ephemeris_,
+                                &plotting_frame_,
+                                plotting_to_scaled_space_,
+                                plotting_to_scaled_space_displacement_);
+
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({2 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = Velocity<Barycentric>(),
+      .epoch = t0_};
+
+  std::vector<ScaledSpacePoint> points;
+  R3Element<double> render_anchor;
+  planetarium.PlotMethod4(
+      discrete_trajectory,
+      discrete_trajectory.front().time,
+      discrete_trajectory.back().time,
+      /*reverse=*/false,
+      [&points](ScaledSpacePoint const& p) { points.push_back(p); },
+      /*max_points=*/std::numeric_limits<int>::max(),
+      /*minimal_distance=*/nullptr,
+      Ephemeris<Barycentric>::SubsystemPlacement{/*subsystem=*/0, anchor},
+      &render_anchor);
+
+  // The scene's mapping of the reference, which the adapter supplies from the
+  // vessel's own scene position.  The scene keeps its origin in the
+  // neighbourhood it is drawing — that is what scaled space is for — so we
+  // model it with the origin at the circle's centre: an interstellar absolute
+  // never appears, which is the very thing this path exists not to form.
+  // The reference is the plot's first point, the circle at phase zero.
+  R3Element<double> const scene_reference(radius / (6000 * Metre), 0, 0);
+
+  ASSERT_GT(points.size(), 10);
+  for (int i = 0; i < points.size(); ++i) {
+    R3Element<double> const reassembled =
+        scene_reference + render_anchor +
+        R3Element<double>(points[i].x, points[i].y, points[i].z);
+    Displacement<Navigation> const from_centre(reassembled * (6000 * Metre));
+    Length const radial_error =
+        Abs(Sqrt(Pow<2>(from_centre.coordinates().x) +
+                 Pow<2>(from_centre.coordinates().y)) - radius);
+    EXPECT_THAT(radial_error, Lt(1 * Metre)) << "vertex " << i;
+  }
+}
+
+// The render anchor returned by `PlotMethod4` is the displacement from the
+// plot's own starting point to the camera: the vertices stay camera-relative,
+// so their float rounding is bounded by the ULP of their distance from the
+// camera, while adding the anchor back expresses them relative to the
+// starting point, which is where the scene draws the vessel's icon.
+TEST_F(PlanetariumTest, PlotMethod4ReferenceAnchor) {
   DiscreteTrajectory<Barycentric> discrete_trajectory;
   AppendTrajectoryTimeline(/*from=*/NewCircularTrajectoryTimeline<Barycentric>(
                                         /*period=*/10 * Second,
@@ -721,27 +827,35 @@ TEST_F(PlanetariumTest, PlotMethod4CameraAnchor) {
   auto const relative = plot(&anchor);
   auto const absolute = plot(/*anchor_out=*/nullptr);
 
-  // The anchor is the scaled-space camera position, exactly — and it is off
-  // the geometry, so this discriminates it from any anchor on the line.
-  R3Element<double> const camera =
-      plotting_to_scaled_space_(t0_, perspective_.camera());
-  EXPECT_NE(camera.Norm(), 0);
-  EXPECT_EQ(camera.x, anchor.x);
-  EXPECT_EQ(camera.y, anchor.y);
-  EXPECT_EQ(camera.z, anchor.z);
-
-  // The vertices are anchor-relative: translating them back by the anchor
-  // reassembles the absolute rendering to within the float roundings.
+  // Adding the anchor to a vertex expresses it relative to the plot's first
+  // point, so the first one lands on the origin and the absolute rendering is
+  // recovered by translating by that point — a single value, common to the
+  // whole mesh, which the adapter takes from the scene instead of from us.
   ASSERT_FALSE(relative.empty());
   ASSERT_EQ(absolute.size(), relative.size());
+  R3Element<double> const first_relative_to_reference(
+      relative.front().x + anchor.x,
+      relative.front().y + anchor.y,
+      relative.front().z + anchor.z);
+  EXPECT_LE(first_relative_to_reference.Norm(), 2e-9);
+  R3Element<double> const reference(absolute.front().x,
+                                    absolute.front().y,
+                                    absolute.front().z);
   for (int i = 0; i < relative.size(); ++i) {
     double const reassembly_error =
         (R3Element<double>(relative[i].x, relative[i].y, relative[i].z) +
-         anchor -
+         anchor + reference -
          R3Element<double>(absolute[i].x, absolute[i].y, absolute[i].z))
             .Norm();
     EXPECT_LE(reassembly_error, 2e-9) << "vertex " << i;
   }
+
+  // The anchor is a displacement off the geometry, not a position on it:
+  // it points from the first plotted point to the camera.
+  R3Element<double> const camera_from_reference =
+      plotting_to_scaled_space_(t0_, perspective_.camera()) - reference;
+  EXPECT_LE((camera_from_reference - anchor).Norm(), 2e-9);
+  EXPECT_NE(anchor.Norm(), 0);
 }
 
 TEST_F(PlanetariumTest, PlotMethod1) {

@@ -4464,16 +4464,20 @@ TEST_F(PluginIntegrationTestWithoutPlugin, GoldenMission) {
     // angle, so the adaptive sampling emits only the two endpoints — which
     // suffice here: the far endpoint carries the whole void span.
     ASSERT_GE(vertices.size(), 2);
-    // The anchor is the camera position, exactly; its conversion is recorded
-    // as the first `reference` entry, ahead of the vertices.  The camera sits
-    // at the plotting-frame origin here, so the anchor is zero.
+    // The anchor is the displacement from the plan's own starting point — the
+    // vessel's position at the present, which is where the scene draws its
+    // icon — to the camera, and it is recorded as the first `reference`
+    // entry, ahead of the camera-relative vertex displacements.  Adding it
+    // back to the first vertex therefore lands on the starting point.
     ASSERT_EQ(reference.size(), vertices.size() + 1);
     EXPECT_EQ(anchor.x, reference.front().x);
     EXPECT_EQ(anchor.y, reference.front().y);
     EXPECT_EQ(anchor.z, reference.front().z);
-    EXPECT_EQ(anchor.x, 0);
-    EXPECT_EQ(anchor.y, 0);
-    EXPECT_EQ(anchor.z, 0);
+    EXPECT_LE((R3Element<double>(vertices.front().x,
+                                 vertices.front().y,
+                                 vertices.front().z) +
+               anchor).Norm() * 6000,
+              1e-3 + 1.5e-7 * anchor.Norm() * 6000);
     reference.erase(reference.begin());
     // SHAPE: the float vertex buffer reproduces the plan's geometry relative
     // to the anchor at the float ULP of each vertex's distance from the

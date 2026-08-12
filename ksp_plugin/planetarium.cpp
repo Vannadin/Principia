@@ -377,7 +377,13 @@ void Planetarium::PlotMethod4Anchored(
     return;
   }
 
-  Instant const t_ref = last_time;
+  // The reference is the plot's own starting point, which for every
+  // production caller is the present: the vessel is then at the reference,
+  // and the adapter draws the mesh through the scene's own mapping of that
+  // same position, so the plot registers against the vessel's icon exactly
+  // rather than through a scaled-space value we would have to compute across
+  // the interstellar distance.
+  Instant const t_ref = previous_time;
 
   // The affine-in-time conversion from the trajectory's placement to the
   // plotting frame's, exact because it is folded at `t_ref` (see
@@ -412,14 +418,18 @@ void Planetarium::PlotMethod4Anchored(
   Displacement<Navigation> const camera_to_reference =
       nav_ref - perspective_.camera();
 
-  anchor_out = plotting_to_scaled_space_(previous_time, perspective_.camera());
+  // The anchor is the displacement from the reference to the camera, not a
+  // position: the adapter draws the mesh at the scene's own mapping of the
+  // reference minus this, so the camera term cancels against the one carried
+  // by every vertex and nothing has to express either point in scaled space
+  // across the distance to the plotting frame's origin.
+  anchor_out = plotting_to_scaled_space_displacement_(-camera_to_reference);
 
   // Evaluates the trajectory point at `t` as a displacement from the camera,
   // together with its velocity in the plotting frame.
   auto const evaluate = [this, &offset, &q_ref, &reference,
-                         &reference_in_navigation, &frame_origin_ref,
-                         &camera_to_reference, t_ref, &trajectory,
-                         &velocity_offset](Instant const& t) {
+                         &reference_in_navigation, &frame_origin_ref, t_ref,
+                         &trajectory, &velocity_offset](Instant const& t) {
     auto const degrees_of_freedom = trajectory.EvaluateDegreesOfFreedom(t);
     SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t =
         plotting_frame_->ToThisFrameAtTimeSimilarly(t);
@@ -435,10 +445,9 @@ void Planetarium::PlotMethod4Anchored(
     // — and is dwarfed by the arc the rotation sweeps at that distance.
     Displacement<Navigation> const sweep =
         similarity.linear_map()(reference) - reference_in_navigation;
-    Displacement<Navigation> const camera_relative =
-        camera_to_reference + sweep +
-        similarity.linear_map()(from_reference_in_barycentric -
-                                frame_origin_motion);
+    Displacement<Navigation> const reference_relative =
+        sweep + similarity.linear_map()(from_reference_in_barycentric -
+                                        frame_origin_motion);
     // The position of this degrees of freedom rounds at the magnitude of the
     // offset, but it only enters the velocity through the angular motion of
     // the frame, where its error is negligible.
@@ -448,7 +457,7 @@ void Planetarium::PlotMethod4Anchored(
                 degrees_of_freedom.position() + offset +
                     velocity_offset * (t - t_ref),
                 degrees_of_freedom.velocity() + velocity_offset)).velocity();
-    return std::make_pair(camera_relative, velocity);
+    return std::make_pair(reference_relative, velocity);
   };
 
   // The proper motion of a point seen from the camera, as in `ProperMotion`
@@ -458,9 +467,12 @@ void Planetarium::PlotMethod4Anchored(
     return Wedge(r, velocity) / r.Norm²() * Radian;
   };
 
-  auto const [initial_camera_relative, initial_velocity] =
+  auto const [initial_reference_relative, initial_velocity] =
       evaluate(previous_time);
-  Displacement<Navigation> previous_camera_relative = initial_camera_relative;
+  Displacement<Navigation> previous_reference_relative =
+      initial_reference_relative;
+  Displacement<Navigation> previous_camera_relative =
+      camera_to_reference + previous_reference_relative;
   Vector<AngularFrequency, Navigation> previous_projected_velocity =
       proper_motion(previous_camera_relative, initial_velocity) *
       Normalize(previous_camera_relative);
@@ -473,6 +485,7 @@ void Planetarium::PlotMethod4Anchored(
 
   Instant t;
   Angle rms_apparent_distance;
+  Displacement<Navigation> reference_relative;
   Displacement<Navigation> camera_relative;
   Vector<AngularFrequency, Navigation> projected_velocity;
   Square<Length> minimal_squared_distance = Infinity<Square<Length>>;
@@ -499,7 +512,8 @@ void Planetarium::PlotMethod4Anchored(
       }
 
       auto const evaluated = evaluate(t);
-      camera_relative = evaluated.first;
+      reference_relative = evaluated.first;
+      camera_relative = camera_to_reference + reference_relative;
       Velocity<Navigation> const& velocity = evaluated.second;
 
       Velocity<Navigation> const linear_velocity =
@@ -531,6 +545,7 @@ void Planetarium::PlotMethod4Anchored(
     } while (rms_apparent_distance > parameters_.angular_resolution_);
 
     previous_time = t;
+    previous_reference_relative = reference_relative;
     previous_camera_relative = camera_relative;
     previous_projected_velocity = projected_velocity;
 
