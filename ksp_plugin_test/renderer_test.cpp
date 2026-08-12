@@ -5,6 +5,7 @@
 #include "base/not_null.hpp"
 #include "geometry/grassmann.hpp"
 #include "geometry/instant.hpp"
+#include "geometry/orthogonal_map.hpp"
 #include "geometry/rotation.hpp"
 #include "geometry/space.hpp"
 #include "geometry/space_transformations.hpp"
@@ -13,13 +14,16 @@
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin_test/mock_celestial.hpp"
 #include "ksp_plugin_test/mock_vessel.hpp"
+#include "physics/apsides.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/discrete_trajectory.hpp"
+#include "physics/ephemeris.hpp"
 #include "physics/mock_continuous_trajectory.hpp"
 #include "physics/mock_ephemeris.hpp"
 #include "physics/mock_rigid_reference_frame.hpp"
 #include "physics/rigid_motion.hpp"
 #include "physics/sector.hpp"
+#include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
 #include "testing_utilities/almost_equals.hpp"
 #include "testing_utilities/componentwise.hpp"
@@ -28,6 +32,8 @@
 namespace principia {
 namespace ksp_plugin {
 
+using ::testing::Gt;
+using ::testing::Lt;
 using ::testing::Ref;
 using ::testing::Return;
 using ::testing::ReturnRef;
@@ -35,6 +41,7 @@ using ::testing::_;
 using namespace principia::base::_not_null;
 using namespace principia::geometry::_grassmann;
 using namespace principia::geometry::_instant;
+using namespace principia::geometry::_orthogonal_map;
 using namespace principia::geometry::_rotation;
 using namespace principia::geometry::_space;
 using namespace principia::geometry::_space_transformations;
@@ -42,13 +49,16 @@ using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_renderer;
 using namespace principia::ksp_plugin_test::_mock_celestial;
 using namespace principia::ksp_plugin_test::_mock_vessel;
+using namespace principia::physics::_apsides;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
+using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_mock_continuous_trajectory;
 using namespace principia::physics::_mock_ephemeris;
 using namespace principia::physics::_mock_rigid_reference_frame;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_sector;
+using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_almost_equals;
 using namespace principia::testing_utilities::_componentwise;
@@ -417,6 +427,84 @@ TEST_F(RendererTest, RenderPlottingTrajectoryInWorldWithoutTargetVessel) {
     EXPECT_LT(degrees_of_freedom.velocity().Norm(), 9 * Metre / Second);
     ++index;
   }
+}
+
+// A marker must land where the scene draws the vessel it belongs to.  Anchored
+// on the Sun, whose world position is itself a void-scale absolute at
+// interstellar distance, the rendering pairs it with the Sun's own position and
+// the local geometry of the plot — the frame's 700 m below — falls off the
+// bottom of that sum, afresh every frame as the two void-scale terms drift.
+// Registered on the vessel, both terms of the pair are local and the geometry
+// is exact.
+TEST_F(RendererTest, RenderDistinguishedPointsInWorldRegisteredOnTheVessel) {
+  // A subsystem 2⁶² m — some 490 light-years — from the Sun.  Positions there
+  // are represented relative to the subsystem, so they are small; the Sun's is
+  // the void-scale one, where the ULP is 1024 m.
+  Displacement<Barycentric> const to_the_sun(
+      {-0x1p62 * Metre, 0 * Metre, 0 * Metre});
+  // The plotting frame is centred 700 m from the subsystem's origin: a local
+  // quantity below that ULP, which is what such a sum cannot carry.
+  Displacement<Barycentric> const to_the_frame(
+      {700 * Metre, 0 * Metre, 0 * Metre});
+  // The vessel is at the subsystem's origin, and the scene, whose own origin
+  // follows it, draws it at the origin of `World`.
+  Displacement<Barycentric> const from_the_vessel(
+      {300 * Metre, 0 * Metre, 0 * Metre});
+
+  Instant const rendering_time = t0_ + 5 * Second;
+  auto const planetarium_rotation =
+      Rotation<Barycentric, AliceSun>::Identity();
+  RigidMotion<Navigation, Barycentric> const from_plotting(
+      RigidTransformation<Navigation, Barycentric>(
+          Navigation::origin,
+          Barycentric::origin + to_the_frame,
+          OrthogonalMap<Navigation, Barycentric>::Identity()),
+      Navigation::nonrotating,
+      Navigation::unmoving);
+  EXPECT_CALL(*reference_frame_, FromThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting));
+  EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting.Inverse()));
+  EXPECT_CALL(celestial_, current_position(_))
+      .WillRepeatedly(Return(Barycentric::origin + to_the_sun));
+
+  DistinguishedPoints<Barycentric> points;
+  points.emplace(rendering_time,
+                 DegreesOfFreedom<Barycentric>(
+                     Barycentric::origin + from_the_vessel,
+                     Barycentric::unmoving));
+
+  auto const barycentric_to_world =
+      renderer_.BarycentricToWorld(planetarium_rotation);
+  Position<World> const sun_world_position =
+      World::origin + barycentric_to_world(to_the_sun);
+  Position<World> const expected =
+      World::origin + barycentric_to_world(from_the_vessel);
+
+  auto const registered = renderer_.RenderDistinguishedPointsInWorld(
+      rendering_time,
+      points.begin(), points.end(),
+      sun_world_position,
+      planetarium_rotation,
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      Renderer::WorldRegistration{
+          .navigation = from_plotting.rigid_transformation().Inverse()(
+              Barycentric::origin),
+          .world = World::origin});
+  ASSERT_EQ(1, registered.size());
+  EXPECT_THAT((registered.begin()->second.position() - expected).Norm(),
+              Lt(1 * Milli(Metre)));
+
+  auto const unregistered = renderer_.RenderDistinguishedPointsInWorld(
+      rendering_time,
+      points.begin(), points.end(),
+      sun_world_position,
+      planetarium_rotation);
+  ASSERT_EQ(1, unregistered.size());
+  // The sum quantizes at 1024 m there, so the frame's own 700 m is lost
+  // wholesale rather than approximated; the residual here is 1724 m.
+  EXPECT_THAT((unregistered.begin()->second.position() - expected).Norm(),
+              Gt(1 * Kilo(Metre)));
 }
 
 TEST_F(RendererTest, Serialization) {

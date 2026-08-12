@@ -29,6 +29,12 @@ class MockPlugin : public Plugin {
 
   MOCK_METHOD(void, EndInitialization, (), (override));
 
+  MOCK_METHOD((std::optional<Renderer::WorldRegistration>),
+              SceneRegistration,
+              (GUID const& vessel_guid,
+               Position<World> const& world_position),
+              (const, override));
+
   MOCK_METHOD(bool,
               HasEncounteredApocalypse,
               (std::string * details),

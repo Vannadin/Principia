@@ -64,6 +64,18 @@ class Renderer {
     Speed out_of_plane_velocity;
   };
 
+  // Where the plotted object is in the plotting frame at the time of the
+  // rendering, and where the scene puts it.  A `World` rendering anchored on
+  // that pair is exact to the ULP of the local geometry; anchored on the Sun,
+  // as it is when no registration is given, it forms for every point two
+  // cancelling terms at the magnitude of the distance to the Sun — 9e18 m at a
+  // kiloparsec, where the ULP is a kilometre — and it does so afresh each
+  // frame, as the Sun and the frame drift, so the points shake.
+  struct WorldRegistration {
+    Position<Navigation> navigation;
+    Position<World> world;
+  };
+
   // If `ephemeris` is null, all the subsystem parameters of this class are
   // ignored and the positions are assumed to be represented in a single frame.
   Renderer(not_null<Celestial const*> sun,
@@ -112,7 +124,9 @@ class Renderer {
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      std::optional<WorldRegistration> const& registration =
+          std::nullopt) const;
 
   // Returns a trajectory in the current plotting frame corresponding to the
   // trajectory defined by `begin` and `end`.  If there is a target vessel, its
@@ -132,7 +146,9 @@ class Renderer {
       DiscreteTrajectory<Navigation>::iterator const& begin,
       DiscreteTrajectory<Navigation>::iterator const& end,
       Position<World> const& sun_world_position,
-      Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
+      Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+      std::optional<WorldRegistration> const& registration =
+          std::nullopt) const;
 
   DistinguishedPoints<World>
   RenderDistinguishedPointsInWorld(
@@ -142,14 +158,18 @@ class Renderer {
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      std::optional<WorldRegistration> const& registration =
+          std::nullopt) const;
 
   std::vector<Node> RenderNodes(
       Instant const& time,
       DistinguishedPoints<Navigation>::const_iterator const& begin,
       DistinguishedPoints<Navigation>::const_iterator const& end,
       Position<World> const& sun_world_position,
-      Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
+      Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+      std::optional<WorldRegistration> const& registration =
+          std::nullopt) const;
 
   // Coordinate transforms.
 
@@ -197,6 +217,14 @@ class Renderer {
   virtual Similarity<Navigation, World> PlottingToWorld(
       Instant const& time,
       Position<World> const& sun_world_position,
+      Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
+
+  // The same map anchored on `registration` instead of on the Sun; only its
+  // linear part is formed, so no position at the distance to the plotting
+  // frame's origin appears.
+  Similarity<Navigation, World> RegisteredPlottingToWorld(
+      Instant const& time,
+      WorldRegistration const& registration,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation) const;
 
   virtual ConformalMap<double, Navigation, World> PlottingToWorld(
@@ -252,7 +280,8 @@ class Renderer {
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
       std::function<void(Container<World>&,
                          Instant const&,
-                         DegreesOfFreedom<World> const&)> const& append) const;
+                         DegreesOfFreedom<World> const&)> const& append,
+      std::optional<WorldRegistration> const& registration) const;
 
   // The displacement and velocity to add to degrees of freedom represented
   // under placement `from` so that they become represented under placement

@@ -527,6 +527,7 @@ void __cdecl principia__FlightPlanRenderedApsides(
     double const* const t_max,
     int const celestial_index,
     XYZ const sun_world_position,
+    XYZ const reference_world_position,
     int const max_points,
     Iterator** const apoapsides,
     Iterator** const periapsides) {
@@ -536,11 +537,16 @@ void __cdecl principia__FlightPlanRenderedApsides(
        t_max,
        celestial_index,
        sun_world_position,
+       reference_world_position,
        max_points},
       {apoapsides, periapsides});
   CHECK(plugin != nullptr);
   FlightPlan const& vessel_flight_plan = GetFlightPlan(*plugin, vessel_guid);
   auto const& flight_plan = vessel_flight_plan.GetAllSegments();
+  // The plan is registered on the vessel that flies it: its present position
+  // is the one point the caller can name in the scene.
+  auto const registration = plugin->SceneRegistration(
+      vessel_guid, FromXYZ<Position<World>>(reference_world_position));
   DistinguishedPoints<World> rendered_apoapsides;
   DistinguishedPoints<World> rendered_periapsides;
   for (auto const& segment : flight_plan.segments()) {
@@ -555,7 +561,8 @@ void __cdecl principia__FlightPlanRenderedApsides(
         max_points,
         segment_rendered_apoapsides,
         segment_rendered_periapsides,
-        vessel_flight_plan.placement());
+        vessel_flight_plan.placement(),
+        registration);
     rendered_apoapsides.merge(std::move(segment_rendered_apoapsides));
     rendered_periapsides.merge(std::move(segment_rendered_periapsides));
   }
@@ -572,14 +579,21 @@ void __cdecl principia__FlightPlanRenderedClosestApproaches(
     Plugin const* const plugin,
     char const* const vessel_guid,
     XYZ const sun_world_position,
+    XYZ const reference_world_position,
     int const max_points,
     Iterator** const closest_approaches) {
   journal::Method<journal::FlightPlanRenderedClosestApproaches> m(
-      {plugin, vessel_guid, sun_world_position, max_points},
+      {plugin,
+       vessel_guid,
+       sun_world_position,
+       reference_world_position,
+       max_points},
       {closest_approaches});
   CHECK(plugin != nullptr);
   FlightPlan const& vessel_flight_plan = GetFlightPlan(*plugin, vessel_guid);
   auto const& flight_plan = vessel_flight_plan.GetAllSegments();
+  auto const registration = plugin->SceneRegistration(
+      vessel_guid, FromXYZ<Position<World>>(reference_world_position));
   DistinguishedPoints<World> rendered_closest_approaches;
   for (auto const& segment : flight_plan.segments()) {
     DistinguishedPoints<World> segment_rendered_closest_approaches;
@@ -589,7 +603,8 @@ void __cdecl principia__FlightPlanRenderedClosestApproaches(
         FromXYZ<Position<World>>(sun_world_position),
         max_points,
         segment_rendered_closest_approaches,
-        vessel_flight_plan.placement());
+        vessel_flight_plan.placement(),
+        registration);
     rendered_closest_approaches.merge(
         std::move(segment_rendered_closest_approaches));
   }
@@ -603,15 +618,24 @@ void __cdecl principia__FlightPlanRenderedNodes(Plugin const* const plugin,
                                                 char const* const vessel_guid,
                                                 double const* const t_max,
                                                 XYZ const sun_world_position,
+                                                XYZ const
+                                                    reference_world_position,
                                                 int const max_points,
                                                 Iterator** const ascending,
                                                 Iterator** const descending) {
   journal::Method<journal::FlightPlanRenderedNodes> m(
-      {plugin, vessel_guid, t_max, sun_world_position, max_points},
+      {plugin,
+       vessel_guid,
+       t_max,
+       sun_world_position,
+       reference_world_position,
+       max_points},
       {ascending, descending});
   CHECK(plugin != nullptr);
   FlightPlan const& vessel_flight_plan = GetFlightPlan(*plugin, vessel_guid);
   auto const& flight_plan = vessel_flight_plan.GetAllSegments();
+  auto const registration = plugin->SceneRegistration(
+      vessel_guid, FromXYZ<Position<World>>(reference_world_position));
   std::vector<Renderer::Node> rendered_ascending;
   std::vector<Renderer::Node> rendered_descending;
   for (auto const& segment : flight_plan.segments()) {
@@ -624,7 +648,8 @@ void __cdecl principia__FlightPlanRenderedNodes(Plugin const* const plugin,
         max_points,
         segment_rendered_ascending,
         segment_rendered_descending,
-        vessel_flight_plan.placement());
+        vessel_flight_plan.placement(),
+        registration);
     std::move(segment_rendered_ascending.begin(),
               segment_rendered_ascending.end(),
               std::back_inserter(rendered_ascending));
@@ -645,11 +670,14 @@ Iterator* __cdecl principia__FlightPlanRenderedSegment(
     Plugin const* const plugin,
     char const* const vessel_guid,
     XYZ const sun_world_position,
+    XYZ const reference_world_position,
     int const index) {
-  journal::Method<journal::FlightPlanRenderedSegment> m({plugin,
-                                                         vessel_guid,
-                                                         sun_world_position,
-                                                         index});
+  journal::Method<journal::FlightPlanRenderedSegment> m(
+      {plugin,
+       vessel_guid,
+       sun_world_position,
+       reference_world_position,
+       index});
   CHECK(plugin != nullptr);
 
   // This might force a (partial) recomputation of the flight plan to avoid a
@@ -665,7 +693,10 @@ Iterator* __cdecl principia__FlightPlanRenderedSegment(
           segment->end(),
           FromXYZ<Position<World>>(sun_world_position),
           plugin->PlanetariumRotation(),
-          vessel_flight_plan.placement());
+          vessel_flight_plan.placement(),
+          plugin->SceneRegistration(
+              vessel_guid,
+              FromXYZ<Position<World>>(reference_world_position)));
   if (index % 2 == 1 && !rendered_trajectory.empty() &&
       rendered_trajectory.front().time != segment->front().time) {
     // TODO(egg): this is ugly; we should centralize rendering.

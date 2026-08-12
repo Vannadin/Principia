@@ -1438,6 +1438,34 @@ void Plugin::ExtendPredictionForFlightPlan(GUID const& vessel_guid) const {
   }
 }
 
+std::optional<Renderer::WorldRegistration> Plugin::SceneRegistration(
+    GUID const& vessel_guid,
+    Position<World> const& world_position) const {
+  Vessel const& vessel = *FindOrDie(vessels_, vessel_guid);
+  auto const& trajectory = vessel.trajectory();
+  if (trajectory.empty() ||
+      current_time_ < trajectory.t_min() ||
+      current_time_ > trajectory.t_max()) {
+    return std::nullopt;
+  }
+  // Into the plotting frame's placement, as the rendered points are; the
+  // conversion is on the sector lattice, so a vessel anchored in the void
+  // keeps its true geometry relative to the frame.
+  Position<Barycentric> position = trajectory.EvaluatePosition(current_time_);
+  if (Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
+          renderer_->GetPlottingFrame()->placement();
+      vessel.placement() != frame_placement) {
+    position += ephemeris_
+                    ->placement_conversion(
+                        vessel.placement(), frame_placement, current_time_)
+                    .first;
+  }
+  return Renderer::WorldRegistration{
+      .navigation = renderer_->BarycentricToPlotting(current_time_)
+                        .similarity()(position),
+      .world = world_position};
+}
+
 void Plugin::ComputeAndRenderApsides(
     Index const celestial_index,
     Trajectory<Barycentric> const& trajectory,
@@ -1448,7 +1476,8 @@ void Plugin::ComputeAndRenderApsides(
     int const max_points,
     DistinguishedPoints<World>& apoapsides,
     DistinguishedPoints<World>& periapsides,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    std::optional<Renderer::WorldRegistration> const& registration) const {
   auto const& celestial = *FindOrDie(celestials_, celestial_index);
   // Into the query vessel's placement — subsystem and anchor composed on the
   // sector lattice — so that an anchored void vessel's apsides are computed
@@ -1476,14 +1505,16 @@ void Plugin::ComputeAndRenderApsides(
                    barycentric_apoapsides.end(),
                    sun_world_position,
                    PlanetariumRotation(),
-                   placement);
+                   placement,
+                   registration);
   periapsides = renderer_->RenderDistinguishedPointsInWorld(
                     current_time_,
                     barycentric_periapsides.begin(),
                     barycentric_periapsides.end(),
                     sun_world_position,
                     PlanetariumRotation(),
-                    placement);
+                    placement,
+                    registration);
 }
 
 std::optional<DistinguishedPoints<World>::value_type>
@@ -1496,7 +1527,8 @@ Plugin::ComputeAndRenderFirstCollision(
     int max_points,
     std::function<Length(Angle const& latitude,
                          Angle const& longitude)> const& radius,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    std::optional<Renderer::WorldRegistration> const& registration) const {
   auto const& celestial = FindOrDie(celestials_, celestial_index);
   auto const& celestial_body = *celestial->body();
   // See `ComputeAndRenderApsides` for the placement composition.
@@ -1548,7 +1580,8 @@ Plugin::ComputeAndRenderFirstCollision(
               points_to_render.end(),
               sun_world_position,
               PlanetariumRotation(),
-              placement);
+              placement,
+              registration);
       return *rendered_points.begin();
     }
   }
@@ -1564,7 +1597,8 @@ void Plugin::ComputeAndRenderClosestApproaches(
     Position<World> const& sun_world_position,
     int const max_points,
     DistinguishedPoints<World>& closest_approaches,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    std::optional<Renderer::WorldRegistration> const& registration) const {
   CHECK(renderer_->HasTargetVessel());
 
   // Bring the target prediction into the same representation as `trajectory`
@@ -1602,7 +1636,8 @@ void Plugin::ComputeAndRenderClosestApproaches(
           periapsides.end(),
           sun_world_position,
           PlanetariumRotation(),
-          placement);
+          placement,
+          registration);
 }
 
 void Plugin::ComputeAndRenderNodes(
@@ -1613,7 +1648,8 @@ void Plugin::ComputeAndRenderNodes(
     int const max_points,
     std::vector<Renderer::Node>& ascending,
     std::vector<Renderer::Node>& descending,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    std::optional<Renderer::WorldRegistration> const& registration) const {
   auto const trajectory_in_plotting =
       renderer_->RenderBarycentricTrajectoryInPlotting(begin, end, placement);
 
@@ -1651,12 +1687,14 @@ void Plugin::ComputeAndRenderNodes(
                                      plotting_ascending.begin(),
                                      plotting_ascending.end(),
                                      sun_world_position,
-                                     PlanetariumRotation());
+                                     PlanetariumRotation(),
+                                     registration);
   descending = renderer_->RenderNodes(current_time_,
                                       plotting_descending.begin(),
                                       plotting_descending.end(),
                                       sun_world_position,
-                                      PlanetariumRotation());
+                                      PlanetariumRotation(),
+                                      registration);
 }
 
 bool Plugin::HasCelestial(Index const index) const {

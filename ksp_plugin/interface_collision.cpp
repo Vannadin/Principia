@@ -11,6 +11,7 @@
 #include "journal/method.hpp"
 #include "journal/profiles.hpp"  // 🧙 For generated profiles.
 #include "ksp_plugin/frames.hpp"
+#include "ksp_plugin/renderer.hpp"
 #include "physics/apsides.hpp"
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
@@ -21,6 +22,7 @@ namespace interface {
 using namespace principia::base::_push_pull_callback;
 using namespace principia::journal::_method;
 using namespace principia::ksp_plugin::_frames;
+using namespace principia::ksp_plugin::_renderer;
 using namespace principia::physics::_apsides;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
@@ -36,13 +38,15 @@ NewExecutor(Plugin const* const plugin,
             XYZ const sun_world_position,
             int const max_points,
             TrajectoryLike const& vessel_trajectory,
-            Ephemeris<Barycentric>::SubsystemPlacement const& placement) {
+            Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+            std::optional<Renderer::WorldRegistration> const& registration) {
   CHECK(plugin != nullptr);
 
   auto task = [celestial_index,
                max_points,
                plugin,
                placement,
+               registration,
                sun_world_position =
                    FromXYZ<Position<World>>(sun_world_position),
                &vessel_trajectory](
@@ -55,7 +59,8 @@ NewExecutor(Plugin const* const plugin,
                                                   sun_world_position,
                                                   max_points,
                                                   radius,
-                                                  placement);
+                                                  placement,
+                                                  registration);
   };
 
   return make_not_null_unique<
@@ -114,23 +119,29 @@ PushPullExecutor<
     Plugin const* const plugin,
     int const celestial_index,
     XYZ const sun_world_position,
+    XYZ const reference_world_position,
     int const max_points,
     char const* const vessel_guid) {
   journal::Method<journal::CollisionNewFlightPlanExecutor> m{
       {plugin,
        celestial_index,
        sun_world_position,
+       reference_world_position,
        max_points,
        vessel_guid}};
   CHECK(plugin != nullptr);
   auto& flight_plan = GetFlightPlan(*plugin, vessel_guid);
-  return m.Return(NewExecutor(plugin,
-                              celestial_index,
-                              sun_world_position,
-                              max_points,
-                              flight_plan.GetAllSegments(),
-                              flight_plan.placement())
-                      .release());
+  return m.Return(
+      NewExecutor(plugin,
+                  celestial_index,
+                  sun_world_position,
+                  max_points,
+                  flight_plan.GetAllSegments(),
+                  flight_plan.placement(),
+                  plugin->SceneRegistration(
+                      vessel_guid,
+                      FromXYZ<Position<World>>(reference_world_position)))
+          .release());
 }
 
 PushPullExecutor<
@@ -139,23 +150,29 @@ PushPullExecutor<
     Plugin const* const plugin,
     int const celestial_index,
     XYZ const sun_world_position,
+    XYZ const reference_world_position,
     int const max_points,
     char const* const vessel_guid) {
   journal::Method<journal::CollisionNewPredictionExecutor> m{
       {plugin,
        celestial_index,
        sun_world_position,
+       reference_world_position,
        max_points,
        vessel_guid}};
   CHECK(plugin != nullptr);
   not_null<Vessel*> const vessel = plugin->GetVessel(vessel_guid);
-  return m.Return(NewExecutor(plugin,
-                              celestial_index,
-                              sun_world_position,
-                              max_points,
-                              *vessel->prediction(),
-                              vessel->placement())
-                      .release());
+  return m.Return(
+      NewExecutor(plugin,
+                  celestial_index,
+                  sun_world_position,
+                  max_points,
+                  *vessel->prediction(),
+                  vessel->placement(),
+                  plugin->SceneRegistration(
+                      vessel_guid,
+                      FromXYZ<Position<World>>(reference_world_position)))
+          .release());
 }
 
 void __cdecl principia__CollisionSetRadius(

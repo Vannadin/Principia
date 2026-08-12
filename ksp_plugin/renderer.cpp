@@ -81,7 +81,8 @@ Renderer::RenderBarycentricTrajectoryInWorld(
     DiscreteTrajectory<Barycentric>::iterator const& end,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    std::optional<WorldRegistration> const& registration) const {
   auto const trajectory_in_plotting_frame =
       RenderBarycentricTrajectoryInPlotting(begin, end, placement);
   auto trajectory_in_world =
@@ -89,7 +90,8 @@ Renderer::RenderBarycentricTrajectoryInWorld(
                                       trajectory_in_plotting_frame.begin(),
                                       trajectory_in_plotting_frame.end(),
                                       sun_world_position,
-                                      planetarium_rotation);
+                                      planetarium_rotation,
+                                      registration);
   return trajectory_in_world;
 }
 
@@ -133,7 +135,8 @@ Renderer::RenderPlottingTrajectoryInWorld(
     DiscreteTrajectory<Navigation>::iterator const& begin,
     DiscreteTrajectory<Navigation>::iterator const& end,
     Position<World> const& sun_world_position,
-    Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    std::optional<WorldRegistration> const& registration) const {
   return RenderPlottingContainerInWorld<DiscreteTrajectory>(
       time,
       begin, end,
@@ -143,7 +146,8 @@ Renderer::RenderPlottingTrajectoryInWorld(
          Instant const& t,
          DegreesOfFreedom<World> const& world_degrees_of_freedom) {
         trajectory.Append(t, world_degrees_of_freedom).IgnoreError();
-      });
+      },
+      registration);
 }
 
 DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
@@ -152,7 +156,8 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
     DistinguishedPoints<Barycentric>::const_iterator const end,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
-    Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    std::optional<WorldRegistration> const& registration) const {
   Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
       GetPlottingFrame()->placement();
   DistinguishedPoints<Navigation> plotting_points;
@@ -178,7 +183,8 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
          Instant const& t,
          DegreesOfFreedom<World> const& world_degrees_of_freedom) {
         world_points.emplace(t, world_degrees_of_freedom);
-      });
+      },
+      registration);
 }
 
 std::vector<Renderer::Node>
@@ -187,11 +193,16 @@ Renderer::RenderNodes(
     DistinguishedPoints<Navigation>::const_iterator const& begin,
     DistinguishedPoints<Navigation>::const_iterator const& end,
     Position<World> const& sun_world_position,
-    Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    std::optional<WorldRegistration> const& registration) const {
   std::vector<Node> nodes;
   Similarity<Navigation, World> const
       from_plotting_frame_to_world_at_current_time =
-          PlottingToWorld(time, sun_world_position, planetarium_rotation);
+          registration.has_value()
+              ? RegisteredPlottingToWorld(
+                    time, *registration, planetarium_rotation)
+              : PlottingToWorld(
+                    time, sun_world_position, planetarium_rotation);
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
     DegreesOfFreedom<Navigation> const& navigation_degrees_of_freedom =
         degrees_of_freedom;
@@ -320,6 +331,16 @@ Similarity<Navigation, World> Renderer::PlottingToWorld(
          GetPlottingFrame()->FromThisFrameAtTimeSimilarly(time).similarity();
 }
 
+Similarity<Navigation, World> Renderer::RegisteredPlottingToWorld(
+    Instant const& time,
+    WorldRegistration const& registration,
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
+  return Similarity<Navigation, World>(
+      registration.navigation,
+      registration.world,
+      PlottingToWorld(time, planetarium_rotation));
+}
+
 ConformalMap<double, Navigation, World> Renderer::PlottingToWorld(
     Instant const& time,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
@@ -425,7 +446,8 @@ Container<World> Renderer::RenderPlottingContainerInWorld(
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
     std::function<void(Container<World>&,
                        Instant const&,
-                       DegreesOfFreedom<World> const&)> const& append) const {
+                       DegreesOfFreedom<World> const&)> const& append,
+    std::optional<WorldRegistration> const& registration) const {
   Container<World> result;
 
   //   Dinanzi a me non fuor cose create
@@ -458,7 +480,11 @@ Container<World> Renderer::RenderPlottingContainerInWorld(
   // sent directly to be shown in markers.
   Similarity<Navigation, World> const
       from_plotting_frame_to_world_at_current_time =
-          PlottingToWorld(time, sun_world_position, planetarium_rotation);
+          registration.has_value()
+              ? RegisteredPlottingToWorld(
+                    time, *registration, planetarium_rotation)
+              : PlottingToWorld(
+                    time, sun_world_position, planetarium_rotation);
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
     DegreesOfFreedom<Navigation> const& navigation_degrees_of_freedom =
         degrees_of_freedom;

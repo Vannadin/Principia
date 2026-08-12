@@ -447,10 +447,20 @@ class Plugin {
   // and cover the actual final time of the flight plan.
   virtual void ExtendPredictionForFlightPlan(GUID const& vessel_guid) const;
 
+  // The registration for a `World` rendering of a plot of the vessel with the
+  // given GUID: where the vessel is in the plotting frame now, paired with
+  // `world_position`, where the caller reports the scene draws it.  Absent if
+  // the vessel's trajectory does not cover the present, in which case the
+  // rendering falls back on the Sun.
+  virtual std::optional<Renderer::WorldRegistration> SceneRegistration(
+      GUID const& vessel_guid,
+      Position<World> const& world_position) const;
+
   // Computes the apsides of the trajectory defined by `begin` and `end` with
   // respect to the celestial with index `celestial_index`.  In this function
   // and the following ones, `placement` gives the subsystem and anchor
-  // relative to which the positions of `trajectory` are represented.
+  // relative to which the positions of `trajectory` are represented, and
+  // `registration` anchors the rendering, as in `Renderer`.
   virtual void ComputeAndRenderApsides(
       Index celestial_index,
       Trajectory<Barycentric> const& trajectory,
@@ -462,7 +472,9 @@ class Plugin {
       DistinguishedPoints<World>& apoapsides,
       DistinguishedPoints<World>& periapsides,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      std::optional<Renderer::WorldRegistration> const& registration =
+          std::nullopt) const;
 
   // Computes the first collision between the trajectory defined by `begin` and
   // `end` and the celestial with index `celestial_index`.
@@ -477,7 +489,9 @@ class Plugin {
       std::function<Length(Angle const& latitude,
                            Angle const& longitude)> const& radius,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      std::optional<Renderer::WorldRegistration> const& registration =
+          std::nullopt) const;
 
   // Computes the closest approaches of the trajectory defined by `begin` and
   // `end` with respect to the trajectory of the targetted vessel.
@@ -489,7 +503,9 @@ class Plugin {
       int max_points,
       DistinguishedPoints<World>& closest_approaches,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      std::optional<Renderer::WorldRegistration> const& registration =
+          std::nullopt) const;
 
   // Computes the nodes of the trajectory defined by `begin` and `end` with
   // respect to plane of the trajectory of the targetted vessel.
@@ -502,7 +518,9 @@ class Plugin {
       std::vector<Renderer::Node>& ascending,
       std::vector<Renderer::Node>& descending,
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
-          Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      std::optional<Renderer::WorldRegistration> const& registration =
+          std::nullopt) const;
 
   virtual bool HasCelestial(Index index) const;
   virtual Celestial const& GetCelestial(Index index) const;

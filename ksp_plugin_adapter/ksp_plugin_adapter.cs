@@ -469,6 +469,16 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     return TargetVessel()?.id.ToString();
   }
 
+  // Where the scene draws the vessel with the given GUID, on which the World
+  // rendering of its markers is anchored; null if the scene does not know it.
+  // The alternative, the Sun, is itself a void-scale absolute at interstellar
+  // distance, so anchoring on it quantizes every marker at a kilometre and
+  // moves it from frame to frame.
+  private XYZ? SceneReference(string vessel_guid) {
+    Vessel vessel = FlightGlobals.FindVessel(new Guid(vessel_guid));
+    return vessel == null ? (XYZ?)null : (XYZ)vessel.GetWorldPos3D();
+  }
+
 
   private delegate void BodyProcessor(CelestialBody body);
 
@@ -1312,22 +1322,27 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
     if (MapView.MapIsEnabled) {
       XYZ sun_world_position = (XYZ)Planetarium.fetch.Sun.position;
-      if (main_vessel_guid != null) {
+      if (main_vessel_guid != null &&
+          SceneReference(main_vessel_guid) is XYZ main_reference) {
         RenderPredictionMarkers(main_vessel_guid,
                                 prediction_collision_,
-                                sun_world_position);
+                                sun_world_position,
+                                main_reference);
         if (plugin_.FlightPlanExists(main_vessel_guid)) {
           RenderFlightPlanMarkers(main_vessel_guid,
                                   flight_plan_collision_,
-                                  sun_world_position);
+                                  sun_world_position,
+                                  main_reference);
         }
       }
       if (FlightGlobals.ActiveVessel != null &&
           !plotting_frame_selector_.target_frame_selected &&
-          TargetVesselGuid() is string target_id) {
+          TargetVesselGuid() is string target_id &&
+          SceneReference(target_id) is XYZ target_reference) {
         RenderPredictionMarkers(target_id,
                                 prediction_collision: null,
-                                sun_world_position);
+                                sun_world_position,
+                                target_reference);
       }
     }
   }
@@ -2974,11 +2989,13 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     flight_plan_collision = null;
     if (vessel_guid != null &&
         MapView.MapIsEnabled &&
-        plotting_frame_selector_.Centre() != null) {
+        plotting_frame_selector_.Centre() != null &&
+        SceneReference(vessel_guid) is XYZ reference) {
       var centre = plotting_frame_selector_.Centre();
       var centre_index = centre.flightGlobalsIndex;
       if (plotting_frame_selector_.IsSurfaceFrame()) {
-        prediction_collision = RenderedPredictionCollision(vessel_guid, centre);
+        prediction_collision =
+            RenderedPredictionCollision(vessel_guid, centre, reference);
         if (prediction_collision.HasValue) {
           map_node_pool_.RenderMarkers(new[] { prediction_collision.Value },
                                        new MapNodePool.Provenance(
@@ -2990,7 +3007,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         }
         if (plugin_.FlightPlanExists(vessel_guid)) {
           flight_plan_collision =
-              RenderedFlightPlanCollision(vessel_guid, centre);
+              RenderedFlightPlanCollision(vessel_guid, centre, reference);
           if (flight_plan_collision.HasValue) {
             map_node_pool_.RenderMarkers(new[] { flight_plan_collision.Value },
                                          new MapNodePool.Provenance(
@@ -3016,7 +3033,8 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         GLLines.NewPlanetarium(plugin_, sun_world_position)) {
         int number_of_rendered_manœuvres = 0;
         if (main_vessel_guid != null &&
-            plugin_.FlightPlanExists(main_vessel_guid)) {
+            plugin_.FlightPlanExists(main_vessel_guid) &&
+            SceneReference(main_vessel_guid) is XYZ reference) {
           int number_of_anomalous_manœuvres =
               plugin_.FlightPlanNumberOfAnomalousManoeuvres(main_vessel_guid);
           int number_of_manœuvres =
@@ -3028,6 +3046,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
             using (DisposableIterator rendered_segments =
                 plugin_.FlightPlanRenderedSegment(main_vessel_guid,
                                                   sun_world_position,
+                                                  reference,
                                                   i)) {
               if (rendered_segments.IteratorAtEnd()) {
                 Log.Info("Skipping segment " + i);
@@ -3084,10 +3103,12 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   }
 
   private TQP? RenderedPredictionCollision(string vessel_guid,
-                                           CelestialBody centre) {
+                                           CelestialBody centre,
+                                           XYZ reference_world_position) {
     var executor = plugin_.CollisionNewPredictionExecutor(
         celestial_index: centre.flightGlobalsIndex,
         sun_world_position: (XYZ)Planetarium.fetch.Sun.position,
+        reference_world_position: reference_world_position,
         // TODO(phl): This should be much larger, if it is limited at all.
         max_points: MapNodePool.MaxNodesPerProvenance,
         vessel_guid: vessel_guid);
@@ -3110,10 +3131,12 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   }
 
   private TQP? RenderedFlightPlanCollision(string vessel_guid,
-                                           CelestialBody centre) {
+                                           CelestialBody centre,
+                                           XYZ reference_world_position) {
     var executor = plugin_.CollisionNewFlightPlanExecutor(
         celestial_index: centre.flightGlobalsIndex,
         sun_world_position: (XYZ)Planetarium.fetch.Sun.position,
+        reference_world_position: reference_world_position,
         // TODO(phl): This should be much larger, if it is limited at all.
         max_points: MapNodePool.MaxNodesPerProvenance,
         vessel_guid: vessel_guid);
@@ -3137,12 +3160,14 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
   private void RenderPredictionMarkers(string vessel_guid,
                                        TQP? prediction_collision,
-                                       XYZ sun_world_position) {
+                                       XYZ sun_world_position,
+                                       XYZ reference_world_position) {
     if (plotting_frame_selector_.target_frame_selected &&
         TargetVessel() != null) {
       plugin_.RenderedPredictionNodes(vessel_guid,
                                       t_max: null,
                                       sun_world_position,
+                                      reference_world_position,
                                       MapNodePool.MaxNodesPerProvenance,
                                       out DisposableIterator
                                               ascending_nodes_iterator,
@@ -3151,6 +3176,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       plugin_.RenderedPredictionClosestApproaches(
           vessel_guid,
           sun_world_position,
+          reference_world_position,
           MapNodePool.MaxNodesPerProvenance,
           out DisposableIterator approaches_iterator);
       map_node_pool_.RenderNodes(
@@ -3179,6 +3205,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                                           prediction_collision?.t,
                                           centre_index,
                                           sun_world_position,
+                                          reference_world_position,
                                           MapNodePool.MaxNodesPerProvenance,
                                           out DisposableIterator
                                                   apoapsis_iterator,
@@ -3200,6 +3227,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       plugin_.RenderedPredictionNodes(vessel_guid,
                                       prediction_collision?.t,
                                       sun_world_position,
+                                      reference_world_position,
                                       MapNodePool.MaxNodesPerProvenance,
                                       out DisposableIterator
                                               ascending_nodes_iterator,
@@ -3222,12 +3250,14 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
 
   private void RenderFlightPlanMarkers(string vessel_guid,
                                        TQP? flight_plan_collision,
-                                       XYZ sun_world_position) {
+                                       XYZ sun_world_position,
+                                       XYZ reference_world_position) {
     if (plotting_frame_selector_.target_frame_selected &&
         TargetVessel() != null) {
       plugin_.FlightPlanRenderedNodes(vessel_guid,
                                       t_max: null,
                                       sun_world_position,
+                                      reference_world_position,
                                       MapNodePool.MaxNodesPerProvenance,
                                       out DisposableIterator
                                               ascending_nodes_iterator,
@@ -3236,6 +3266,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       plugin_.FlightPlanRenderedClosestApproaches(
           vessel_guid,
           sun_world_position,
+          reference_world_position,
           MapNodePool.MaxNodesPerProvenance,
           out DisposableIterator approaches_iterator);
       map_node_pool_.RenderNodes(
@@ -3264,6 +3295,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
                                           flight_plan_collision?.t,
                                           centre_index,
                                           sun_world_position,
+                                          reference_world_position,
                                           MapNodePool.MaxNodesPerProvenance,
                                           out DisposableIterator
                                                   apoapsis_iterator,
@@ -3285,6 +3317,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       plugin_.FlightPlanRenderedNodes(vessel_guid,
                                       flight_plan_collision?.t,
                                       sun_world_position,
+                                      reference_world_position,
                                       MapNodePool.MaxNodesPerProvenance,
                                       out DisposableIterator
                                               ascending_nodes_iterator,
