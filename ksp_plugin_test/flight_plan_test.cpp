@@ -731,6 +731,35 @@ TEST_F(FlightPlanTest, Serialization) {
   std::this_thread::sleep_for(5s);
 }
 
+// A horizon out of the ephemeris's reach must not be pursued at all.  Reading a
+// plan used to prolong to its horizon without bound, on the calling thread, which
+// is the main thread the first time the plan is touched; a plan of interstellar
+// length asks for of the order of a hundred million steps of the entire system,
+// so the game stopped there.
+TEST_F(FlightPlanTest, HorizonOutOfReachIsNotPursued) {
+  Instant const out_of_reach = t0_ + 120 * 365.25 * Day;
+  flight_plan_->SetDesiredFinalTime(out_of_reach).IgnoreError();
+
+  serialization::FlightPlan message;
+  flight_plan_->WriteToMessage(&message);
+
+  std::unique_ptr<FlightPlan> const flight_plan_read =
+      FlightPlan::ReadFromMessage(message, ephemeris_.get());
+  // The plan keeps the horizon that was asked for — it is the pursuit that is
+  // refused — and it stays anomalous, which the flight planner reports.
+  EXPECT_EQ(out_of_reach, flight_plan_read->desired_final_time());
+  EXPECT_THAT(flight_plan_read->actual_final_time(), Lt(out_of_reach));
+  // The ephemeris creeps forward regardless — recomputing the segments spends the
+  // frame budget, and the coast analyser prolongs in half-years on its own
+  // thread — so what is asserted is that the horizon itself is never reached.
+  EXPECT_THAT(ephemeris_->t_max(), Lt(out_of_reach));
+
+  // Nor may a prolongator thread pursue it, being given a thousand steps every
+  // twenty milliseconds.
+  std::this_thread::sleep_for(1s);
+  EXPECT_THAT(ephemeris_->t_max(), Lt(out_of_reach));
+}
+
 TEST_F(FlightPlanTest, Copy) {
   EXPECT_OK(flight_plan_->SetDesiredFinalTime(t0_ + 42 * Second));
   EXPECT_OK(flight_plan_->Insert(MakeFirstBurn(), 0));

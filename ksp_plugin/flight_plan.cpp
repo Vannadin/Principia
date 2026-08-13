@@ -42,6 +42,21 @@ using namespace std::chrono_literals;
 
 namespace {
 
+// A horizon this far beyond the ephemeris is not pursued at all.  Prolonging
+// costs a fixed step of the entire system, so a plan of interstellar length asks
+// for of the order of a hundred million of them and cannot be integrated at any
+// point in the future; pursuing it stops the game instead.  This is a backstop
+// against the impossible, not a judgement about which plans are reasonable: it
+// sits an order of magnitude beyond the longest horizon in our corpus of saves,
+// which asks for ten years.
+constexpr Time max_flight_plan_horizon = 100 * 365.25 * Day;
+
+// Whether prolonging to `t` is worth beginning at all.
+bool HorizonIsWithinReach(Ephemeris<Barycentric> const& ephemeris,
+                          Instant const& t) {
+  return t <= ephemeris.t_max() + max_flight_plan_horizon;
+}
+
 inline absl::Status BadDesiredFinalTime() {
   return absl::Status(FlightPlan::bad_desired_final_time,
                       "Bad desired final time");
@@ -435,9 +450,16 @@ std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
   }
   // We need to forcefully prolong, otherwise we might exceed the ephemeris
   // step limit while recomputing the segments and make the flight plan
-  // anomalous for no good reason.
-  flight_plan->ephemeris_->Prolong(flight_plan->desired_final_time_)
-      .IgnoreError();
+  // anomalous for no good reason.  A horizon out of reach is not pursued at all,
+  // rather than pursued part of the way: this runs on the main thread the first
+  // time the plan is touched, so pursuing one stopped the game there.  Such a
+  // plan comes up anomalous with the deadline status, which the flight planner
+  // reports.
+  if (HorizonIsWithinReach(*flight_plan->ephemeris_,
+                           flight_plan->desired_final_time_)) {
+    flight_plan->ephemeris_->Prolong(flight_plan->desired_final_time_)
+        .IgnoreError();
+  }
   absl::Status const status = flight_plan->RecomputeAllSegments();
   LOG_IF(INFO, flight_plan->anomalous_segments_ > 0)
       << "Loading a flight plan with " << flight_plan->anomalous_segments_
@@ -738,7 +760,8 @@ void FlightPlan::MakeProlongator(Instant const& prolongation_time) {
     // thread.  We may recreate it below, but shorter.
     prolongator_ = std::jthread();
   }
-  if (ephemeris_->t_max() < prolongation_time) {
+  if (ephemeris_->t_max() < prolongation_time &&
+      HorizonIsWithinReach(*ephemeris_, prolongation_time)) {
     // The ephemeris is too short, start a thread to prolong it.  Note that we
     // must copy `prolong_with_status` since it's called on another thread.
     last_prolongation_time_ = prolongation_time;
