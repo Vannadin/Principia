@@ -20,23 +20,27 @@ class PrincipiaTimeSpan {
     hours = 0;
     minutes = 0;
     seconds = seconds_;
-    try {
-      seconds = seconds_ % date_time_formatter.Minute;
-      minutes = ((int)(seconds_ - seconds) % date_time_formatter.Hour) /
-                date_time_formatter.Minute;
-      hours =
-          ((int)(seconds_ - seconds - minutes * date_time_formatter.Minute) %
-           date_time_formatter.Day) /
-          date_time_formatter.Hour;
-      days = (int)(seconds_ -
-                   seconds -
-                   minutes * date_time_formatter.Minute -
-                   hours * date_time_formatter.Hour) /
-             date_time_formatter.Day;
-      return true;
-    } catch (OverflowException) {
+    // The conversions below cast a duration in seconds to an `int`, which is
+    // unchecked in C#: a value that does not fit yields an unspecified result
+    // instead of throwing, so the magnitude must be tested here.  A duration
+    // that does not fit is reported as such, and the caller saturates; this also
+    // rejects a duration that is not a number.
+    if (!(Math.Abs(seconds_) < int.MaxValue)) {
       return false;
     }
+    seconds = seconds_ % date_time_formatter.Minute;
+    minutes = ((int)(seconds_ - seconds) % date_time_formatter.Hour) /
+              date_time_formatter.Minute;
+    hours =
+        ((int)(seconds_ - seconds - minutes * date_time_formatter.Minute) %
+         date_time_formatter.Day) /
+        date_time_formatter.Hour;
+    days = (int)(seconds_ -
+                 seconds -
+                 minutes * date_time_formatter.Minute -
+                 hours * date_time_formatter.Hour) /
+           date_time_formatter.Day;
+    return true;
   }
 
   // Formats a duration, optionally omitting leading components if they are 0,
