@@ -371,9 +371,8 @@ class BurnEditor : ScalingRenderer {
          select
              engine.MaxThrustOutputVac(useThrustLimiter: true) *
              (from transform in engine.thrustTransforms
-              select Math.Max(0,
-                              Vector3d.Dot(reference_direction,
-                                           -transform.forward))).Average()).
+              select BurnProjection(reference_direction,
+                                    -transform.forward)).Average()).
         ToArray();
     thrust_in_kilonewtons_ = thrusts.Sum();
 
@@ -409,11 +408,10 @@ class BurnEditor : ScalingRenderer {
          select engine.thrusterPower *
                 (from transform in engine.thrusterTransforms
                  where transform.gameObject.activeInHierarchy
-                 select Math.Max(0,
-                                 Vector3d.Dot(reference_direction,
-                                              engine.useZaxis
-                                                  ? -transform.forward
-                                                  : -transform.up))).Sum()).
+                 select BurnProjection(reference_direction,
+                                       engine.useZaxis
+                                           ? -transform.forward
+                                           : -transform.up)).Sum()).
         ToArray();
     thrust_in_kilonewtons_ = thrusts.Sum();
 
@@ -431,6 +429,19 @@ class BurnEditor : ScalingRenderer {
           L10N.CacheFormat("#Principia_BurnEditor_Warning_NoActiveRCS");
       UseTheForceLuke();
     }
+  }
+
+  // The projection of a thruster onto the direction of the burn, treated as 0
+  // when it is indistinguishable from the numerical noise of the world-space
+  // transforms: an orthogonally-mounted thruster otherwise contributes a few
+  // μN which bypass the zero-thrust fallbacks above and result in a burn
+  // lasting centuries.  Both directions are rigidly attached to the vessel, so
+  // a true projection is constant; the noise was measured fluctuating around
+  // 1e-6 per recomputation.
+  private static double BurnProjection(Vector3d burn_direction,
+                                       Vector3d thruster_direction) {
+    double projection = Vector3d.Dot(burn_direction, thruster_direction);
+    return projection < 1e-3 ? 0 : projection;
   }
 
   private string FormatΔvComponent(double metres_per_second) {
