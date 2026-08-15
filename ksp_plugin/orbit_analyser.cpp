@@ -10,6 +10,7 @@
 #include "absl/synchronization/mutex.h"
 #include "base/status_utilities.hpp"  // 🧙 For RETURN_IF_ERROR.
 #include "base/stoppable_thread.hpp"
+#include "ksp_plugin/flight_plan.hpp"  // 🧙 For max_reachable_horizon.
 #include "ksp_plugin/integrators.hpp"
 #include "physics/kepler_orbit.hpp"
 #include "physics/massive_body.hpp"
@@ -23,6 +24,7 @@ namespace _orbit_analyser {
 namespace internal {
 
 using namespace principia::base::_stoppable_thread;
+using namespace principia::ksp_plugin::_flight_plan;
 using namespace principia::ksp_plugin::_integrators;
 using namespace principia::physics::_kepler_orbit;
 using namespace principia::physics::_massive_body;
@@ -132,13 +134,35 @@ double OrbitAnalyser::progress_of_next_analysis() const {
 absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
   Analysis analysis{parameters.first_time};
 
+  // In the force-free void there is no orbit to analyse (though the state may
+  // be formally bound to some distant star), and flowing the mission there
+  // grows the ephemeris and holds its lock for as long as the mission lasts.
+  // The position is restored through the anchor, as the flows do.
+  Position<Barycentric> first_position =
+      parameters.first_degrees_of_freedom.position();
+  if (parameters.placement.anchor.has_value()) {
+    first_position +=
+        parameters.placement.anchor->OffsetAt(parameters.first_time);
+  }
+  bool const in_void = ephemeris_->FarFieldIsZero(
+      first_position, parameters.placement.subsystem, parameters.first_time);
+
+  // The flow prolongs the ephemeris as it goes, so the analysed span is
+  // subject to the same reach as the flight plan whose coasts are being
+  // analysed; `mission_duration_` honestly reports what was covered.
+  Time const reachable_duration = ephemeris_->t_max() +
+                                  FlightPlan::max_reachable_horizon -
+                                  parameters.first_time;
+
   RotatingBody<Barycentric> const* primary = nullptr;
   auto smallest_osculating_period = Infinity<Time>;
-  auto const primary_status =
-      FindBodyWithSmallestOsculatingPeriod(parameters,
-                                           primary,
-                                           smallest_osculating_period);
-  RETURN_IF_ERROR(primary_status);
+  if (!in_void && reachable_duration > Time{}) {
+    auto const primary_status =
+        FindBodyWithSmallestOsculatingPeriod(parameters,
+                                             primary,
+                                             smallest_osculating_period);
+    RETURN_IF_ERROR(primary_status);
+  }
 
   if (primary != nullptr) {
     DiscreteTrajectory<Barycentric> trajectory;
@@ -146,9 +170,10 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
         OrbitAnalyserDownsamplingParameters());
 
     Time const analysis_duration = std::min(
-        parameters.extended_mission_duration.value_or(
-            parameters.mission_duration),
-        std::max(2 * smallest_osculating_period, parameters.mission_duration));
+        {parameters.extended_mission_duration.value_or(
+             parameters.mission_duration),
+         std::max(2 * smallest_osculating_period, parameters.mission_duration),
+         reachable_duration});
     RETURN_IF_ERROR(
         FlowWithProgressBar(parameters, analysis_duration, trajectory));
     analysis.mission_duration_ = trajectory.back().time - parameters.first_time;

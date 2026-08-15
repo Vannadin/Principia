@@ -19,6 +19,7 @@
 #include "gtest/gtest.h"
 #include "integrators/methods.hpp"
 #include "integrators/symmetric_linear_multistep_integrator.hpp"
+#include "ksp_plugin/flight_plan.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/integrators.hpp"
 #include "numerics/elementary_functions.hpp"
@@ -58,6 +59,7 @@ using namespace principia::geometry::_instant;
 using namespace principia::geometry::_space;
 using namespace principia::integrators::_methods;
 using namespace principia::integrators::_symmetric_linear_multistep_integrator;
+using namespace principia::ksp_plugin::_flight_plan;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_integrators;
 using namespace principia::ksp_plugin::_orbit_analyser;
@@ -431,6 +433,102 @@ TEST_F(OrbitAnalyserTest, AnchoredOrbitAtRemoteStar) {
   EXPECT_THAT(elements->nodal_period(),
               AllOf(Gt(0.99 * keplerian_period), Lt(1.01 * keplerian_period)));
   EXPECT_FALSE(analyser.analysis()->first_collision().has_value());
+}
+
+// A state in the force-free void that is nevertheless formally bound to a
+// star: drifting at 1 m/s mid-void, below the escape speed of both distant
+// stars.  Without the void test the analyser selects the home star as the
+// primary and flows the whole mission through the ephemeris; with it, no
+// analysis is attempted and the ephemeris does not grow.
+TEST_F(OrbitAnalyserTest, BoundVoidStateIsNotAnalysed) {
+  Instant const t0;
+  GravitationalParameter const μ_home =
+      1.1723328e18 * si::Unit<GravitationalParameter>;
+  GravitationalParameter const μ_star =
+      1.1917577113616e19 * si::Unit<GravitationalParameter>;
+  auto const ephemeris = MakeInterstellarEphemeris(
+      t0,
+      μ_home,
+      μ_star,
+      Displacement<Barycentric>({3.848e17 * Metre, 0 * Metre, 0 * Metre}));
+
+  // Mid-void: the field of both stars is damped to zero here, but at 1 m/s the
+  // state is elliptic with respect to the home star (escape speed 4.8 m/s at
+  // this distance), with a period of two billion years.
+  DegreesOfFreedom<Barycentric> const first_degrees_of_freedom{
+      Barycentric::origin +
+          Displacement<Barycentric>({1e17 * Metre, 0 * Metre, 0 * Metre}),
+      Velocity<Barycentric>(
+          {1 * Metre / Second, 0 * Metre / Second, 0 * Metre / Second})};
+
+  EXPECT_OK(ephemeris->Prolong(t0 + 1 * Second));
+  OrbitAnalyser analyser(ephemeris.get(), DefaultHistoryParameters());
+  analyser.RequestAnalysis(
+      {.first_time = t0,
+       .first_degrees_of_freedom = first_degrees_of_freedom,
+       .placement = {0, std::nullopt},
+       .mission_duration = 30 * Day});
+  for (int i = 0; i < 6000 && analyser.analysis() == nullptr; ++i) {
+    absl::SleepFor(absl::Milliseconds(10));
+    analyser.RefreshAnalysis();
+  }
+  ASSERT_THAT(analyser.analysis(), ::testing::NotNull())
+      << "the analysis never completed";
+
+  EXPECT_THAT(analyser.analysis()->primary(), IsNull());
+  EXPECT_FALSE(analyser.analysis()->elements().has_value());
+  // The mission was not flowed through the ephemeris.
+  EXPECT_THAT(ephemeris->t_max(), Lt(t0 + 30 * Day));
+}
+
+// A bound orbit whose analysis is requested over three centuries.  The flow
+// prolongs the ephemeris as it goes, so an unbounded analysis would grow it
+// (and hold its lock) for the whole span; instead the analysed span stops at
+// the reachable horizon and reports what it covered.
+TEST_F(OrbitAnalyserTest, AnalysisDoesNotOutrunTheReachableHorizon) {
+  // A coarse analysed trajectory: the analysis spans a century and the default
+  // history step would take hundreds of millions of steps.
+  OrbitAnalyser analyser(
+      ephemeris_.get(),
+      Ephemeris<Barycentric>::FixedStepParameters(
+          SymmetricLinearMultistepIntegrator<
+              QuinlanTremaine1990Order12,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*step=*/1 * Day));
+
+  // A circular orbit around the Earth with a period of ten years, so that a
+  // century of analysis is a handful of revolutions.
+  EXPECT_OK(ephemeris_->Prolong(earth_1957_.epoch()));
+  Instant const first_time = ephemeris_->t_max();
+  auto const earth_dof =
+      ephemeris_->trajectory(ephemeris_->bodies().front())
+          ->EvaluateDegreesOfFreedom(first_time);
+  Length const orbit_radius = 1e10 * Metre;
+  Speed const v_circular =
+      Sqrt(earth_.gravitational_parameter() / orbit_radius);
+  DegreesOfFreedom<Barycentric> const first_degrees_of_freedom{
+      earth_dof.position() +
+          Displacement<Barycentric>({orbit_radius, 0 * Metre, 0 * Metre}),
+      earth_dof.velocity() +
+          Velocity<Barycentric>(
+              {0 * Metre / Second, v_circular, 0 * Metre / Second})};
+
+  analyser.RequestAnalysis(
+      {.first_time = first_time,
+       .first_degrees_of_freedom = first_degrees_of_freedom,
+       .mission_duration = 3 * FlightPlan::max_reachable_horizon});
+  for (int i = 0; i < 30'000 && analyser.analysis() == nullptr; ++i) {
+    absl::SleepFor(absl::Milliseconds(10));
+    analyser.RefreshAnalysis();
+  }
+  ASSERT_THAT(analyser.analysis(), ::testing::NotNull())
+      << "the analysis never completed";
+
+  EXPECT_THAT(analyser.analysis()->mission_duration(),
+              AllOf(Gt(0.99 * FlightPlan::max_reachable_horizon),
+                    Lt(1.01 * FlightPlan::max_reachable_horizon)));
+  EXPECT_THAT(ephemeris_->t_max(),
+              Lt(first_time + 1.1 * FlightPlan::max_reachable_horizon));
 }
 
 }  // namespace ksp_plugin

@@ -42,19 +42,12 @@ using namespace std::chrono_literals;
 
 namespace {
 
-// A horizon this far beyond the ephemeris is not pursued at all.  Prolonging
-// costs a fixed step of the entire system, so a plan of interstellar length asks
-// for of the order of a hundred million of them and cannot be integrated at any
-// point in the future; pursuing it stops the game instead.  This is a backstop
-// against the impossible, not a judgement about which plans are reasonable: it
-// sits an order of magnitude beyond the longest horizon in our corpus of saves,
-// which asks for ten years.
-constexpr Time max_flight_plan_horizon = 100 * 365.25 * Day;
-
-// Whether prolonging to `t` is worth beginning at all.
+// Whether prolonging to `t` is worth beginning at all; see
+// `max_reachable_horizon`, which sits an order of magnitude beyond the longest
+// horizon in our corpus of saves.
 bool HorizonIsWithinReach(Ephemeris<Barycentric> const& ephemeris,
                           Instant const& t) {
-  return t <= ephemeris.t_max() + max_flight_plan_horizon;
+  return t <= ephemeris.t_max() + FlightPlan::max_reachable_horizon;
 }
 
 inline absl::Status BadDesiredFinalTime() {

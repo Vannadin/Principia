@@ -16,6 +16,7 @@
 #include "physics/discrete_trajectory_segment_iterator.hpp"
 #include "physics/ephemeris.hpp"
 #include "quantities/quantities.hpp"
+#include "quantities/si.hpp"
 #include "serialization/ksp_plugin.pb.h"
 
 namespace principia {
@@ -33,6 +34,7 @@ using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_discrete_trajectory_segment_iterator;
 using namespace principia::physics::_ephemeris;
 using namespace principia::quantities::_quantities;
+using namespace principia::quantities::_si;
 
 // A chain of trajectories obtained by executing the corresponding
 // `NavigationManœuvre`s.
@@ -178,6 +180,14 @@ class FlightPlan {
       not_null<Ephemeris<Barycentric>*> ephemeris);
 
   static constexpr std::int64_t max_ephemeris_steps_per_frame = 1000;
+
+  // A time this far beyond the end of the ephemeris is not pursued at all,
+  // whether by prolongation or by analysis.  Prolonging costs a fixed step of
+  // the entire system, so a span of interstellar length cannot be integrated at
+  // any point in the future; pursuing it stops the game instead.  This is a
+  // backstop against the impossible, not a judgement about which plans are
+  // reasonable.
+  static constexpr Time max_reachable_horizon = 100 * 365.25 * Day;
 
   static constexpr absl::StatusCode bad_desired_final_time =
       absl::StatusCode::kOutOfRange;
