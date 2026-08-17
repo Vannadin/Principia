@@ -112,6 +112,7 @@ FlightPlan::FlightPlan(FlightPlan const& other)
       ephemeris_(other.ephemeris_),
       desired_final_time_(other.desired_final_time_),
       anomalous_segments_(other.anomalous_segments_),
+      anomalous_status_(other.anomalous_status_),
       placement_(other.placement_),
       manœuvres_(other.manœuvres_),
       analysis_is_enabled_(other.analysis_is_enabled_),

@@ -787,6 +787,20 @@ TEST_F(FlightPlanTest, Copy) {
   EXPECT_THAT(message2, EqualsProto(message1));
 }
 
+// The optimizer works on copies; an anomalous plan must stay anomalous, with
+// the same status, when copied.
+TEST_F(FlightPlanTest, CopyKeepsTheAnomalousStatus) {
+  Instant const out_of_reach = t0_ + 120 * 365.25 * Day;
+  flight_plan_->SetDesiredFinalTime(out_of_reach).IgnoreError();
+  ASSERT_FALSE(flight_plan_->anomalous_status().ok());
+
+  FlightPlan const flight_plan_copy(*flight_plan_);
+  EXPECT_EQ(flight_plan_->number_of_anomalous_manœuvres(),
+            flight_plan_copy.number_of_anomalous_manœuvres());
+  EXPECT_EQ(flight_plan_->anomalous_status().code(),
+            flight_plan_copy.anomalous_status().code());
+}
+
 TEST_F(FlightPlanTest, Insertion) {
   // Check that we get the same flight plan if we add the manœuvres in the
   // opposite order.
