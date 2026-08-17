@@ -640,6 +640,107 @@ bool Ephemeris<Frame>::FarFieldIsBelow(Threshold² const& threshold²,
 }
 
 template<typename Frame>
+bool Ephemeris<Frame>::FarFieldIsZeroAlong(
+    DegreesOfFreedom<Frame> const& degrees_of_freedom,
+    int const subsystem,
+    Instant const& t1,
+    Instant const& t2) const {
+  if (far_field_damping_.empty() || subsystem_barycentre_.empty() || empty()) {
+    return false;
+  }
+  CHECK_GE(subsystem, 0);
+  CHECK_LT(subsystem, subsystem_barycentre_.size());
+  CHECK_LE(t1, t2);
+  Instant const t_eval = t_max();
+
+  int const number_of_subsystems = subsystem_origin_offset_.size();
+  std::vector<Length> keep_out(number_of_subsystems);
+  absl::ReaderMutexLock l(&lock_);
+  std::vector<DegreesOfFreedom<Frame>> states;
+  states.reserve(bodies_.size());
+  for (std::size_t b = 0; b < bodies_.size(); ++b) {
+    states.push_back(trajectories_[b]->EvaluateDegreesOfFreedomLocked(t_eval));
+  }
+  // Each subsystem's reach around its barycentre: its present extent plus its
+  // widest relative apoapsis — a two-body invariant about the dominant
+  // attractor, as in `ComputeCharacteristicAccelerations` — doubled, holding
+  // the osculating elements to their scale; plus the widest damping radius.
+  std::vector<Length> extent(number_of_subsystems);
+  std::vector<Length> widest_apoapsis(number_of_subsystems);
+  for (std::size_t b = 0; b < bodies_.size(); ++b) {
+    int const s = subsystem_of_body_[b];
+    extent[s] = std::max(extent[s],
+                         (states[b].position() -
+                          subsystem_barycentre_[s].position()).Norm());
+    keep_out[s] = std::max(keep_out[s],
+                           far_field_damping_[b].outer_threshold());
+    std::optional<std::size_t> dominant;
+    Acceleration strongest_pull;
+    for (std::size_t c = 0; c < bodies_.size(); ++c) {
+      if (c == b || subsystem_of_body_[c] != s) {
+        continue;
+      }
+      Square<Length> const d² =
+          (states[c].position() - states[b].position()).Norm²();
+      if (d² == Square<Length>{}) {
+        continue;
+      }
+      Acceleration const pull = bodies_[c]->gravitational_parameter() / d²;
+      if (pull > strongest_pull) {
+        strongest_pull = pull;
+        dominant = c;
+      }
+    }
+    if (!dominant.has_value()) {
+      continue;
+    }
+    GravitationalParameter const μ =
+        bodies_[*dominant]->gravitational_parameter() +
+        bodies_[b]->gravitational_parameter();
+    Displacement<Frame> const r =
+        states[b].position() - states[*dominant].position();
+    Velocity<Frame> const v =
+        states[b].velocity() - states[*dominant].velocity();
+    SpecificEnergy const ε = v.Norm²() / 2 - μ / r.Norm();
+    if (ε >= SpecificEnergy{}) {
+      return false;
+    }
+    Length const semi_major_axis = -μ / (2 * ε);
+    // h² = r²v² − (r·v)², the square of the specific angular momentum.
+    auto const h² = r.Norm²() * v.Norm²() - Pow<2>(InnerProduct(r, v));
+    double const eccentricity =
+        Sqrt(std::max(0.0, 1 - h² / (μ * semi_major_axis)));
+    widest_apoapsis[s] =
+        std::max(widest_apoapsis[s], semi_major_axis * (1 + eccentricity));
+  }
+  for (int s = 0; s < number_of_subsystems; ++s) {
+    keep_out[s] += 2 * (extent[s] + widest_apoapsis[s]);
+  }
+
+  // The minimum over [t1, t2] of the distance between the line and each
+  // barycentre, both affine in time in `subsystem`'s representation.
+  Time const Δt = t2 - t1;
+  for (int s = 0; s < number_of_subsystems; ++s) {
+    Displacement<Frame> Δq = subsystem_barycentre_[s].position() -
+                             degrees_of_freedom.position();
+    Velocity<Frame> Δv = -degrees_of_freedom.velocity();
+    if (s != subsystem) {
+      Δq = AddInterSubsystemOffset(inter_subsystem_offset(s, subsystem, t1),
+                                   Δq);
+      Δv += subsystem_velocity_conversion(s, subsystem);
+    }
+    Time τ{};
+    if (auto const Δv² = Δv.Norm²(); Δv² != Square<Speed>{}) {
+      τ = std::clamp(-InnerProduct(Δq, Δv) / Δv², Time{}, Δt);
+    }
+    if ((Δq + Δv * τ).Norm() <= keep_out[s]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+template<typename Frame>
 void Ephemeris<Frame>::ComputeInterSubsystemOffsets() {
   int const number_of_subsystems = subsystem_origin_offset_.size();
   inter_subsystem_offsets_.resize(number_of_subsystems * number_of_subsystems);

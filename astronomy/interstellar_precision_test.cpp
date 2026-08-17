@@ -734,6 +734,90 @@ TEST_F(InterstellarPrecisionTest, AnchoredVoidCoast) {
               Gt(1 * Metre / Pow<2>(Second)));
 }
 
+// The extrapolated void judgement: whether a force-free line stays in the
+// exactly-damped void over a span, without the ephemeris covering it.
+TEST_F(InterstellarPrecisionTest, FarFieldIsZeroAlongALine) {
+  Instant const t0;
+  Acceleration const far_field_damping_floor =
+      1e-12 * Metre / Pow<2>(Second);
+  auto const damped = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1},
+                                    far_field_damping_floor);
+  EXPECT_OK(damped->Prolong(t0 + Period() / 10));
+
+  Position<ICRS> const mid_void = ICRS::origin + 0.5 * ToRemoteSystem();
+
+  // A transverse drift stays mid-void for a millennium — judged over a span
+  // the ephemeris comes nowhere near covering.
+  DegreesOfFreedom<ICRS> const drifting(
+      mid_void,
+      Velocity<ICRS>({0 * Metre / Second,
+                      3 * Kilo(Metre) / Second,
+                      0 * Metre / Second}));
+  EXPECT_TRUE(damped->FarFieldIsZeroAlong(
+      drifting, /*subsystem=*/0, t0, t0 + 1000 * JulianYear));
+  EXPECT_TRUE(damped->FarFieldIsZeroAlong(
+      drifting, /*subsystem=*/0,
+      t0 + 500 * JulianYear, t0 + 1000 * JulianYear));
+
+  // A line aimed at system B arrives within the span; the judgement sees the
+  // arrival even though it lies far beyond the ephemeris's reach.  Judged
+  // only while the line is still far, it is void.
+  DegreesOfFreedom<ICRS> const inbound(
+      mid_void,
+      Velocity<ICRS>({700 * Kilo(Metre) / Second,
+                      0 * Metre / Second,
+                      0 * Metre / Second}));
+  EXPECT_FALSE(damped->FarFieldIsZeroAlong(
+      inbound, /*subsystem=*/0, t0, t0 + 1000 * JulianYear));
+  EXPECT_TRUE(damped->FarFieldIsZeroAlong(
+      inbound, /*subsystem=*/0, t0, t0 + 100 * JulianYear));
+
+  // The mirrored encounter: the vessel is parked and system B drifts onto it,
+  // so only the barycentres' own motion can see the arrival.
+  auto const moving = MakeEphemeris(
+      /*subsystems=*/{0, 0, 1, 1},
+      far_field_damping_floor,
+      Velocity<ICRS>({-700 * Kilo(Metre) / Second,
+                      0 * Metre / Second,
+                      0 * Metre / Second}));
+  EXPECT_OK(moving->Prolong(t0 + Period() / 10));
+  DegreesOfFreedom<ICRS> const parked(mid_void, ICRS::unmoving);
+  EXPECT_FALSE(moving->FarFieldIsZeroAlong(
+      parked, /*subsystem=*/0, t0, t0 + 1000 * JulianYear));
+  EXPECT_TRUE(moving->FarFieldIsZeroAlong(
+      parked, /*subsystem=*/0, t0, t0 + 100 * JulianYear));
+
+  // The reach of a star is its damping radius: a parked vessel just beyond it
+  // is void, just below it is not.
+  Length const outer = Sqrt(μ_star / far_field_damping_floor);
+  EXPECT_TRUE(damped->FarFieldIsZeroAlong(
+      DegreesOfFreedom<ICRS>(
+          ICRS::origin +
+              Displacement<ICRS>({0 * Metre, 1.1 * outer, 0 * Metre}),
+          ICRS::unmoving),
+      /*subsystem=*/0, t0, t0 + 1 * JulianYear));
+  EXPECT_FALSE(damped->FarFieldIsZeroAlong(
+      DegreesOfFreedom<ICRS>(
+          ICRS::origin +
+              Displacement<ICRS>({0 * Metre, 0.9 * outer, 0 * Metre}),
+          ICRS::unmoving),
+      /*subsystem=*/0, t0, t0 + 1 * JulianYear));
+
+  // A parked line starting inside a system is rejected at its start.
+  DegreesOfFreedom<ICRS> const near_star_a(
+      ICRS::origin +
+          Displacement<ICRS>({0 * Metre, 2 * orbit_radius, 0 * Metre}),
+      ICRS::unmoving);
+  EXPECT_FALSE(damped->FarFieldIsZeroAlong(
+      near_star_a, /*subsystem=*/0, t0, t0 + 1 * JulianYear));
+
+  // Never true when the far field is not damped.
+  auto const undamped = MakeEphemeris(/*subsystems=*/{0, 0, 1, 1});
+  EXPECT_OK(undamped->Prolong(t0 + Period() / 10));
+  EXPECT_FALSE(undamped->FarFieldIsZeroAlong(
+      drifting, /*subsystem=*/0, t0, t0 + 1000 * JulianYear));
+}
+
 // Two vessels homed to DIFFERENT subsystems meet in the void — the canonical
 // inter-star rendezvous.  `placement_conversion` composes the subsystem and
 // anchor terms on the sector lattice, where the void-scale cells cancel

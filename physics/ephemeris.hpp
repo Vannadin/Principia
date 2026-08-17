@@ -316,6 +316,24 @@ class Ephemeris {
                                int subsystem,
                                Instant const& t) const EXCLUDES(lock_);
 
+  // Returns true iff the force-free straight line from `degrees_of_freedom` —
+  // the state at `t1`, represented relative to the local origin of
+  // `subsystem`, any anchor already restored by the caller, offset and
+  // velocity both — stays in the exactly-damped void over [t1, t2], judged
+  // without requiring the ephemeris to cover the span.  The barycentres are
+  // extrapolated affinely (their curvature under the pull of the other
+  // subsystems is not carried, and grows quadratically with the span), and
+  // the bodies are held within a reach of their barycentre derived from the
+  // subsystem's present extent and widest relative apoapsis — an engineering
+  // bound that assumes the osculating elements keep their scale.
+  // Conservatively false when the far field is not damped, and when any body
+  // is formally unbound from its dominant attractor.
+  virtual bool FarFieldIsZeroAlong(
+      DegreesOfFreedom<Frame> const& degrees_of_freedom,
+      int subsystem,
+      Instant const& t1,
+      Instant const& t2) const EXCLUDES(lock_);
+
   // Returns the trajectory for the given `body`.
   virtual not_null<ContinuousTrajectory<Frame> const*> trajectory(
       not_null<MassiveBody const*> body) const;
