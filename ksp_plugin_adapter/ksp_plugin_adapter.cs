@@ -3004,6 +3004,19 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         RemoveStockTrajectoriesIfNeeded(vessel, inexpressible);
       }
     }
+    // The planetarium camera reads the suppressed stock orbit too: focusing a
+    // void vessel folds the void scale into the camera distance, far past the
+    // camera's own maximum, and everything scaled by that distance — the
+    // manœuvre markers first — is drawn at void scale.  A legal distance,
+    // which stock exceeds the maximum for only on the strength of a stock
+    // orbit, is left alone.
+    Vessel camera_vessel = PlanetariumCamera.fetch?.target?.vessel;
+    if (camera_vessel != null &&
+        PlanetariumCamera.fetch.Distance >
+            PlanetariumCamera.fetch.maxDistance &&
+        stock_orbit_is_inexpressible(camera_vessel)) {
+      PlanetariumCamera.fetch.SetDistance(PlanetariumCamera.fetch.maxDistance);
+    }
     string main_vessel_guid = PredictedVessel()?.id.ToString();
     if (MapView.MapIsEnabled) {
       XYZ sun_world_position = (XYZ)Planetarium.fetch.Sun.position;
