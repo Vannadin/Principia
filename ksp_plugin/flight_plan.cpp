@@ -59,6 +59,11 @@ inline absl::Status DoesNotFit() {
   return absl::Status(FlightPlan::does_not_fit, "Does not fit");
 }
 
+inline absl::Status BeyondTheVoidHorizon() {
+  return absl::Status(FlightPlan::bad_desired_final_time,
+                      "Beyond the void horizon");
+}
+
 inline absl::Status Singular(Square<Speed> const& Δv²) {
   return absl::Status(FlightPlan::singular,
                       absl::StrCat("Singular: ", DebugString(Δv²)));
@@ -573,7 +578,8 @@ absl::Status FlightPlan::BurnSegment(
 absl::Status FlightPlan::CoastSegment(
     Instant const& desired_final_time,
     DiscreteTrajectorySegmentIterator<Barycentric> const segment,
-    std::int64_t const max_ephemeris_steps) {
+    std::int64_t const max_ephemeris_steps,
+    bool const may_coast_the_void) {
   // Make sure that the ephemeris covers the entire segment, reanimating and
   // waiting if necessary.
   Instant const starting_time = segment->back().time;
@@ -581,13 +587,59 @@ absl::Status FlightPlan::CoastSegment(
     ephemeris_->AwaitReanimation(starting_time);
   }
 
-  return ephemeris_->FlowWithAdaptiveStep(
-                         &trajectory_,
-                         Ephemeris<Barycentric>::NoIntrinsicAcceleration,
-                         desired_final_time,
-                         adaptive_step_parameters_,
-                         max_ephemeris_steps,
-                         placement_);
+  Instant const void_final_time =
+      std::min(desired_final_time, initial_time_ + max_void_horizon);
+  // A coast through the force-free void is a straight line, computed without
+  // the ephemeris, whose reach therefore does not bound it — up to the void
+  // horizon.  Appends the line and returns true if the coast is in the void
+  // from the segment's current end onwards.
+  auto const void_coast = [&]() -> bool {
+    auto const& [t, degrees_of_freedom] = segment->back();
+    // The time guard also keeps the `Append` below strictly monotonic, on
+    // pain of a CHECK.
+    if (!may_coast_the_void || void_final_time <= t) {
+      return false;
+    }
+    auto const [offset, velocity] = Ephemeris<Barycentric>::Anchor::Conversion(
+        placement_.anchor, std::nullopt, t);
+    DegreesOfFreedom<Barycentric> const state(
+        degrees_of_freedom.position() + offset,
+        degrees_of_freedom.velocity() + velocity);
+    if (!ephemeris_->FarFieldIsZeroAlong(
+            state, placement_.subsystem, t, void_final_time)) {
+      return false;
+    }
+    return trajectory_.Append(
+        void_final_time,
+        DegreesOfFreedom<Barycentric>(
+            degrees_of_freedom.position() +
+                degrees_of_freedom.velocity() * (void_final_time - t),
+            degrees_of_freedom.velocity())).ok();
+  };
+  absl::Status const void_coast_status =
+      void_final_time == desired_final_time ? absl::OkStatus()
+                                            : BeyondTheVoidHorizon();
+
+  if (void_coast()) {
+    return void_coast_status;
+  }
+  absl::Status const status = ephemeris_->FlowWithAdaptiveStep(
+      &trajectory_,
+      Ephemeris<Barycentric>::NoIntrinsicAcceleration,
+      desired_final_time,
+      adaptive_step_parameters_,
+      max_ephemeris_steps,
+      placement_);
+  if (status.ok()) {
+    return status;
+  }
+  // The flow ran out of steps or of ephemeris; if it stopped in the void —
+  // where a coast leaving a system arrives — the rest of the coast is the
+  // line.  Any other failure, e.g. a cancellation, is returned as it is.
+  if (absl::IsDeadlineExceeded(status) && void_coast()) {
+    return void_coast_status;
+  }
+  return status;
 }
 
 absl::Status FlightPlan::ComputeSegments(
@@ -607,7 +659,8 @@ absl::Status FlightPlan::ComputeSegments(
     if (anomalous_segments_ == 0) {
       absl::Status const status = CoastSegment(manœuvre.initial_time(),
                                                coast,
-                                               max_ephemeris_steps);
+                                               max_ephemeris_steps,
+                                               /*may_coast_the_void=*/false);
       if (status.ok()) {
         manœuvre.set_coasting_trajectory(
             coast,
@@ -673,7 +726,8 @@ absl::Status FlightPlan::ComputeSegments(
     }
     absl::Status const status = CoastSegment(desired_final_time_,
                                              segments_.back(),
-                                             max_ephemeris_steps);
+                                             max_ephemeris_steps,
+                                             /*may_coast_the_void=*/true);
     if (!status.ok()) {
       overall_status.Update(status);
       anomalous_segments_ = 1;

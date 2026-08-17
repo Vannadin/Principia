@@ -437,14 +437,17 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
     return m.Return();
   } else {
     auto const& vessel = *plugin->GetVessel(vessel_guid);
+    auto const& celestial = plugin->GetCelestial(celestial_index);
+    auto const& celestial_trajectory = celestial.trajectory();
     Instant const prediction_final_time = vessel.prediction()->t_max();
-    Instant const final_time =
+    // A void flight plan may end beyond the ephemeris, where the celestial has
+    // no trajectory to plot.
+    Instant const final_time = std::min(
         vessel.has_flight_plan()
             ? std::max(GetFlightPlan(*plugin, vessel_guid).actual_final_time(),
                        prediction_final_time)
-            : prediction_final_time;
-    auto const& celestial = plugin->GetCelestial(celestial_index);
-    auto const& celestial_trajectory = celestial.trajectory();
+            : prediction_final_time,
+        celestial_trajectory.t_max());
     auto const registration = CelestialRegistration(*plugin, celestial);
     // No need to request reanimation here because the current time of the
     // plugin is necessarily covered.

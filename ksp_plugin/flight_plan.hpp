@@ -189,6 +189,11 @@ class FlightPlan {
   // reasonable.
   static constexpr Time max_reachable_horizon = 100 * 365.25 * Day;
 
+  // A coast through the force-free void is a straight line computed without
+  // the ephemeris, so its horizon is not bounded by the reach; this bounds it
+  // nonetheless, against pathological plans.
+  static constexpr Time max_void_horizon = 1000 * 365.25 * Day;
+
   static constexpr absl::StatusCode bad_desired_final_time =
       absl::StatusCode::kOutOfRange;
   static constexpr absl::StatusCode does_not_fit =
@@ -217,11 +222,13 @@ class FlightPlan {
       std::int64_t max_ephemeris_steps);
 
   // Flows the given `segment` until `desired_final_time` with no intrinsic
-  // acceleration.
+  // acceleration.  Only the last coast may cross into the void beyond the
+  // ephemeris's reach: everything after a coast needs the ephemeris.
   absl::Status CoastSegment(
       Instant const& desired_final_time,
       DiscreteTrajectorySegmentIterator<Barycentric> segment,
-      std::int64_t max_ephemeris_steps);
+      std::int64_t max_ephemeris_steps,
+      bool may_coast_the_void);
 
   // Computes new trajectories and appends them to `segments_`.  This updates
   // the last coast of `segments_` and then appends one coast and one burn for

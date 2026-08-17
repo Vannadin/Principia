@@ -33,6 +33,7 @@
 #include "integrators/embedded_explicit_generalized_runge_kutta_nyström_integrator.hpp"  // NOLINT
 #include "integrators/embedded_explicit_runge_kutta_nyström_integrator.hpp"
 #include "integrators/methods.hpp"
+#include "ksp_plugin/flight_plan.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "ksp_plugin/identification.hpp"
 #include "ksp_plugin/interface.hpp"
@@ -42,6 +43,7 @@
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/ephemeris.hpp"
 #include "physics/massive_body.hpp"
+#include "physics/reference_frame.hpp"
 #include "physics/rigid_motion.hpp"
 #include "physics/solar_system.hpp"
 #include "quantities/astronomy.hpp"
@@ -82,6 +84,7 @@ using namespace principia::geometry::_space_transformations;
 using namespace principia::integrators::_embedded_explicit_generalized_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_embedded_explicit_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::integrators::_methods;
+using namespace principia::ksp_plugin::_flight_plan;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_identification;
 using namespace principia::ksp_plugin::_part;
@@ -93,6 +96,7 @@ using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
+using namespace principia::physics::_reference_frame;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_astronomy;
@@ -3214,6 +3218,116 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
   EXPECT_THAT(beacon->prediction()->back().time,
               AllOf(Gt(beacon_first_time + 1799 * Second),
                     Le(beacon_first_time + 1800 * Second)));
+}
+
+// A flight-plan coast through the force-free void is a straight line: five
+// centuries cost the ephemeris nothing.  Beyond the void horizon the plan is
+// anomalous, the line stops there, and the stored horizon is kept.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       VoidFlightPlanCoastsWithoutTheEphemeris) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      306, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  Instant const t0 = drifter->psychohistory()->back().time;
+  plugin->CreateFlightPlan(guid_void, t0 + 30 * Day, 1 * Kilogram);
+  auto& flight_plan = drifter->flight_plan();
+
+  EXPECT_TRUE(flight_plan.SetDesiredFinalTime(t0 + 500 * 365.25 * Day).ok());
+  EXPECT_EQ(t0 + 500 * 365.25 * Day,
+            flight_plan.GetAllSegments().back().time);
+  // The five centuries were not integrated.
+  EXPECT_THAT(plugin->GetCelestial(star_a).trajectory().t_max(),
+              Lt(t0 + 365.25 * Day));
+
+  // The rendering must not follow the line beyond the plotting frame's
+  // domain.
+  auto const& segments = flight_plan.GetAllSegments();
+  auto const rendered =
+      plugin->renderer().RenderBarycentricTrajectoryInPlotting(
+          segments.begin(), segments.end(), drifter->placement());
+  ASSERT_FALSE(rendered.empty());
+  EXPECT_THAT(rendered.back().time, Lt(t0 + 365.25 * Day));
+
+  absl::Status const status = flight_plan.SetDesiredFinalTime(
+      t0 + 2 * FlightPlan::max_void_horizon);
+  EXPECT_EQ(FlightPlan::bad_desired_final_time, status.code());
+  EXPECT_EQ(t0 + 2 * FlightPlan::max_void_horizon,
+            flight_plan.desired_final_time());
+  EXPECT_EQ(flight_plan.initial_time() + FlightPlan::max_void_horizon,
+            flight_plan.GetAllSegments().back().time);
+}
+
+// A manœuvre deep in a void flight plan: the coast leading to it needs the
+// ephemeris, which cannot reach it, so the plan turns anomalous — without
+// crashing, and without the intermediate coast crossing the void as a line.
+TEST_F(PluginIntegrationTestWithoutPlugin, VoidFlightPlanManœuvreIsAnomalous) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      306, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  Instant const t0 = drifter->psychohistory()->back().time;
+  plugin->CreateFlightPlan(guid_void, t0 + 500 * 365.25 * Day, 1 * Kilogram);
+  auto& flight_plan = drifter->flight_plan();
+  EXPECT_EQ(t0 + 500 * 365.25 * Day,
+            flight_plan.GetAllSegments().back().time);
+
+  NavigationManœuvre::Intensity intensity;
+  intensity.Δv = Velocity<Frenet<Navigation>>({1 * Metre / Second,
+                                               0 * Metre / Second,
+                                               0 * Metre / Second});
+  NavigationManœuvre::Timing timing;
+  timing.initial_time = t0 + 50 * 365.25 * Day;
+  NavigationManœuvre::Burn const burn{
+      intensity,
+      timing,
+      /*thrust=*/1 * Newton,
+      /*specific_impulse=*/1 * Newton * Second / Kilogram,
+      plugin->NewBodyCentredNonRotatingNavigationFrame(star_a),
+      /*is_inertially_fixed=*/true};
+  flight_plan.Insert(burn, 0).IgnoreError();
+
+  EXPECT_EQ(1, flight_plan.number_of_anomalous_manœuvres());
+  EXPECT_THAT(flight_plan.GetSegment(0)->back().time,
+              Lt(t0 + 25 * 365.25 * Day));
 }
 
 // The void regime judgement that keeps KSP's own orbit machinery off a vessel

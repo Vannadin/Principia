@@ -593,10 +593,15 @@ FlightPlanOptimizer::EvaluateClosestPeriapsis(
       }
     }
 
+    // A void coast may end beyond the ephemeris, where the celestial cannot
+    // be evaluated; the point's time is clamped where the celestial is last
+    // known, for this heuristic and for the evaluations downstream.
+    Instant const celestial_t_max = celestial_trajectory.t_max();
     auto make_distinguished_point =
-        [](DiscreteTrajectory<Barycentric>::value_type const& v) {
+        [&celestial_t_max](
+            DiscreteTrajectory<Barycentric>::value_type const& v) {
           return DistinguishedPoints<Barycentric>::value_type{
-              v.time, v.degrees_of_freedom};
+              std::min(v.time, celestial_t_max), v.degrees_of_freedom};
         };
 
     // Evaluate the distance at the end of the trajectory.  If it is smaller
@@ -605,7 +610,8 @@ FlightPlanOptimizer::EvaluateClosestPeriapsis(
     auto const& end_point = vessel_trajectory.back();
     auto const distance_at_end =
         (end_point.degrees_of_freedom.position() -
-         celestial_trajectory.EvaluatePosition(end_point.time)).Norm();
+         celestial_trajectory.EvaluatePosition(
+             std::min(end_point.time, celestial_t_max))).Norm();
     if (distance_at_end >= distance_at_closest_periapsis) {
       break;
     } else if (!extend_if_needed) {

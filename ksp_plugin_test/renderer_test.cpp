@@ -73,7 +73,10 @@ class RendererTest : public ::testing::Test {
       : renderer_(&celestial_,
                   std::make_unique<
                       MockRigidReferenceFrame<Barycentric, Navigation>>()),
-        reference_frame_(renderer_.GetPlottingFrame()) {}
+        reference_frame_(renderer_.GetPlottingFrame()) {
+    // The plotting frame bounds the rendering at its `t_max`.
+    ON_CALL(*reference_frame_, t_max()).WillByDefault(Return(InfiniteFuture));
+  }
 
   Instant const t0_;
   MockCelestial const celestial_;
@@ -222,6 +225,7 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithTargetVessel) {
   MockContinuousTrajectory<Barycentric> celestial_trajectory;
   EXPECT_CALL(ephemeris, trajectory(_))
       .WillRepeatedly(Return(&celestial_trajectory));
+  EXPECT_CALL(ephemeris, t_max()).WillRepeatedly(Return(InfiniteFuture));
 
   DiscreteTrajectory<Barycentric> trajectory_to_render;
   AppendTrajectoryTimeline(
@@ -294,6 +298,7 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithAnchoredTarget) {
   MockContinuousTrajectory<Barycentric> celestial_trajectory;
   EXPECT_CALL(ephemeris, trajectory(_))
       .WillRepeatedly(Return(&celestial_trajectory));
+  EXPECT_CALL(ephemeris, t_max()).WillRepeatedly(Return(InfiniteFuture));
 
   // The active vessel's trajectory, in its own anchored coordinates.
   DiscreteTrajectory<Barycentric> trajectory_to_render;

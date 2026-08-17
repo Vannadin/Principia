@@ -102,9 +102,15 @@ Renderer::RenderBarycentricTrajectoryInPlotting(
     Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
   Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
       GetPlottingFrame()->placement();
+  // A void flight-plan coast reaches beyond the plotting frame's domain,
+  // where the frame cannot be evaluated.
+  Instant const frame_t_max = GetPlottingFrame()->t_max();
   DiscreteTrajectory<Navigation> trajectory;
   for (auto it = begin; it != end; ++it) {
     auto const& [time, degrees_of_freedom] = *it;
+    if (time > frame_t_max) {
+      break;
+    }
     if (target_) {
       auto const prediction = target_->vessel->prediction();
       if (time < prediction->t_min()) {
