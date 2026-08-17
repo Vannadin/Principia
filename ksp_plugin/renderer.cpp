@@ -160,6 +160,31 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
     std::optional<WorldRegistration> const& registration) const {
   Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
       GetPlottingFrame()->placement();
+  if (registration.has_value()) {
+    // The velocities are unaffected by the anchoring: their error only enters
+    // through the angular motion of the frame.
+    AnchoredWorldMapping const anchored_mapping(
+        *this, time, *registration, planetarium_rotation, placement);
+    DistinguishedPoints<World> world_points;
+    for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
+      auto const [conversion_displacement, conversion_velocity] =
+          PlacementConversion(placement, frame_placement, t);
+      DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom = {
+          degrees_of_freedom.position() + conversion_displacement,
+          degrees_of_freedom.velocity() + conversion_velocity};
+      auto const plotting_degrees_of_freedom =
+          BarycentricToPlotting(t)(converted_degrees_of_freedom);
+      world_points.emplace(
+          t,
+          DegreesOfFreedom<World>(
+              anchored_mapping(t, degrees_of_freedom.position()),
+              Permutation<Navigation, World>(
+                  Permutation<Navigation, World>::CoordinatePermutation::YXZ)(
+                  PlottingToWorld(t, planetarium_rotation).scale() *
+                  plotting_degrees_of_freedom.velocity())));
+    }
+    return world_points;
+  }
   DistinguishedPoints<Navigation> plotting_points;
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
     // The conversion is evaluated at each point's own time, into the plotting
@@ -184,25 +209,34 @@ DistinguishedPoints<World> Renderer::RenderDistinguishedPointsInWorld(
          DegreesOfFreedom<World> const& world_degrees_of_freedom) {
         world_points.emplace(t, world_degrees_of_freedom);
       },
-      registration);
+      /*registration=*/std::nullopt);
 }
 
 std::vector<Renderer::Node>
 Renderer::RenderNodes(
     Instant const& time,
+    Trajectory<Barycentric> const& trajectory,
     DistinguishedPoints<Navigation>::const_iterator const& begin,
     DistinguishedPoints<Navigation>::const_iterator const& end,
     Position<World> const& sun_world_position,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
     std::optional<WorldRegistration> const& registration) const {
   std::vector<Node> nodes;
-  Similarity<Navigation, World> const
-      from_plotting_frame_to_world_at_current_time =
-          registration.has_value()
-              ? RegisteredPlottingToWorld(
-                    time, *registration, planetarium_rotation)
-              : PlottingToWorld(
-                    time, sun_world_position, planetarium_rotation);
+  // The nodes were found on `Navigation` positions, which are absolutes at
+  // the distance to the plotting frame's origin; registered, they are placed
+  // from `trajectory`, whose representation is local, at their own times —
+  // which keep the rounding of the search.
+  std::optional<AnchoredWorldMapping> anchored_mapping;
+  std::optional<Similarity<Navigation, World>>
+      from_plotting_frame_to_world_at_current_time;
+  if (registration.has_value()) {
+    anchored_mapping.emplace(
+        *this, time, *registration, planetarium_rotation, placement);
+  } else {
+    from_plotting_frame_to_world_at_current_time =
+        PlottingToWorld(time, sun_world_position, planetarium_rotation);
+  }
   for (auto const& [t, degrees_of_freedom] : Range(begin, end)) {
     DegreesOfFreedom<Navigation> const& navigation_degrees_of_freedom =
         degrees_of_freedom;
@@ -211,8 +245,11 @@ Renderer::RenderNodes(
             PlottingToWorld(t, planetarium_rotation);
     nodes.push_back(
         {.time = t,
-         .position = from_plotting_frame_to_world_at_current_time(
-             navigation_degrees_of_freedom.position()),
+         .position =
+             anchored_mapping.has_value()
+                 ? (*anchored_mapping)(t, trajectory.EvaluatePosition(t))
+                 : (*from_plotting_frame_to_world_at_current_time)(
+                       navigation_degrees_of_freedom.position()),
          .apparent_inclination =
              AngleBetween(Bivector<double, Navigation>({0, 0, 1}),
                           Wedge(navigation_degrees_of_freedom.position() -
@@ -335,10 +372,84 @@ Similarity<Navigation, World> Renderer::RegisteredPlottingToWorld(
     Instant const& time,
     WorldRegistration const& registration,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
+  // Into the plotting frame's placement, as the rendered points are; the
+  // conversion is on the sector lattice, so a vessel anchored in the void
+  // keeps its true geometry relative to the frame.
+  Position<Barycentric> position = registration.position;
+  if (Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
+          GetPlottingFrame()->placement();
+      registration.placement != frame_placement) {
+    position +=
+        PlacementConversion(registration.placement, frame_placement, time)
+            .first;
+  }
   return Similarity<Navigation, World>(
-      registration.navigation,
+      BarycentricToPlotting(time).similarity()(position),
       registration.world,
       PlottingToWorld(time, planetarium_rotation));
+}
+
+Renderer::AnchoredWorldMapping::AnchoredWorldMapping(
+    Renderer const& renderer,
+    Instant const& time,
+    WorldRegistration const& registration,
+    Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement)
+    : plotting_frame_(renderer.GetPlottingFrame()),
+      t_ref_(registration.time),
+      world_(registration.world),
+      plotting_to_world_(
+          renderer.PlottingToWorld(time, planetarium_rotation)),
+      q_ref_(registration.position) {
+  // The conversion from `placement` to the plotting frame's, folded at the
+  // registration's time and extrapolated affinely by `operator()`: the anchor
+  // terms are exactly affine, and the subsystem barycentres are inertial to
+  // the precision of a rendering.  Folding once keeps the void-scale rounding
+  // constant, so it displaces the plotted set without deforming it.
+  if (Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
+          plotting_frame_->placement();
+      placement != frame_placement) {
+    auto const conversion =
+        renderer.PlacementConversion(placement, frame_placement, t_ref_);
+    offset_ = conversion.first;
+    velocity_offset_ = conversion.second;
+  }
+  // The registration, brought into `placement`; see
+  // `RegisteredPlottingToWorld`.
+  if (registration.placement != placement) {
+    q_ref_ +=
+        renderer
+            .PlacementConversion(registration.placement, placement, t_ref_)
+            .first;
+  }
+  SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t_ref =
+      plotting_frame_->ToThisFrameAtTimeSimilarly(t_ref_);
+  auto const& similarity_ref = to_plotting_frame_at_t_ref.similarity();
+  frame_origin_ref_ = similarity_ref.Inverse()(Navigation::origin);
+  reference_ = (q_ref_ + offset_) - frame_origin_ref_;
+  reference_in_navigation_ = similarity_ref.linear_map()(reference_);
+}
+
+Position<World> Renderer::AnchoredWorldMapping::operator()(
+    Instant const& t,
+    Position<Barycentric> const& position) const {
+  SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t =
+      plotting_frame_->ToThisFrameAtTimeSimilarly(t);
+  auto const& similarity = to_plotting_frame_at_t.similarity();
+  // A local difference, plus the affine part of the conversion at `t`.
+  Displacement<Barycentric> const from_reference =
+      (position - q_ref_) + velocity_offset_ * (t - t_ref_);
+  Displacement<Barycentric> const frame_origin_motion =
+      similarity.Inverse()(Navigation::origin) - frame_origin_ref_;
+  // Exactly zero for an inertial frame, whose linear map does not change; for
+  // a rotating or pulsating one this rounds at the ULP of the reference
+  // distance, dwarfed by the arc or the dilation at that distance.
+  Displacement<Navigation> const sweep =
+      similarity.linear_map()(reference_) - reference_in_navigation_;
+  Displacement<Navigation> const reference_relative =
+      sweep +
+      similarity.linear_map()(from_reference - frame_origin_motion);
+  return world_ + plotting_to_world_(reference_relative);
 }
 
 ConformalMap<double, Navigation, World> Renderer::PlottingToWorld(

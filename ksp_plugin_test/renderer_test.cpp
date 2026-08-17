@@ -23,6 +23,7 @@
 #include "physics/mock_rigid_reference_frame.hpp"
 #include "physics/rigid_motion.hpp"
 #include "physics/sector.hpp"
+#include "quantities/named_quantities.hpp"
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
 #include "testing_utilities/almost_equals.hpp"
@@ -33,6 +34,7 @@ namespace principia {
 namespace ksp_plugin {
 
 using ::testing::Gt;
+using ::testing::Invoke;
 using ::testing::Lt;
 using ::testing::Ref;
 using ::testing::Return;
@@ -58,6 +60,7 @@ using namespace principia::physics::_mock_ephemeris;
 using namespace principia::physics::_mock_rigid_reference_frame;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_sector;
+using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_almost_equals;
@@ -481,20 +484,22 @@ TEST_F(RendererTest, RenderDistinguishedPointsInWorldRegisteredOnTheVessel) {
   Position<World> const expected =
       World::origin + barycentric_to_world(from_the_vessel);
 
+  Renderer::WorldRegistration const registration{
+      .position = Barycentric::origin,
+      .placement = Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      .time = rendering_time,
+      .world = World::origin};
   auto const registered = renderer_.RenderDistinguishedPointsInWorld(
       rendering_time,
       points.begin(), points.end(),
       sun_world_position,
       planetarium_rotation,
       Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
-      Renderer::WorldRegistration{
-          .navigation = from_plotting.rigid_transformation().Inverse()(
-              Barycentric::origin),
-          .world = World::origin});
+      registration);
   ASSERT_EQ(1, registered.size());
-  // Exactly, not approximately: the subtraction of the two operands is exact
-  // (they are within a factor of two), and the same linear map is then applied
-  // to the same bits the expectation uses.
+  // Exactly, not approximately: the anchored difference is a local quantity,
+  // and the same linear map is then applied to the same bits the expectation
+  // uses.
   EXPECT_THAT(registered.begin()->second.position(), AlmostEquals(expected, 0));
 
   auto const unregistered = renderer_.RenderDistinguishedPointsInWorld(
@@ -511,6 +516,310 @@ TEST_F(RendererTest, RenderDistinguishedPointsInWorldRegisteredOnTheVessel) {
   // far above the registered path, which is exact.
   EXPECT_THAT((unregistered.begin()->second.position() - expected).Norm(),
               Gt(300 * Metre));
+
+  // The line path goes through `RegisteredPlottingToWorld`, which now forms
+  // the plotting-frame anchor itself; it must land where the marker does.
+  DiscreteTrajectory<Barycentric> line_to_render;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(
+          DegreesOfFreedom<Barycentric>(Barycentric::origin + from_the_vessel,
+                                        Barycentric::unmoving),
+          /*Δt=*/1 * Second,
+          /*t1=*/rendering_time,
+          /*t2=*/rendering_time + 2 * Second),
+      /*to=*/line_to_render);
+  auto const line = renderer_.RenderBarycentricTrajectoryInWorld(
+      rendering_time,
+      line_to_render.begin(), line_to_render.end(),
+      sun_world_position,
+      planetarium_rotation,
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      registration);
+  ASSERT_FALSE(line.empty());
+  EXPECT_THAT(line.front().degrees_of_freedom.position(),
+              AlmostEquals(expected, 0, 2));
+}
+
+// The vessel is anchored in the void and the plotting frame is not, so the
+// marker's 300 m offset from it is below the ULP of the converted absolute.
+TEST_F(RendererTest, RenderDistinguishedPointsInWorldAnchoredMidVoid) {
+  Velocity<Barycentric> const anchor_velocity(
+      {0 * Metre / Second, 10 * Metre / Second, 0 * Metre / Second});
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({0x1p62 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = anchor_velocity,
+      .epoch = t0_};
+  Ephemeris<Barycentric>::SubsystemPlacement const vessel_placement{
+      /*subsystem=*/0, anchor};
+
+  Instant const rendering_time = t0_ + 5 * Second;
+  auto const planetarium_rotation =
+      Rotation<Barycentric, AliceSun>::Identity();
+  RigidMotion<Navigation, Barycentric> const from_plotting(
+      RigidTransformation<Navigation, Barycentric>::Identity(),
+      Navigation::nonrotating,
+      Navigation::unmoving);
+  EXPECT_CALL(*reference_frame_, FromThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting));
+  EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting.Inverse()));
+
+  Displacement<Barycentric> const from_the_vessel(
+      {300 * Metre, 0 * Metre, 0 * Metre});
+  Time const Δt = 20 * Second;
+  DistinguishedPoints<Barycentric> points;
+  points.emplace(rendering_time,
+                 DegreesOfFreedom<Barycentric>(
+                     Barycentric::origin + from_the_vessel,
+                     Barycentric::unmoving));
+  // A second point away from the rendering time: the drift of the anchor
+  // relative to the frame's placement is a local quantity that the mapping
+  // must carry.
+  points.emplace(rendering_time + Δt,
+                 DegreesOfFreedom<Barycentric>(
+                     Barycentric::origin + from_the_vessel,
+                     Barycentric::unmoving));
+
+  auto const barycentric_to_world =
+      renderer_.BarycentricToWorld(planetarium_rotation);
+  Position<World> const expected =
+      World::origin + barycentric_to_world(from_the_vessel);
+
+  Renderer::WorldRegistration const registration{
+      .position = Barycentric::origin,
+      .placement = vessel_placement,
+      .time = rendering_time,
+      .world = World::origin};
+  auto const rendered = renderer_.RenderDistinguishedPointsInWorld(
+      rendering_time,
+      points.begin(), points.end(),
+      /*sun_world_position=*/World::origin,
+      planetarium_rotation,
+      vessel_placement,
+      registration);
+  ASSERT_EQ(2, rendered.size());
+  // The composed maps round where the expectation's single map does not.
+  EXPECT_THAT(rendered.begin()->second.position(),
+              AlmostEquals(expected, 0, 2));
+  EXPECT_THAT(rendered.rbegin()->second.position(),
+              AlmostEquals(World::origin +
+                               barycentric_to_world(from_the_vessel +
+                                                    anchor_velocity * Δt),
+                           0, 4));
+}
+
+// Registered on a different anchor from the points': the two anchors
+// difference on the sector lattice, so the reference is exact even though
+// each is a void-scale absolute.
+TEST_F(RendererTest, RenderDistinguishedPointsInWorldAnchoredCoRegistered) {
+  auto const make_anchor = [this](Displacement<Barycentric> const& offset) {
+    return Ephemeris<Barycentric>::Anchor{
+        .offset = SectorDisplacement<Barycentric>::Split(offset),
+        .velocity = Velocity<Barycentric>(),
+        .epoch = t0_};
+  };
+  Displacement<Barycentric> const to_the_void(
+      {0x1p62 * Metre, 0 * Metre, 0 * Metre});
+  Displacement<Barycentric> const between_the_anchors(
+      {0 * Metre, 700 * Metre, 0 * Metre});
+  Ephemeris<Barycentric>::SubsystemPlacement const points_placement{
+      /*subsystem=*/0, make_anchor(to_the_void)};
+  Ephemeris<Barycentric>::SubsystemPlacement const registration_placement{
+      /*subsystem=*/0, make_anchor(to_the_void + between_the_anchors)};
+
+  Instant const rendering_time = t0_ + 5 * Second;
+  auto const planetarium_rotation =
+      Rotation<Barycentric, AliceSun>::Identity();
+  RigidMotion<Navigation, Barycentric> const from_plotting(
+      RigidTransformation<Navigation, Barycentric>::Identity(),
+      Navigation::nonrotating,
+      Navigation::unmoving);
+  EXPECT_CALL(*reference_frame_, FromThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting));
+  EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting.Inverse()));
+
+  Displacement<Barycentric> const from_the_vessel(
+      {300 * Metre, 0 * Metre, 0 * Metre});
+  DistinguishedPoints<Barycentric> points;
+  points.emplace(rendering_time,
+                 DegreesOfFreedom<Barycentric>(
+                     Barycentric::origin + from_the_vessel,
+                     Barycentric::unmoving));
+
+  auto const barycentric_to_world =
+      renderer_.BarycentricToWorld(planetarium_rotation);
+  auto const rendered = renderer_.RenderDistinguishedPointsInWorld(
+      rendering_time,
+      points.begin(), points.end(),
+      /*sun_world_position=*/World::origin,
+      planetarium_rotation,
+      points_placement,
+      Renderer::WorldRegistration{
+          .position = Barycentric::origin,
+          .placement = registration_placement,
+          .time = rendering_time,
+          .world = World::origin});
+  ASSERT_EQ(1, rendered.size());
+  // The marker is 300 m along x from its own anchor, whose origin is 700 m
+  // along −y from the registered one.
+  EXPECT_THAT(rendered.begin()->second.position(),
+              AlmostEquals(World::origin +
+                               barycentric_to_world(from_the_vessel -
+                                                    between_the_anchors),
+                           0, 2));
+}
+
+// A rotating, drifting plotting frame: `sweep` and `frame_origin_motion` are
+// identically zero for a static frame.  At a stock placement and a modest
+// distance the line path forms the same map through absolutes and is an
+// exact oracle.
+TEST_F(RendererTest, RenderDistinguishedPointsInWorldRegisteredRotatingFrame) {
+  Instant const rendering_time = t0_ + 100 * Second;
+  AngularFrequency const ω = 1e-3 * Radian / Second;
+  Speed const drift = 100 * Metre / Second;
+  auto const to_plotting = [this, ω, drift](Instant const& t) {
+    AngularVelocity<Barycentric> const angular_velocity(
+        {0 * Radian / Second, 0 * Radian / Second, ω});
+    return RigidMotion<Barycentric, Navigation>(
+        RigidTransformation<Barycentric, Navigation>(
+            Barycentric::origin +
+                Displacement<Barycentric>(
+                    {drift * (t - t0_), 0 * Metre, 0 * Metre}),
+            Navigation::origin,
+            Rotation<Barycentric, Navigation>(
+                ω * (t - t0_), angular_velocity, DefinesFrame<Navigation>{})
+                .Forget<OrthogonalMap>()),
+        angular_velocity,
+        Velocity<Barycentric>(
+            {drift, 0 * Metre / Second, 0 * Metre / Second}));
+  };
+  EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(_))
+      .WillRepeatedly(Invoke(to_plotting));
+  EXPECT_CALL(*reference_frame_, FromThisFrameAtTime(_))
+      .WillRepeatedly(Invoke([to_plotting](Instant const& t) {
+        return to_plotting(t).Inverse();
+      }));
+
+  auto const planetarium_rotation =
+      Rotation<Barycentric, AliceSun>::Identity();
+  auto const stock = Ephemeris<Barycentric>::SubsystemPlacement::Stock();
+  Displacement<Barycentric> const to_the_vessel(
+      {1e7 * Metre, 0 * Metre, 0 * Metre});
+  DiscreteTrajectory<Barycentric> trajectory;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(
+          DegreesOfFreedom<Barycentric>(
+              Barycentric::origin + to_the_vessel,
+              Velocity<Barycentric>({0 * Metre / Second,
+                                     1 * Kilo(Metre) / Second,
+                                     0 * Metre / Second})),
+          /*Δt=*/50 * Second,
+          /*t1=*/t0_,
+          /*t2=*/t0_ + 200 * Second),
+      /*to=*/trajectory);
+  Renderer::WorldRegistration const registration{
+      .position = Barycentric::origin + to_the_vessel,
+      .placement = stock,
+      .time = rendering_time,
+      .world = World::origin};
+
+  DistinguishedPoints<Barycentric> points;
+  for (auto const& [t, degrees_of_freedom] : trajectory) {
+    points.emplace(t, degrees_of_freedom);
+  }
+  auto const markers = renderer_.RenderDistinguishedPointsInWorld(
+      rendering_time,
+      points.begin(), points.end(),
+      /*sun_world_position=*/World::origin,
+      planetarium_rotation,
+      stock,
+      registration);
+  auto const line = renderer_.RenderBarycentricTrajectoryInWorld(
+      rendering_time,
+      trajectory.begin(), trajectory.end(),
+      /*sun_world_position=*/World::origin,
+      planetarium_rotation,
+      stock,
+      registration);
+  ASSERT_EQ(markers.size(), line.size());
+  for (auto const& [t, degrees_of_freedom] : line) {
+    EXPECT_THAT(
+        (markers.at(t).position() - degrees_of_freedom.position()).Norm(),
+        Lt(1 * Milli(Metre)))
+        << t;
+  }
+}
+
+// The node's position must come from the trajectory, at the node's own time,
+// through the anchored mapping — not from the `Navigation` absolute the
+// search produced.
+TEST_F(RendererTest, RenderNodesAnchored) {
+  Ephemeris<Barycentric>::Anchor const anchor{
+      .offset = SectorDisplacement<Barycentric>::Split(
+          Displacement<Barycentric>({0x1p62 * Metre, 0 * Metre, 0 * Metre})),
+      .velocity = Velocity<Barycentric>(),
+      .epoch = t0_};
+  Ephemeris<Barycentric>::SubsystemPlacement const vessel_placement{
+      /*subsystem=*/0, anchor};
+
+  Instant const rendering_time = t0_ + 5 * Second;
+  Instant const node_time = t0_ + 3 * Second;
+  auto const planetarium_rotation =
+      Rotation<Barycentric, AliceSun>::Identity();
+  RigidMotion<Navigation, Barycentric> const from_plotting(
+      RigidTransformation<Navigation, Barycentric>::Identity(),
+      Navigation::nonrotating,
+      Navigation::unmoving);
+  EXPECT_CALL(*reference_frame_, FromThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting));
+  EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(_))
+      .WillRepeatedly(Return(from_plotting.Inverse()));
+
+  Displacement<Barycentric> const from_the_vessel(
+      {300 * Metre, 0 * Metre, 0 * Metre});
+  DiscreteTrajectory<Barycentric> trajectory;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(
+          DegreesOfFreedom<Barycentric>(Barycentric::origin + from_the_vessel,
+                                        Barycentric::unmoving),
+          /*Δt=*/1 * Second,
+          /*t1=*/t0_,
+          /*t2=*/t0_ + 10 * Second),
+      /*to=*/trajectory);
+  // The search's own position, a void-scale absolute: it must not become the
+  // node's.
+  DistinguishedPoints<Navigation> crossings;
+  crossings.emplace(
+      node_time,
+      DegreesOfFreedom<Navigation>(
+          Navigation::origin +
+              Displacement<Navigation>({0x1p62 * Metre, 0 * Metre, 0 * Metre}),
+          Velocity<Navigation>({0 * Metre / Second,
+                                1 * Metre / Second,
+                                0 * Metre / Second})));
+
+  auto const barycentric_to_world =
+      renderer_.BarycentricToWorld(planetarium_rotation);
+  auto const nodes = renderer_.RenderNodes(
+      rendering_time,
+      trajectory,
+      crossings.begin(), crossings.end(),
+      /*sun_world_position=*/World::origin,
+      planetarium_rotation,
+      vessel_placement,
+      Renderer::WorldRegistration{
+          .position = Barycentric::origin,
+          .placement = vessel_placement,
+          .time = rendering_time,
+          .world = World::origin});
+  ASSERT_EQ(1, nodes.size());
+  EXPECT_EQ(node_time, nodes.front().time);
+  EXPECT_THAT(nodes.front().position,
+              AlmostEquals(World::origin +
+                               barycentric_to_world(from_the_vessel),
+                           0, 2));
 }
 
 TEST_F(RendererTest, Serialization) {

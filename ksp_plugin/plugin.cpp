@@ -1494,21 +1494,10 @@ std::optional<Renderer::WorldRegistration> Plugin::SceneRegistration(
       current_time_ > trajectory.t_max()) {
     return std::nullopt;
   }
-  // Into the plotting frame's placement, as the rendered points are; the
-  // conversion is on the sector lattice, so a vessel anchored in the void
-  // keeps its true geometry relative to the frame.
-  Position<Barycentric> position = trajectory.EvaluatePosition(current_time_);
-  if (Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
-          renderer_->GetPlottingFrame()->placement();
-      vessel.placement() != frame_placement) {
-    position += ephemeris_
-                    ->placement_conversion(
-                        vessel.placement(), frame_placement, current_time_)
-                    .first;
-  }
   return Renderer::WorldRegistration{
-      .navigation = renderer_->BarycentricToPlotting(current_time_)
-                        .similarity()(position),
+      .position = trajectory.EvaluatePosition(current_time_),
+      .placement = vessel.placement(),
+      .time = current_time_,
       .world = world_position};
 }
 
@@ -1687,6 +1676,7 @@ void Plugin::ComputeAndRenderClosestApproaches(
 }
 
 void Plugin::ComputeAndRenderNodes(
+    Trajectory<Barycentric> const& trajectory,
     DiscreteTrajectory<Barycentric>::iterator const& begin,
     DiscreteTrajectory<Barycentric>::iterator const& end,
     Instant const& t_max,
@@ -1730,16 +1720,20 @@ void Plugin::ComputeAndRenderNodes(
                show_node).IgnoreError();
 
   ascending = renderer_->RenderNodes(current_time_,
+                                     trajectory,
                                      plotting_ascending.begin(),
                                      plotting_ascending.end(),
                                      sun_world_position,
                                      PlanetariumRotation(),
+                                     placement,
                                      registration);
   descending = renderer_->RenderNodes(current_time_,
+                                      trajectory,
                                       plotting_descending.begin(),
                                       plotting_descending.end(),
                                       sun_world_position,
                                       PlanetariumRotation(),
+                                      placement,
                                       registration);
 }
 

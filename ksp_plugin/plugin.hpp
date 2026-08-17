@@ -520,6 +520,7 @@ class Plugin {
   // Computes the nodes of the trajectory defined by `begin` and `end` with
   // respect to plane of the trajectory of the targetted vessel.
   virtual void ComputeAndRenderNodes(
+      Trajectory<Barycentric> const& trajectory,
       DiscreteTrajectory<Barycentric>::iterator const& begin,
       DiscreteTrajectory<Barycentric>::iterator const& end,
       Instant const& t_max,

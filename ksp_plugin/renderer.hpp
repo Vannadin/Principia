@@ -25,6 +25,7 @@
 #include "physics/rigid_motion.hpp"
 #include "physics/rigid_reference_frame.hpp"
 #include "physics/similar_motion.hpp"
+#include "physics/trajectory.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/quantities.hpp"
 
@@ -52,6 +53,7 @@ using namespace principia::physics::_reference_frame;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_rigid_reference_frame;
 using namespace principia::physics::_similar_motion;
+using namespace principia::physics::_trajectory;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 
@@ -64,9 +66,9 @@ class Renderer {
     Speed out_of_plane_velocity;
   };
 
-  // Where the plotted object is in the plotting frame at the time of the
-  // rendering, and where the scene puts it.  Anchored on the Sun, as it is when
-  // no registration is given, the affine part of the `World` map is a
+  // Where the plotted object is, in its own placement's representation and at
+  // its own `time`, and where the scene puts it.  Anchored on the Sun, as it
+  // is when no registration is given, the affine part of the `World` map is a
   // difference of two positions at the magnitude of the distance to the Sun —
   // 9e18 m at 950 light-years, where the ULP is a kilometre.  That difference
   // is formed once per rendering, so the points keep their shape and the whole
@@ -74,8 +76,43 @@ class Renderer {
   // position and the frame drift, so the set shakes.  Anchored on this pair the
   // map forms no such difference: both members are near the plotted object.
   struct WorldRegistration {
-    Position<Navigation> navigation;
+    Position<Barycentric> position;
+    Ephemeris<Barycentric>::SubsystemPlacement placement;
+    Instant time;
     Position<World> world;
+  };
+
+  // The `World` mapping of trajectory points anchored on a registration:
+  // everything at the magnitude of the distance to the plotting frame's
+  // origin is computed once at construction, and each point is mapped through
+  // displacements formed in its own placement.  See
+  // `Planetarium::PlotMethod4Anchored`, whose terms this mirrors.
+  // TODO(vannadin): share the anchoring machinery with the planetarium.
+  class AnchoredWorldMapping {
+   public:
+    // `placement` is the placement in whose representation the mapped
+    // positions are expressed.
+    AnchoredWorldMapping(
+        Renderer const& renderer,
+        Instant const& time,
+        WorldRegistration const& registration,
+        Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+        Ephemeris<Barycentric>::SubsystemPlacement const& placement);
+
+    Position<World> operator()(Instant const& t,
+                               Position<Barycentric> const& position) const;
+
+   private:
+    not_null<PlottingFrame const*> const plotting_frame_;
+    Instant const t_ref_;
+    Position<World> const world_;
+    ConformalMap<double, Navigation, World> const plotting_to_world_;
+    Position<Barycentric> q_ref_;
+    Displacement<Barycentric> offset_;
+    Velocity<Barycentric> velocity_offset_;
+    Position<Barycentric> frame_origin_ref_;
+    Displacement<Barycentric> reference_;
+    Displacement<Navigation> reference_in_navigation_;
   };
 
   // If `ephemeris` is null, all the subsystem parameters of this class are
@@ -164,12 +201,17 @@ class Renderer {
       std::optional<WorldRegistration> const& registration =
           std::nullopt) const;
 
+  // `trajectory` is the one the nodes were found on, in `placement`'s
+  // representation; a registered rendering re-evaluates it to place them.
   std::vector<Node> RenderNodes(
       Instant const& time,
+      Trajectory<Barycentric> const& trajectory,
       DistinguishedPoints<Navigation>::const_iterator const& begin,
       DistinguishedPoints<Navigation>::const_iterator const& end,
       Position<World> const& sun_world_position,
       Rotation<Barycentric, AliceSun> const& planetarium_rotation,
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement =
+          Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
       std::optional<WorldRegistration> const& registration =
           std::nullopt) const;
 
