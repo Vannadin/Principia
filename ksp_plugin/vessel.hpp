@@ -203,6 +203,10 @@ class Vessel {
   virtual Ephemeris<Barycentric>::AdaptiveStepParameters const&
   prediction_adaptive_step_parameters() const;
 
+  // Bounds the duration over which the prediction is computed.  Not
+  // serialized: the plugin reapplies it at each prediction update.
+  virtual void set_prediction_length(Time const& prediction_length);
+
   // Returns true iff the vessel has a flight plan, deserialized or not.  Never
   // fails.
   virtual bool has_flight_plan() const;
@@ -366,6 +370,7 @@ class Vessel {
     Instant first_time;
     DegreesOfFreedom<Barycentric> first_degrees_of_freedom;
     Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters;
+    Time prediction_length = Infinity<Time>;
     // The placement in whose representation `first_degrees_of_freedom` is
     // expressed.  Without the anchor the integrator would read the near-origin
     // anchored coordinates as subsystem-relative and plunge into the home star.
@@ -475,6 +480,7 @@ class Vessel {
   MasslessBody const body_;
   Ephemeris<Barycentric>::AdaptiveStepParameters
       prediction_adaptive_step_parameters_;
+  Time prediction_length_ = Infinity<Time>;
   // The parent body for the 2-body approximation.
   not_null<Celestial const*> parent_;
   not_null<Ephemeris<Barycentric>*> const ephemeris_;

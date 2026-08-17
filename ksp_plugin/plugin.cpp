@@ -1371,6 +1371,10 @@ void Plugin::SetPredictionAdaptiveStepParameters(
       prediction_adaptive_step_parameters);
 }
 
+void Plugin::SetPredictionLength(Time const& prediction_length) {
+  prediction_length_ = prediction_length;
+}
+
 void Plugin::UpdatePrediction(std::vector<GUID> const& vessel_guids) const {
   CHECK(!initializing_);
   std::set<not_null<Vessel*>> predicted_vessels;
@@ -1384,12 +1388,15 @@ void Plugin::UpdatePrediction(std::vector<GUID> const& vessel_guids) const {
   // necessary to build the targeting frame.
   if (renderer_->HasTargetVessel()) {
     target_vessel = &renderer_->GetTargetVessel();
+    target_vessel->set_prediction_length(prediction_length_);
     target_vessel->RefreshPrediction();
     for (auto const vessel : predicted_vessels) {
+      vessel->set_prediction_length(prediction_length_);
       vessel->RefreshPrediction(target_vessel->prediction()->back().time);
     }
   } else {
     for (auto const vessel : predicted_vessels) {
+      vessel->set_prediction_length(prediction_length_);
       vessel->RefreshPrediction();
     }
   }
@@ -1425,7 +1432,14 @@ void Plugin::ExtendPredictionForFlightPlan(GUID const& vessel_guid) const {
   if (renderer_->HasTargetVessel() && vessel.has_flight_plan()) {
     vessel.ReadFlightPlanFromMessage();
     auto& target_vessel = renderer_->GetTargetVessel();
-    if (target_vessel.prediction()->back().time <
+    // A prediction pinned at the prediction length cannot be lengthened by
+    // steps, so more of them would ratchet up to the maximum for nothing.
+    auto const& target_prediction = *target_vessel.prediction();
+    bool const target_prediction_is_length_limited =
+        target_prediction.back().time - target_prediction.front().time >=
+        prediction_length_;
+    if (!target_prediction_is_length_limited &&
+        target_prediction.back().time <
         vessel.flight_plan().actual_final_time()) {
       auto prediction_adaptive_step_parameters =
           target_vessel.prediction_adaptive_step_parameters();

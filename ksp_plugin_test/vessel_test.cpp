@@ -516,6 +516,89 @@ TEST_F(VesselTest, PredictBeyondTheInfinite) {
   }
 }
 
+// A prediction length below the reach of the ephemeris: the flow is asked for
+// exactly `first_time + prediction_length`, and the extension beyond the
+// ephemeris is not attempted at all.
+TEST_F(VesselTest, PredictionStopsAtThePredictionLength) {
+  EXPECT_CALL(ephemeris_, t_min_locked())
+      .WillRepeatedly(Return(t0_));
+  EXPECT_CALL(ephemeris_, t_max())
+      .WillRepeatedly(Return(t0_ + 2 * Second));
+
+  auto const expected_vessel_prediction = NewLinearTrajectoryTimeline(
+      Barycentre({p1_dof_, p2_dof_}, {mass1_, mass2_}),
+      /*Δt=*/0.5 * Second,
+      /*t1=*/t0_,
+      /*t2=*/t0_ + 1.5 * Second);
+  EXPECT_CALL(ephemeris_,
+              FlowWithAdaptiveStep(_, _, t0_ + 1 * Second, _, _, _))
+      .WillRepeatedly(DoAll(
+          AppendPointsToDiscreteTrajectory(&expected_vessel_prediction),
+          Return(absl::OkStatus())));
+
+  vessel_.set_prediction_length(1 * Second);
+  vessel_.CreateTrajectoryIfNeeded(t0_);
+  // Polling for the integration to happen.
+  int count = 0;
+  do {
+    vessel_.RefreshPrediction();
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(100ms);
+    ++count;
+    CHECK_LT(count, 1000);
+  } while (vessel_.prediction()->back().time == t0_);
+
+  EXPECT_EQ(t0_ + 1 * Second, vessel_.prediction()->back().time);
+}
+
+// A prediction length beyond the reach of the ephemeris: the extension
+// prolongs the ephemeris, but pursues `first_time + prediction_length`, not
+// `InfiniteFuture`.
+TEST_F(VesselTest, PredictionExtensionStopsAtThePredictionLength) {
+  EXPECT_CALL(ephemeris_, t_min_locked())
+      .WillRepeatedly(Return(t0_));
+  EXPECT_CALL(ephemeris_, t_max())
+      .WillRepeatedly(Return(t0_ + 5 * Second));
+
+  // The call to fill the prognostication until t_max.
+  auto const expected_vessel_prediction1 = NewLinearTrajectoryTimeline(
+      Barycentre({p1_dof_, p2_dof_}, {mass1_, mass2_}),
+      /*Δt=*/0.5 * Second,
+      /*t1=*/t0_,
+      /*t2=*/t0_ + 5.5 * Second);
+  EXPECT_CALL(ephemeris_,
+              FlowWithAdaptiveStep(_, _, t0_ + 5 * Second, _, _, _))
+      .WillRepeatedly(DoAll(
+          AppendPointsToDiscreteTrajectory(&expected_vessel_prediction1),
+          Return(absl::OkStatus())));
+
+  // The call to extend the prognostication, bounded by the prediction length.
+  auto const expected_vessel_prediction2 = NewLinearTrajectoryTimeline(
+      Barycentre({p1_dof_, p2_dof_}, {mass1_, mass2_}),
+      /*Δt=*/0.5 * Second,
+      /*t1=*/t0_ + 5.5 * Second,
+      /*t2=*/t0_ + 10.5 * Second);
+  EXPECT_CALL(ephemeris_,
+              FlowWithAdaptiveStep(_, _, t0_ + 10 * Second, _, _, _))
+      .WillRepeatedly(DoAll(
+          AppendPointsToDiscreteTrajectory(&expected_vessel_prediction2),
+          Return(absl::OkStatus())));
+
+  vessel_.set_prediction_length(10 * Second);
+  vessel_.CreateTrajectoryIfNeeded(t0_);
+  // Polling for the integration to happen.
+  int count = 0;
+  do {
+    vessel_.RefreshPrediction();
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(100ms);
+    ++count;
+    CHECK_LT(count, 1000);
+  } while (vessel_.prediction()->back().time < t0_ + 10 * Second);
+
+  EXPECT_EQ(t0_ + 10 * Second, vessel_.prediction()->back().time);
+}
+
 TEST_F(VesselTest, FlightPlan) {
   EXPECT_CALL(ephemeris_, t_min())
       .WillRepeatedly(Return(t0_));

@@ -2703,6 +2703,17 @@ message SetPlottingFrame {
   optional In in = 1;
 }
 
+message SetPredictionLength {
+  extend Method {
+    optional SetPredictionLength extension = 5229;
+  }
+  message In {
+    required fixed64 plugin = 1 [(pointer_to) = "Plugin", (is_subject) = true];
+    required double prediction_length = 2;
+  }
+  optional In in = 1;
+}
+
 message SetStderrLogging {
   extend Method {
     optional SetStderrLogging extension = 5016;

@@ -74,6 +74,7 @@ bool operator!=(Vessel::PrognosticatorParameters const& left,
   return left.first_time != right.first_time ||
          left.first_degrees_of_freedom != right.first_degrees_of_freedom ||
          left.placement != right.placement ||
+         left.prediction_length != right.prediction_length ||
          &left.adaptive_step_parameters.integrator() !=
              &right.adaptive_step_parameters.integrator() ||
          left.adaptive_step_parameters.max_steps() !=
@@ -389,6 +390,10 @@ void Vessel::set_prediction_adaptive_step_parameters(
 Ephemeris<Barycentric>::AdaptiveStepParameters const&
 Vessel::prediction_adaptive_step_parameters() const {
   return prediction_adaptive_step_parameters_;
+}
+
+void Vessel::set_prediction_length(Time const& prediction_length) {
+  prediction_length_ = prediction_length;
 }
 
 bool Vessel::has_flight_plan() const {
@@ -765,6 +770,7 @@ void Vessel::RefreshPrediction() {
       .first_time = psychohistory_->back().time,
       .first_degrees_of_freedom = psychohistory_->back().degrees_of_freedom,
       .adaptive_step_parameters = prediction_adaptive_step_parameters_,
+      .prediction_length = prediction_length_,
       .placement = placement_};
   if (synchronous_) {
     auto status_or_prognostication =
@@ -1466,20 +1472,24 @@ absl::StatusOr<Vessel::Prognostication> Vessel::FlowPrognostication(
   prognostication.Append(
       prognosticator_parameters.first_time,
       prognosticator_parameters.first_degrees_of_freedom).IgnoreError();
+  // In force-free motion the local error vanishes and nothing else bounds the
+  // adaptive step, so `max_steps` alone would let the prognostication span
+  // absurd durations.
+  Instant const t_final = prognosticator_parameters.first_time +
+                          prognosticator_parameters.prediction_length;
   absl::Status status = ephemeris_->FlowWithAdaptiveStep(
       &prognostication,
       Ephemeris<Barycentric>::NoIntrinsicAcceleration,
-      ephemeris_->t_max(),
+      std::min(ephemeris_->t_max(), t_final),
       prognosticator_parameters.adaptive_step_parameters,
       FlightPlan::max_ephemeris_steps_per_frame,
       prognosticator_parameters.placement);
-  bool const reached_t_max = status.ok();
-  if (reached_t_max) {
+  if (status.ok() && prognostication.back().time < t_final) {
     // This will prolong the ephemeris by `max_ephemeris_steps_per_frame`.
     status = ephemeris_->FlowWithAdaptiveStep(
         &prognostication,
         Ephemeris<Barycentric>::NoIntrinsicAcceleration,
-        InfiniteFuture,
+        t_final,
         prognosticator_parameters.adaptive_step_parameters,
         FlightPlan::max_ephemeris_steps_per_frame,
         prognosticator_parameters.placement);

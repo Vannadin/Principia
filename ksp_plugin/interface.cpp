@@ -1197,6 +1197,15 @@ void __cdecl principia__SetMainBody(Plugin* const plugin, int const index) {
   return m.Return();
 }
 
+void __cdecl principia__SetPredictionLength(Plugin* const plugin,
+                                            double const prediction_length) {
+  journal::Method<journal::SetPredictionLength> m({plugin, prediction_length});
+  CHECK(plugin != nullptr);
+  CHECK_LE(0, prediction_length);
+  plugin->SetPredictionLength(prediction_length * Second);
+  return m.Return();
+}
+
 // Make it so that all log messages of at least `min_severity` are logged to
 // stderr (in addition to logging to the usual log file(s)).
 void __cdecl principia__SetStderrLogging(int const min_severity) {

@@ -436,6 +436,9 @@ class Plugin {
       Ephemeris<Barycentric>::AdaptiveStepParameters const&
           prediction_adaptive_step_parameters) const;
 
+  // Bounds the duration over which predictions are computed.
+  virtual void SetPredictionLength(Time const& prediction_length);
+
   // Updates the prediction for the vessels with guids in `vessel_guids`.
   void UpdatePrediction(std::vector<GUID> const& vessel_guids) const;
 
@@ -758,6 +761,10 @@ class Plugin {
   // vessels from it.  Hopefully it's small enough that we don't care.
   std::map<GUID, Ephemeris<Barycentric>::AdaptiveStepParameters>
   zombie_prediction_adaptive_step_parameters_;
+
+  // The bound on the duration of the predictions, applied to the vessels as
+  // they are predicted.
+  Time prediction_length_ = Infinity<Time>;
 
   std::optional<GeometricPotentialPlotter> geometric_potential_plotter_;
 

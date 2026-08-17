@@ -68,6 +68,8 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
 
   public double history_length => history_length_.value;
 
+  public double prediction_length => prediction_length_.value;
+
   public override void Load(ConfigNode node) {
     base.Load(node);
 
@@ -96,6 +98,11 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
     string history_length_value = node.GetAtMostOneValue("history_length");
     if (history_length_value != null) {
       history_length_.value = Convert.ToDouble(history_length_value);
+    }
+    string prediction_length_value =
+        node.GetAtMostOneValue("prediction_length");
+    if (prediction_length_value != null) {
+      prediction_length_.value = Convert.ToDouble(prediction_length_value);
     }
 
     frames_that_hide_unpinned_celestials.Clear();
@@ -165,6 +172,9 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
                   createIfNotFound : true);
 
     node.SetValue("history_length", history_length, createIfNotFound : true);
+    node.SetValue("prediction_length",
+                  prediction_length,
+                  createIfNotFound : true);
     foreach (var frame in frames_that_hide_unpinned_celestials) {
       frame.Save(node.AddNode("frames_that_hide_unpinned_celestials"));
     }
@@ -222,6 +232,7 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
                                   style: Style.Info(
                                       UnityEngine.GUI.skin.label));
       history_length_.Render(enabled : true);
+      prediction_length_.Render(enabled : true);
       if (FlightGlobals.ActiveVessel?.orbitTargeter != null &&
           (MapView.MapIsEnabled ||
            FlightGlobals.fetch.VesselTarget?.GetVessel() != null)) {
@@ -804,6 +815,24 @@ internal class MainWindow : VesselSupervisedWindowRenderer {
       label_width      : 5,
       field_width      : 5) {
       value = 7 * 24 * 60 * 60
+  };
+
+  // The maximum is the largest duration whose display does not saturate the
+  // day count; past saturation a drag would read the saturated text back.
+  private readonly DifferentialSlider prediction_length_ =
+      new DifferentialSlider(
+          label            :
+          L10N.CacheFormat("#Principia_MainWindow_PredictionLength"),
+          unit             : null,
+          log10_lower_rate : log10_history_lower_rate,
+          log10_upper_rate : log10_history_upper_rate,
+          min_value        : 10,
+          max_value        : int.MaxValue - 1,
+          formatter        : Formatters.FormatMissionDuration,
+          parser           : Formatters.TryParseMissionDuration,
+          label_width      : 5,
+          field_width      : 5) {
+      value = 365.25 * 24 * 60 * 60
   };
 
   private static readonly double[] prediction_length_tolerances_ =

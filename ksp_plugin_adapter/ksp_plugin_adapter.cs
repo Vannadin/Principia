@@ -554,6 +554,7 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   }
 
   private void UpdatePredictions() {
+    plugin_.SetPredictionLength(main_window_.prediction_length);
     Vessel main_vessel = PredictedVessel();
 
     if (MapView.MapIsEnabled) {

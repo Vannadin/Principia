@@ -3128,6 +3128,94 @@ TEST_F(PluginIntegrationTestWithoutPlugin, AnchoredVoidPredictionCoasts) {
   EXPECT_THAT(coasting_gain, Lt(1 * Milli(Metre) / Second));
 }
 
+// In the force-free void the local error vanishes, so nothing bounds the
+// adaptive step and the same `max_steps` that buys minutes near a body buys
+// geological time here.  The prediction length is what bounds the coast.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       PredictionLengthBoundsTheVoidPrediction) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      303, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  plugin->SetPredictionLength(1800 * Second);
+  Vessel::MakeSynchronous();
+  plugin->UpdatePrediction({guid_void});
+  Vessel::MakeAsynchronous();
+
+  Instant const first_time = drifter->psychohistory()->back().time;
+  EXPECT_THAT(drifter->prediction()->back().time,
+              AllOf(Gt(first_time + 1799 * Second),
+                    Le(first_time + 1800 * Second)));
+}
+
+// The target vessel's prediction is refreshed by `UpdatePrediction` on its
+// own, before the predicted vessels are trimmed to it, and must honour the
+// same bound.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       PredictionLengthBoundsTheTargetPrediction) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      304, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  GUID const guid_beacon = "beacon";
+  plugin->InsertOrKeepVessel(guid_beacon, "beacon", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      305, "part-beacon", guid_beacon,
+      {Displacement<AliceSun>({2e16 * Metre, 1e9 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const beacon = plugin->GetVessel(guid_beacon);
+
+  plugin->SetTargetVessel(guid_beacon, star_a);
+  plugin->SetPredictionLength(1800 * Second);
+  Vessel::MakeSynchronous();
+  plugin->UpdatePrediction({guid_void});
+  Vessel::MakeAsynchronous();
+
+  Instant const beacon_first_time = beacon->psychohistory()->back().time;
+  EXPECT_THAT(beacon->prediction()->back().time,
+              AllOf(Gt(beacon_first_time + 1799 * Second),
+                    Le(beacon_first_time + 1800 * Second)));
+}
+
 // The void regime judgement that keeps KSP's own orbit machinery off a vessel
 // whose stock orbit KSP's hierarchy cannot express.  It must distinguish a
 // vessel near a star from one in the deep void, and it must be silent in a
