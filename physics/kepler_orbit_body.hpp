@@ -162,8 +162,20 @@ KeplerOrbit<Frame>::KeplerOrbit(
   // does not depend on the coordinate system).
   Vector<double, Frame> const eccentricity_vector =
       v * h / (μ * Radian) - Normalize(r);
-  auto const& periapsis = eccentricity_vector;
-  Vector<SpecificAngularMomentum, Frame> const ascending_node = z * h;
+  // For an orbit lying exactly in the xy plane the node z * h vanishes, and
+  // for an exactly circular orbit so does the eccentricity vector; measuring
+  // the angles below from a zero vector would make the orientation
+  // inconsistent with the anomaly.  Substitute the direction from which each
+  // angle is then measured — Ω = 0 for an equatorial orbit, ω = 0 for a
+  // circular one — which keeps Ω + ω + ν consistent with the state vectors.
+  Vector<SpecificAngularMomentum, Frame> ascending_node = z * h;
+  if (ascending_node == Vector<SpecificAngularMomentum, Frame>{}) {
+    ascending_node = x * h.Norm();
+  }
+  Vector<double, Frame> periapsis = eccentricity_vector;
+  if (periapsis == Vector<double, Frame>{}) {
+    periapsis = Normalize(ascending_node);
+  }
 
   // Inclination (above the xy plane).
   Angle const i = AngleBetween(x_wedge_y, h);

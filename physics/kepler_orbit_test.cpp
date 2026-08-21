@@ -1,6 +1,7 @@
 #include "physics/kepler_orbit.hpp"
 
 #include <cstdint>
+#include <utility>
 
 #include "astronomy/epoch.hpp"
 #include "astronomy/frames.hpp"
@@ -10,6 +11,7 @@
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
 #include "numerics/elementary_functions.hpp"
+#include "physics/degrees_of_freedom.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/massless_body.hpp"
 #include "physics/solar_system.hpp"
@@ -30,6 +32,7 @@ using namespace principia::astronomy::_time_scales;
 using namespace principia::geometry::_instant;
 using namespace principia::geometry::_space;
 using namespace principia::numerics::_elementary_functions;
+using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_kepler_orbit;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_massless_body;
@@ -1655,6 +1658,78 @@ TEST_F(KeplerOrbitTest,
                                    /*specific_angular_momentum_ulps=*/1,
                                    /*periapsis_distance_ulps=*/0,
                                    /*apoapsis_distance_ulps=*/0);
+}
+
+// An orbit lying exactly in the xy plane: the node z * h vanishes exactly,
+// and the argument of periapsis used to be measured from that zero vector,
+// which put the reconstructed orbit on the wrong side of the primary.
+TEST_F(KeplerOrbitTest, EquatorialOrbitFromStateVectors) {
+  MassiveBody const primary{
+      MassiveBody::Parameters{TerrestrialGravitationalParameter}};
+  MasslessBody const secondary;
+  Instant const epoch;
+  Length const a = 15'000 * Kilo(Metre);
+  double const e = 0.5;
+  Length const r_apoapsis = a * (1 + e);
+  Speed const v_apoapsis = Sqrt(TerrestrialGravitationalParameter *
+                                (2 / r_apoapsis - 1 / a));
+  for (int const direction : {1, -1}) {
+    RelativeDegreesOfFreedom<ICRS> const initial(
+        Displacement<ICRS>({r_apoapsis, 0 * Metre, 0 * Metre}),
+        Velocity<ICRS>({0 * Metre / Second,
+                        direction * v_apoapsis,
+                        0 * Metre / Second}));
+    KeplerOrbit<ICRS> const orbit(primary, secondary, initial, epoch);
+    RelativeDegreesOfFreedom<ICRS> const at_epoch = orbit.StateVectors(epoch);
+    EXPECT_LT((at_epoch.displacement() - initial.displacement()).Norm(),
+              1 * Metre);
+    EXPECT_LT((at_epoch.velocity() - initial.velocity()).Norm(),
+              1e-6 * Metre / Second);
+    Time const period = *orbit.elements_at_epoch().period;
+    RelativeDegreesOfFreedom<ICRS> const at_periapsis =
+        orbit.StateVectors(epoch + period / 2);
+    EXPECT_LT((at_periapsis.displacement() -
+               Displacement<ICRS>({-a * (1 - e), 0 * Metre, 0 * Metre}))
+                  .Norm(),
+              1 * Metre);
+  }
+}
+
+// An exactly circular orbit: the eccentricity vector vanishes exactly, and
+// the true anomaly used to be measured from that zero vector.  The values
+// are powers of two so that the eccentricity vector cancels exactly.
+TEST_F(KeplerOrbitTest, CircularOrbitFromStateVectors) {
+  Length const r = 0x1p23 * Metre;
+  Speed const v = 0x1p10 * Metre / Second;
+  MassiveBody const primary{
+      MassiveBody::Parameters{r * Pow<2>(v)}};
+  MasslessBody const secondary;
+  Instant const epoch;
+  // One orbit in the xz plane, whose node is well-defined, and one in the xy
+  // plane, where the node substitution and the periapsis substitution
+  // combine.  The body starts away from the node, so that a true anomaly
+  // measured inconsistently with the argument of periapsis is caught.
+  for (auto const& [displacement, velocity] :
+       {std::pair{Displacement<ICRS>({0 * Metre, 0 * Metre, r}),
+                  Velocity<ICRS>({v, 0 * Metre / Second, 0 * Metre / Second})},
+        std::pair{Displacement<ICRS>({0 * Metre, r, 0 * Metre}),
+                  Velocity<ICRS>({-v, 0 * Metre / Second,
+                                  0 * Metre / Second})}}) {
+    RelativeDegreesOfFreedom<ICRS> const initial(displacement, velocity);
+    KeplerOrbit<ICRS> const orbit(primary, secondary, initial, epoch);
+    EXPECT_EQ(*orbit.elements_at_epoch().eccentricity, 0);
+    RelativeDegreesOfFreedom<ICRS> const at_epoch = orbit.StateVectors(epoch);
+    EXPECT_LT((at_epoch.displacement() - initial.displacement()).Norm(),
+              1 * Metre);
+    EXPECT_LT((at_epoch.velocity() - initial.velocity()).Norm(),
+              1e-6 * Metre / Second);
+    Time const period = *orbit.elements_at_epoch().period;
+    RelativeDegreesOfFreedom<ICRS> const at_quarter =
+        orbit.StateVectors(epoch + period / 4);
+    EXPECT_LT((at_quarter.displacement() -
+               r * Normalize(velocity)).Norm(),
+              1 * Metre);
+  }
 }
 
 }  // namespace physics
