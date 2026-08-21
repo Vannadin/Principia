@@ -889,6 +889,19 @@ DegreesOfFreedom<World> Plugin::CelestialWorldDegreesOfFreedom(
   return barycentric_to_world(degrees_of_freedom);
 }
 
+DegreesOfFreedom<Barycentric> Plugin::CelestialFutureDegreesOfFreedom(
+    Index const index,
+    Instant const& t) const {
+  auto const& celestial = *FindOrDie(celestials_, index);
+  not_null<MassiveBody const*> const body = celestial.body();
+  auto const& trajectory = *ephemeris_->trajectory(body);
+  if (t <= trajectory.t_max()) {
+    return trajectory.EvaluateDegreesOfFreedom(t);
+  }
+  auto const [model, member] = SubsystemMotionModelFor(body);
+  return model->EvaluateDegreesOfFreedom(member, t);
+}
+
 void Plugin::InheritVesselPlacement(GUID const& vessel_guid,
                                     GUID const& parent_vessel_guid) const {
   not_null<Vessel*> const vessel = FindOrDie(vessels_, vessel_guid).get();

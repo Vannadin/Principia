@@ -253,6 +253,19 @@ class Planetarium {
       R3Element<double>* anchor_out = nullptr,
       std::optional<Registration> const& registration = std::nullopt) const;
 
+  // The scaled-space vertex of a single `position` — expressed in `placement`
+  // and held at time `t` — as an anchored plot of one point would emit it: a
+  // displacement from the camera, with the registration displacement in
+  // `anchor_out`.  The plotting frame is evaluated at `t` clamped to its own
+  // render ceiling, so a frame that cannot be extended maps a future point
+  // through the newest state it has.
+  ScaledSpacePoint PlotPoint(
+      Instant const& t,
+      Position<Barycentric> const& position,
+      Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+      R3Element<double>& anchor_out,
+      Registration const& registration) const;
+
  private:
   // The displacement-native variant of `PlotMethod4`, used for an anchored
   // plot.  Everything at the magnitude of the distance to the plotting

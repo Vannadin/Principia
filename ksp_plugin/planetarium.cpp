@@ -412,6 +412,67 @@ void Planetarium::PlotMethod4(
   }
 }
 
+ScaledSpacePoint Planetarium::PlotPoint(
+    Instant const& t,
+    Position<Barycentric> const& position,
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    R3Element<double>& anchor_out,
+    Registration const& registration) const {
+  // This mirrors `PlotMethod4Anchored` for a single point; see there for the
+  // error analysis of each term.
+  CHECK(plotting_to_scaled_space_displacement_ != nullptr);
+  Instant const t_frame = std::min(t, plotting_frame_->render_t_max());
+  Instant const t_ref = registration.time;
+
+  Displacement<Barycentric> offset;
+  Velocity<Barycentric> velocity_offset;
+  if (Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
+          plotting_frame_->placement();
+      placement != frame_placement) {
+    auto const conversion =
+        ephemeris_->placement_conversion(placement, frame_placement, t_ref);
+    offset = conversion.first;
+    velocity_offset = conversion.second;
+  }
+  Position<Barycentric> q_ref = registration.position;
+  if (registration.placement != placement) {
+    q_ref += ephemeris_
+                 ->placement_conversion(
+                     registration.placement, placement, t_ref)
+                 .first;
+  }
+  SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t_ref =
+      plotting_frame_->ToThisFrameAtTimeSimilarly(t_ref);
+  auto const& similarity_ref = to_plotting_frame_at_t_ref.similarity();
+  Position<Barycentric> const frame_origin_ref =
+      similarity_ref.Inverse()(Navigation::origin);
+  Displacement<Barycentric> const reference = (q_ref + offset) -
+                                              frame_origin_ref;
+  Displacement<Navigation> const reference_in_navigation =
+      similarity_ref.linear_map()(reference);
+  Position<Navigation> const nav_ref = Navigation::origin +
+                                       reference_in_navigation;
+  Displacement<Navigation> const camera_to_reference =
+      nav_ref - perspective_.camera();
+  anchor_out = plotting_to_scaled_space_displacement_(-camera_to_reference);
+
+  SimilarMotion<Barycentric, Navigation> const to_plotting_frame_at_t =
+      plotting_frame_->ToThisFrameAtTimeSimilarly(t_frame);
+  auto const& similarity = to_plotting_frame_at_t.similarity();
+  Displacement<Barycentric> const from_reference_in_barycentric =
+      (position - q_ref) + velocity_offset * (t - t_ref);
+  Displacement<Barycentric> const frame_origin_motion =
+      similarity.Inverse()(Navigation::origin) - frame_origin_ref;
+  Displacement<Navigation> const sweep =
+      similarity.linear_map()(reference) - reference_in_navigation;
+  Displacement<Navigation> const reference_relative =
+      sweep + similarity.linear_map()(from_reference_in_barycentric -
+                                      frame_origin_motion);
+  return ScaledSpacePoint::FromCoordinates(
+      plotting_to_scaled_space_displacement_(camera_to_reference +
+                                             reference_relative));
+}
+
 void Planetarium::PlotMethod4Anchored(
     Trajectory<Barycentric> const& trajectory,
     Instant const& first_time,

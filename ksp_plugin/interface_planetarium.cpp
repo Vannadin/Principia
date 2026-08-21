@@ -182,6 +182,49 @@ void __cdecl principia__PlanetariumDelete(
   return m.Return();
 }
 
+// Computes the arrival ghost of the flight plan of the vessel with the given
+// GUID: the vertex at which the celestial with the given index sits when the
+// plan ends, using the analytic model of its subsystem where that is beyond
+// the ephemeris.  The vertex and its anchor follow the conventions of an
+// anchored plot.
+void __cdecl principia__PlanetariumPlotArrivalGhost(
+    Planetarium const* const planetarium,
+    Plugin const* const plugin,
+    char const* const vessel_guid,
+    int const celestial_index,
+    bool* const plotted,
+    XYZ* const ghost,
+    XYZ* const anchor) {
+  journal::Method<journal::PlanetariumPlotArrivalGhost> m(
+      {planetarium, plugin, vessel_guid, celestial_index},
+      {plotted, ghost, anchor});
+  CHECK(plugin != nullptr);
+  CHECK(planetarium != nullptr);
+  *plotted = false;
+  R3Element<double> ghost_coordinates;
+  R3Element<double> anchor_coordinates;
+
+  Vessel const& vessel = *plugin->GetVessel(vessel_guid);
+  CHECK(vessel.has_flight_plan()) << vessel_guid;
+  auto const registration = VesselRegistration(*plugin, vessel);
+  if (registration.has_value()) {
+    auto const t = vessel.flight_plan().actual_final_time();
+    auto const degrees_of_freedom =
+        plugin->CelestialFutureDegreesOfFreedom(celestial_index, t);
+    ScaledSpacePoint const point = planetarium->PlotPoint(
+        t,
+        degrees_of_freedom.position(),
+        {plugin->GetCelestial(celestial_index).subsystem(), std::nullopt},
+        anchor_coordinates,
+        *registration);
+    ghost_coordinates = R3Element<double>(point.x, point.y, point.z);
+    *plotted = true;
+  }
+  *ghost = ToXYZ(ghost_coordinates);
+  *anchor = ToXYZ(anchor_coordinates);
+  return m.Return();
+}
+
 // Fills the array of size `vertices_size` at `vertices` with vertices for the
 // rendering of the segment with the given index in the flight plan of the
 // vessel with the given GUID.

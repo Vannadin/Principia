@@ -156,6 +156,22 @@ class Plotter {
                          first_vertex: seam_vertex_count);
           }
         }
+
+        // The arrival ghost: where the targeted celestial sits when the plan
+        // ends.
+        if (FlightGlobals.fetch.VesselTarget is CelestialBody
+                target_celestial) {
+          planetarium.PlanetariumPlotArrivalGhost(
+              Plugin,
+              main_vessel_guid,
+              target_celestial.flightGlobalsIndex,
+              out bool plotted,
+              out XYZ ghost,
+              out XYZ ghost_anchor);
+          if (plotted) {
+            DrawArrivalGhost(ghost, ghost_anchor, main_reference);
+          }
+        }
       }
     }
 
@@ -424,6 +440,50 @@ class Plotter {
         PlanetariumCamera.Camera);
   }
 
+  // Draws a small three-axis cross at the ghost vertex, in the tail's own
+  // colour: the vertex and its anchor follow the anchored-plot conventions,
+  // so the cross is assembled exactly as a line mesh would be.
+  private void DrawArrivalGhost(XYZ ghost,
+                                XYZ anchor,
+                                Vector3d? registration_reference_world) {
+    if (!registration_reference_world.HasValue) {
+      return;
+    }
+    if (ghost_mesh_ == null) {
+      ghost_mesh_ = MakeDynamicMesh();
+    }
+    Vector3d translation = SceneReferenceTranslation(
+        registration_reference_world.Value, anchor);
+    Vector3d position = translation + (Vector3d)ghost;
+    Vector3d camera =
+        PlanetariumCamera.fetch.transform.position;
+    // A constant apparent size, from any distance.
+    double size = (position - camera).magnitude * 0.01;
+    Vector3d g = (Vector3d)ghost;
+    ghost_vertices_[0] = (UnityEngine.Vector3)(g + new Vector3d(size, 0, 0));
+    ghost_vertices_[1] = (UnityEngine.Vector3)(g - new Vector3d(size, 0, 0));
+    ghost_vertices_[2] = (UnityEngine.Vector3)(g + new Vector3d(0, size, 0));
+    ghost_vertices_[3] = (UnityEngine.Vector3)(g - new Vector3d(0, size, 0));
+    ghost_vertices_[4] = (UnityEngine.Vector3)(g + new Vector3d(0, 0, size));
+    ghost_vertices_[5] = (UnityEngine.Vector3)(g - new Vector3d(0, 0, size));
+    ghost_mesh_.vertices = ghost_vertices_;
+    for (int i = 0; i < ghost_colours_.Length; ++i) {
+      ghost_colours_[i] = adapter_.flight_plan_tail_colour;
+    }
+    ghost_mesh_.colors = ghost_colours_;
+    ghost_mesh_.SetIndices(ghost_indices_,
+                           UnityEngine.MeshTopology.Lines,
+                           submesh: 0);
+    ghost_mesh_.RecalculateBounds();
+    UnityEngine.Graphics.DrawMesh(
+        ghost_mesh_,
+        (UnityEngine.Vector3)translation,
+        UnityEngine.Quaternion.identity,
+        GLLines.line_material,
+        (int)PrincipiaPluginAdapter.UnityLayers.Atmosphere,
+        PlanetariumCamera.Camera);
+  }
+
   private static UnityEngine.Mesh MakeDynamicMesh() {
     var result = new UnityEngine.Mesh();
     result.MarkDynamic();
@@ -464,6 +524,12 @@ class Plotter {
       new List<UnityEngine.Mesh>();
   private UnityEngine.Mesh target_psychohistory_mesh_;
   private UnityEngine.Mesh target_prediction_mesh_;
+  private UnityEngine.Mesh ghost_mesh_;
+  private readonly UnityEngine.Vector3[] ghost_vertices_ =
+      new UnityEngine.Vector3[6];
+  private readonly UnityEngine.Color[] ghost_colours_ =
+      new UnityEngine.Color[6];
+  private readonly int[] ghost_indices_ = { 0, 1, 2, 3, 4, 5 };
   private int[] indices_ = null;
   private UnityEngine.Color[] colours_ =
       new UnityEngine.Color[VertexBuffer.size];

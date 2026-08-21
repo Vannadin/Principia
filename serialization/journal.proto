@@ -293,7 +293,7 @@ message OrbitAnalysis {
 }
 
 message Method {
-  extensions 5000 to 5999;  // Last used: 5228.
+  extensions 5000 to 5999;  // Last used: 5230.
 }
 
 message ActivatePlayer {
@@ -2282,6 +2282,30 @@ message PlanetariumDelete {
   }
   message Out {
     required fixed64 planetarium = 1 [(pointer_to) = "Planetarium const"];
+  }
+  optional In in = 1;
+  optional Out out = 2;
+}
+
+message PlanetariumPlotArrivalGhost {
+  extend Method {
+    optional PlanetariumPlotArrivalGhost extension = 5230;
+  }
+  message In {
+    required fixed64 planetarium = 1 [(pointer_to) = "Planetarium const",
+                                      (disposable) = "DisposablePlanetarium",
+                                      (is_subject) = true];
+    required fixed64 plugin = 2 [(pointer_to) = "Plugin const"];
+    required string vessel_guid = 3;
+    required int32 celestial_index = 4;
+  }
+  message Out {
+    // Whether the ghost could be plotted: the vessel must have a registered
+    // present position.
+    required bool plotted = 1;
+    // A vertex and its anchor, with the conventions of an anchored plot.
+    required XYZ ghost = 2;
+    required XYZ anchor = 3;
   }
   optional In in = 1;
   optional Out out = 2;

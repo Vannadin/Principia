@@ -722,6 +722,12 @@ TEST_F(PlanetariumTest, PlotMethod4ThroughAnExtrapolatingFrame) {
       &small_ephemeris,
       std::make_unique<ExtrapolatingPlottingFrame>(&real_frame),
       plotting_to_scaled_space_);
+  Planetarium::PlottingToScaledSpaceDisplacementConversion const
+      plotting_to_scaled_space_displacement =
+          [](Displacement<Navigation> const& displacement) {
+            constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+            return (displacement * inverse_scale_factor).coordinates();
+          };
   Planetarium const extended(
       parameters,
       perspective_,
@@ -732,7 +738,8 @@ TEST_F(PlanetariumTest, PlotMethod4ThroughAnExtrapolatingFrame) {
                                                    model,
                                                    /*member=*/0,
                                                    horizon),
-      plotting_to_scaled_space_);
+      plotting_to_scaled_space_,
+      plotting_to_scaled_space_displacement);
   auto const clamped_points = plot(clamped);
   auto const decorated_points = plot(decorated);
   auto const extended_points = plot(extended);
@@ -803,6 +810,44 @@ TEST_F(PlanetariumTest, PlotMethod4ThroughAnExtrapolatingFrame) {
   EXPECT_THAT(seamed_points.back().x,
               ::testing::FloatNear(static_cast<float>(expected_at_end.x),
                                    1e-5f));
+
+  // A single plotted point — the arrival ghost's vertex — follows the same
+  // conventions: the anchor and the vertex reassemble to the point's
+  // displacement from the registration, in the frame at the point's own
+  // time.
+  Planetarium::Registration const ghost_registration{
+      .time = horizon,
+      .position = Barycentric::origin + Displacement<Barycentric>(
+                                            {10 * Metre,
+                                             0 * Metre,
+                                             0 * Metre}),
+      .placement = Ephemeris<Barycentric>::SubsystemPlacement::Stock()};
+  // Not a whole number of periods past the horizon, so that the star's
+  // reflex has moved: a frame evaluated at the wrong time then shows.
+  Instant const t_ghost = horizon + 50.25 * period;
+  Position<Barycentric> const planet_position =
+      model->EvaluateDegreesOfFreedom(1, t_ghost).position();
+  R3Element<double> ghost_anchor;
+  ScaledSpacePoint const ghost = extended.PlotPoint(
+      t_ghost,
+      planet_position,
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      ghost_anchor,
+      ghost_registration);
+  Position<Barycentric> const star_at_t_ghost =
+      model->EvaluateDegreesOfFreedom(0, t_ghost).position();
+  Position<Barycentric> const star_at_registration =
+      small_ephemeris.trajectory(star)->EvaluatePosition(horizon);
+  R3Element<double> const expected_ghost =
+      (((planet_position - star_at_t_ghost) -
+        (ghost_registration.position - star_at_registration)) /
+       (6000 * Metre)).coordinates();
+  EXPECT_THAT(ghost.x + ghost_anchor.x,
+              ::testing::DoubleNear(expected_ghost.x, 0.02));
+  EXPECT_THAT(ghost.y + ghost_anchor.y,
+              ::testing::DoubleNear(expected_ghost.y, 0.02));
+  EXPECT_THAT(ghost.z + ghost_anchor.z,
+              ::testing::DoubleNear(expected_ghost.z, 0.02));
 }
 
 // An anchored plot at an interstellar distance from the plotting frame's
