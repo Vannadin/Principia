@@ -159,6 +159,38 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingWithoutTargetVessel) {
   }
 }
 
+// The plotting frame bounds the rendering at its `t_max`: a point beyond it
+// cannot be transformed into the frame.  The void-line rendering lifts this
+// clamp by extending the frame, never by evaluating it out of bounds.
+TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingStopsAtFrameTMax) {
+  Velocity<Barycentric> const v(
+      {6 * Metre / Second, 5 * Metre / Second, 4 * Metre / Second});
+  DiscreteTrajectory<Barycentric> trajectory_to_render;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(v,
+                                  /*Δt=*/1 * Second,
+                                  /*t1=*/t0_,
+                                  /*t2=*/t0_ + 10 * Second),
+      /*to=*/trajectory_to_render);
+
+  ON_CALL(*reference_frame_, t_max())
+      .WillByDefault(Return(t0_ + 5 * Second));
+  RigidMotion<Barycentric, Navigation> const rigid_motion(
+      RigidTransformation<Barycentric, Navigation>::Identity(),
+      Barycentric::nonrotating,
+      Barycentric::unmoving);
+  EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(_))
+      .WillRepeatedly(Return(rigid_motion));
+
+  auto const rendered_trajectory =
+      renderer_.RenderBarycentricTrajectoryInPlotting(
+          trajectory_to_render.begin(),
+          trajectory_to_render.end());
+
+  EXPECT_EQ(6, rendered_trajectory.size());
+  EXPECT_EQ(t0_ + 5 * Second, rendered_trajectory.back().time);
+}
+
 // WS6-5: a vessel coasting in the void is anchored — its trajectory is near the
 // origin and the real offset lives on the anchor.  Rendering must add the
 // anchor, evaluated at each point's own time, or the vessel plots on top of its

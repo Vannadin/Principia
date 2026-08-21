@@ -27,9 +27,19 @@ BodyCentredNonRotatingReferenceFrame<InertialFrame, ThisFrame>::
 BodyCentredNonRotatingReferenceFrame(
     not_null<Ephemeris<InertialFrame> const*> const ephemeris,
     not_null<MassiveBody const*> const centre)
+    : BodyCentredNonRotatingReferenceFrame(ephemeris,
+                                           centre,
+                                           ephemeris->trajectory(centre)) {}
+
+template<typename InertialFrame, typename ThisFrame>
+BodyCentredNonRotatingReferenceFrame<InertialFrame, ThisFrame>::
+BodyCentredNonRotatingReferenceFrame(
+    not_null<Ephemeris<InertialFrame> const*> const ephemeris,
+    not_null<MassiveBody const*> const centre,
+    not_null<Trajectory<InertialFrame> const*> const centre_trajectory)
     : ephemeris_(ephemeris),
       centre_(centre),
-      centre_trajectory_(ephemeris_->trajectory(centre_)),
+      centre_trajectory_(centre_trajectory),
       subsystem_(ephemeris_->subsystem_of_body(centre_)),
       orthogonal_map_([this]() {
         // Note that we cannot do this by making `equatorial` and

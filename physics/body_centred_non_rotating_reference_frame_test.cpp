@@ -1,6 +1,8 @@
 #include "physics/body_centred_non_rotating_reference_frame.hpp"
 
 #include <memory>
+#include <optional>
+#include <vector>
 
 #include "astronomy/frames.hpp"
 #include "geometry/frame.hpp"
@@ -13,8 +15,10 @@
 #include "integrators/methods.hpp"
 #include "integrators/symplectic_runge_kutta_nyström_integrator.hpp"
 #include "numerics/elementary_functions.hpp"
+#include "physics/analytic_subsystem_motion.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/ephemeris.hpp"
+#include "physics/extrapolated_trajectory.hpp"
 #include "physics/rigid_reference_frame.hpp"
 #include "physics/solar_system.hpp"
 #include "quantities/named_quantities.hpp"
@@ -43,9 +47,11 @@ using namespace principia::geometry::_space;
 using namespace principia::integrators::_methods;
 using namespace principia::integrators::_symplectic_runge_kutta_nyström_integrator;  // NOLINT
 using namespace principia::numerics::_elementary_functions;
+using namespace principia::physics::_analytic_subsystem_motion;
 using namespace principia::physics::_body_centred_non_rotating_reference_frame;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_ephemeris;
+using namespace principia::physics::_extrapolated_trajectory;
 using namespace principia::physics::_rigid_reference_frame;
 using namespace principia::physics::_solar_system;
 using namespace principia::quantities::_named_quantities;
@@ -170,6 +176,41 @@ TEST_F(BodyCentredNonRotatingReferenceFrameTest, Inverse) {
                               VanishesBefore(velocity_coordinates.x, 0),
                               VanishesBefore(velocity_coordinates.x, 0)));
   }
+}
+
+// A frame constructed over a trajectory that continues the centre's motion
+// analytically reaches past the ephemeris horizon: below the horizon it is
+// identical to the ephemeris-backed frame, and beyond it the centre still
+// maps to the origin.
+TEST_F(BodyCentredNonRotatingReferenceFrameTest, OverAGivenTrajectory) {
+  Instant const horizon = ephemeris_->t_max();
+  std::vector<AnalyticSubsystemMotion<ICRS>::Member> const members = {
+      {big_gravitational_parameter_,
+       solar_system_.trajectory(*ephemeris_, big)
+           .EvaluateDegreesOfFreedom(horizon),
+       std::nullopt},
+      {small_gravitational_parameter_,
+       solar_system_.trajectory(*ephemeris_, small)
+           .EvaluateDegreesOfFreedom(horizon),
+       0}};
+  AnalyticSubsystemMotion<ICRS> const model(members, horizon);
+  ExtrapolatedTrajectory<ICRS> const view(
+      solar_system_.trajectory(*ephemeris_, big), horizon, model,
+      /*member=*/0);
+  BodyCentredNonRotatingReferenceFrame<ICRS, Big> const frame(
+      ephemeris_.get(),
+      solar_system_.massive_body(*ephemeris_, big),
+      &view);
+  EXPECT_EQ(InfiniteFuture, frame.t_max());
+  Instant const t_below = t0_ + period_ / 3;
+  EXPECT_EQ(big_frame_->ToThisFrameAtTime(t_below)(small_initial_state_),
+            frame.ToThisFrameAtTime(t_below)(small_initial_state_));
+  Instant const t_beyond = t0_ + 12 * period_;
+  DegreesOfFreedom<Big> const centre_in_frame =
+      frame.ToThisFrameAtTime(t_beyond)(
+          view.EvaluateDegreesOfFreedom(t_beyond));
+  EXPECT_EQ(Big::origin, centre_in_frame.position());
+  EXPECT_EQ(Big::unmoving, centre_in_frame.velocity());
 }
 
 TEST_F(BodyCentredNonRotatingReferenceFrameTest, GeometricAcceleration) {

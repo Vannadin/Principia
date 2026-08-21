@@ -19,6 +19,7 @@
 #include "physics/ephemeris.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/rigid_motion.hpp"
+#include "physics/trajectory.hpp"
 #include "quantities/named_quantities.hpp"
 
 namespace principia {
@@ -36,6 +37,7 @@ using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_rigid_motion;
 using namespace principia::physics::_rigid_reference_frame;
+using namespace principia::physics::_trajectory;
 using namespace principia::quantities::_named_quantities;
 
 // The origin of the frame is the centre of mass of the body.  The Y axis is at
@@ -63,6 +65,18 @@ class BodyCentredNonRotatingReferenceFrame
   BodyCentredNonRotatingReferenceFrame(
       not_null<Ephemeris<InertialFrame> const*> ephemeris,
       not_null<MassiveBody const*> centre);
+
+  // A frame whose centre follows the given `centre_trajectory` instead of the
+  // body's trajectory in the ephemeris — this is how the frame of a plot is
+  // continued past the ephemeris horizon by an analytic extrapolation of the
+  // centre's motion.  Beyond the ephemeris' own reach only the kinematic part
+  // of the frame (`ToThisFrameAtTime` and its inverse) may be evaluated: the
+  // dynamic part keeps reading the ephemeris.  The trajectory must outlive
+  // this object.
+  BodyCentredNonRotatingReferenceFrame(
+      not_null<Ephemeris<InertialFrame> const*> ephemeris,
+      not_null<MassiveBody const*> centre,
+      not_null<Trajectory<InertialFrame> const*> centre_trajectory);
 
   not_null<MassiveBody const*> centre() const;
 
@@ -93,7 +107,7 @@ class BodyCentredNonRotatingReferenceFrame
 
   not_null<Ephemeris<InertialFrame> const*> const ephemeris_;
   not_null<MassiveBody const*> const centre_;
-  not_null<ContinuousTrajectory<InertialFrame> const*> const centre_trajectory_;
+  not_null<Trajectory<InertialFrame> const*> const centre_trajectory_;
   int const subsystem_;
   OrthogonalMap<InertialFrame, ThisFrame> const orthogonal_map_;
 };

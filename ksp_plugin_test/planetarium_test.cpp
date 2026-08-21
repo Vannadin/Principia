@@ -563,6 +563,65 @@ TEST_F(PlanetariumTest, PlotMethod4WithAnchor) {
   EXPECT_TRUE(differs);
 }
 
+// The plot stops at the plotting frame's `t_max` even where the trajectory
+// and the requested `t_max` reach further.
+TEST_F(PlanetariumTest, PlotMethod4StopsAtPlottingFrameTMax) {
+  DiscreteTrajectory<Barycentric> discrete_trajectory;
+  AppendTrajectoryTimeline(/*from=*/NewCircularTrajectoryTimeline<Barycentric>(
+                                        /*period=*/10 * Second,
+                                        /*r=*/3 * Metre,
+                                        /*Δt=*/1 * Second,
+                                        /*t1=*/t0_,
+                                        /*t2=*/t0_ + 11 * Second),
+                           /*to=*/discrete_trajectory);
+
+  ON_CALL(plotting_frame_, t_max())
+      .WillByDefault(Return(t0_ + 5 * Second));
+  ON_CALL(mock_ephemeris_, placement_conversion(_, _, _))
+      .WillByDefault(
+          Invoke([](Ephemeris<Barycentric>::SubsystemPlacement const& from,
+                    Ephemeris<Barycentric>::SubsystemPlacement const& to,
+                    Instant const& t) {
+            return Ephemeris<Barycentric>::Anchor::Conversion(from.anchor,
+                                                              to.anchor,
+                                                              t);
+          }));
+
+  // A nonzero angular resolution: the plot must take real steps to reach the
+  // clamp, not collapse on the first point.
+  Planetarium::Parameters const parameters(
+      /*sphere_radius_multiplier=*/1,
+      /*angular_resolution=*/0.1 * Degree,
+      /*field_of_view=*/90 * Degree);
+  Planetarium const planetarium(parameters,
+                                perspective_,
+                                &mock_ephemeris_,
+                                &plotting_frame_,
+                                plotting_to_scaled_space_);
+
+  std::vector<ScaledSpacePoint> points;
+  planetarium.PlotMethod4(
+      discrete_trajectory,
+      discrete_trajectory.begin(),
+      discrete_trajectory.end(),
+      /*t_max=*/InfiniteFuture,
+      /*reverse=*/false,
+      [&points](ScaledSpacePoint const& point) { points.push_back(point); },
+      /*max_points=*/std::numeric_limits<int>::max(),
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      /*anchor_out=*/nullptr,
+      /*registration=*/std::nullopt);
+
+  // The last plotted point is the trajectory at the frame's `t_max` — half a
+  // period, diametrally opposite the start.
+  ASSERT_GT(points.size(), 2u);
+  constexpr float inverse_scale_factor_per_metre = 1.0f / 6000.0f;
+  EXPECT_THAT(points.back().x,
+              ::testing::FloatNear(-3 * inverse_scale_factor_per_metre,
+                                   1e-7f));
+  EXPECT_THAT(points.back().y, ::testing::FloatNear(0.0f, 1e-7f));
+}
+
 // An anchored plot at an interstellar distance from the plotting frame's
 // origin: the vertices must not quantize at the double ULP of that distance,
 // about a kilometre at 9e18 m, neither in the placement conversion nor in
