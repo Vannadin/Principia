@@ -41,6 +41,9 @@
     <ClCompile Include="plugin_integration_test.cpp">
       <Filter>Test Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\ksp_plugin\extrapolating_plotting_frame.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\ksp_plugin\flight_plan.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -109,6 +112,9 @@
     </ClCompile>
     <ClCompile Include="..\ksp_plugin\renderer.cpp">
       <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="extrapolating_plotting_frame_test.cpp">
+      <Filter>Test Files</Filter>
     </ClCompile>
     <ClCompile Include="planetarium_test.cpp">
       <Filter>Test Files</Filter>

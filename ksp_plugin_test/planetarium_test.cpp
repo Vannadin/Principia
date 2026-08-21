@@ -38,8 +38,11 @@
 #include "integrators/embedded_explicit_runge_kutta_integrator.hpp"
 #include "integrators/methods.hpp"
 #include "integrators/symmetric_linear_multistep_integrator.hpp"
+#include "ksp_plugin/extrapolating_plotting_frame.hpp"
 #include "ksp_plugin/frames.hpp"
 #include "numerics/elementary_functions.hpp"
+#include "physics/analytic_subsystem_motion.hpp"
+#include "physics/body_centred_non_rotating_reference_frame.hpp"
 #include "numerics/quadrature.hpp"
 #include "physics/degrees_of_freedom.hpp"
 #include "physics/discrete_trajectory.hpp"
@@ -97,9 +100,12 @@ using namespace principia::geometry::_space_transformations;
 using namespace principia::integrators::_embedded_explicit_runge_kutta_integrator;  // NOLINT
 using namespace principia::integrators::_methods;
 using namespace principia::integrators::_symmetric_linear_multistep_integrator;
+using namespace principia::ksp_plugin::_extrapolating_plotting_frame;
 using namespace principia::ksp_plugin::_frames;
 using namespace principia::ksp_plugin::_planetarium;
 using namespace principia::numerics::_elementary_functions;
+using namespace principia::physics::_analytic_subsystem_motion;
+using namespace principia::physics::_body_centred_non_rotating_reference_frame;
 using namespace principia::numerics::_quadrature;
 using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
@@ -116,6 +122,7 @@ using namespace principia::physics::_rotating_body;
 using namespace principia::physics::_rotating_pulsating_reference_frame;
 using namespace principia::physics::_sector;
 using namespace principia::physics::_solar_system;
+using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
 using namespace principia::testing_utilities::_almost_equals;
@@ -620,6 +627,152 @@ TEST_F(PlanetariumTest, PlotMethod4StopsAtPlottingFrameTMax) {
               ::testing::FloatNear(-3 * inverse_scale_factor_per_metre,
                                    1e-7f));
   EXPECT_THAT(points.back().y, ::testing::FloatNear(0.0f, 1e-7f));
+}
+
+// A planetarium owning an extrapolating plotting frame plots past the
+// ephemeris; one owning a twinless decorator is bit-identical to the borrowed
+// frame.
+TEST_F(PlanetariumTest, PlotMethod4ThroughAnExtrapolatingFrame) {
+  GravitationalParameter const μ_star = 4e14 * Pow<3>(Metre) / Pow<2>(Second);
+  GravitationalParameter const μ_planet = 1e-6 * μ_star;
+  Length const a = 1e9 * Metre;
+  Time const period = 2 * π * Sqrt(Pow<3>(a) / (μ_star + μ_planet));
+  Speed const v_orbit = Sqrt((μ_star + μ_planet) / a);
+  double const f_star = μ_planet / (μ_star + μ_planet);
+  double const f_planet = μ_star / (μ_star + μ_planet);
+  Displacement<Barycentric> const r({a, 0 * Metre, 0 * Metre});
+  Velocity<Barycentric> const v_relative(
+      {0 * Metre / Second, v_orbit, 0 * Metre / Second});
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("star", μ_star)));
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("planet", μ_planet)));
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      {Barycentric::origin - f_star * r, -f_star * v_relative},
+      {Barycentric::origin + f_planet * r, f_planet * v_relative}};
+  Ephemeris<Barycentric> small_ephemeris(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      Ephemeris<Barycentric>::AccuracyParameters(
+          /*fitting_tolerance=*/0.1 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<Barycentric>::FixedStepParameters(
+          SymmetricLinearMultistepIntegrator<
+              QuinlanTremaine1990Order12,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*step=*/period / 300));
+  CHECK_OK(small_ephemeris.Prolong(t0_ + 2 * period));
+  Instant const horizon = small_ephemeris.t_max();
+  auto const star = small_ephemeris.bodies()[0];
+  BodyCentredNonRotatingReferenceFrame<Barycentric, Navigation> const
+      real_frame(&small_ephemeris, star);
+
+  std::vector<AnalyticSubsystemMotion<Barycentric>::Member> members;
+  for (int i = 0; i < 2; ++i) {
+    auto const body = small_ephemeris.bodies()[i];
+    members.push_back(AnalyticSubsystemMotion<Barycentric>::Member{
+        body->gravitational_parameter(),
+        small_ephemeris.trajectory(body)->EvaluateDegreesOfFreedom(horizon),
+        i == 0 ? std::nullopt : std::optional<int>(0)});
+  }
+  auto const model =
+      std::make_shared<AnalyticSubsystemMotion<Barycentric> const>(members,
+                                                                   horizon);
+
+  DiscreteTrajectory<Barycentric> vessel_trajectory;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(Velocity<Barycentric>({6 * Metre / Second,
+                                                         5 * Metre / Second,
+                                                         4 * Metre / Second}),
+                                  /*Δt=*/50 * Second,
+                                  /*t1=*/horizon - 100 * Second,
+                                  /*t2=*/horizon + 1000 * Second),
+      /*to=*/vessel_trajectory);
+
+  Planetarium::Parameters const parameters(
+      /*sphere_radius_multiplier=*/1,
+      /*angular_resolution=*/0.1 * Degree,
+      /*field_of_view=*/90 * Degree);
+  auto const plot = [&vessel_trajectory](Planetarium const& planetarium) {
+    std::vector<ScaledSpacePoint> points;
+    planetarium.PlotMethod4(
+        vessel_trajectory,
+        vessel_trajectory.begin(),
+        vessel_trajectory.end(),
+        /*t_max=*/InfiniteFuture,
+        /*reverse=*/false,
+        [&points](ScaledSpacePoint const& point) { points.push_back(point); },
+        /*max_points=*/std::numeric_limits<int>::max(),
+        Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+        /*anchor_out=*/nullptr,
+        /*registration=*/std::nullopt);
+    return points;
+  };
+
+  Planetarium const clamped(parameters,
+                            perspective_,
+                            &small_ephemeris,
+                            &real_frame,
+                            plotting_to_scaled_space_);
+  Planetarium const decorated(
+      parameters,
+      perspective_,
+      &small_ephemeris,
+      std::make_unique<ExtrapolatingPlottingFrame>(&real_frame),
+      plotting_to_scaled_space_);
+  Planetarium const extended(
+      parameters,
+      perspective_,
+      &small_ephemeris,
+      std::make_unique<ExtrapolatingPlottingFrame>(&small_ephemeris,
+                                                   &real_frame,
+                                                   star,
+                                                   model,
+                                                   /*member=*/0,
+                                                   horizon),
+      plotting_to_scaled_space_);
+  auto const clamped_points = plot(clamped);
+  auto const decorated_points = plot(decorated);
+  auto const extended_points = plot(extended);
+
+  // The twinless decorator changes nothing, bit for bit.
+  ASSERT_EQ(clamped_points.size(), decorated_points.size());
+  for (int i = 0; i < static_cast<int>(clamped_points.size()); ++i) {
+    EXPECT_EQ(clamped_points[i].x, decorated_points[i].x);
+    EXPECT_EQ(clamped_points[i].y, decorated_points[i].y);
+    EXPECT_EQ(clamped_points[i].z, decorated_points[i].z);
+  }
+
+  // The clamped plot ends at the ephemeris horizon; the twin carries the
+  // extended plot to the trajectory's end, a quarter of an hour beyond it.
+  ASSERT_FALSE(clamped_points.empty());
+  ASSERT_FALSE(extended_points.empty());
+  R3Element<double> const expected_at_horizon =
+      ((vessel_trajectory.EvaluatePosition(horizon) -
+        small_ephemeris.trajectory(star)->EvaluatePosition(horizon)) /
+       (6000 * Metre)).coordinates();
+  auto const& last = vessel_trajectory.back();
+  R3Element<double> const expected_at_end =
+      ((last.degrees_of_freedom.position() -
+        model->EvaluateDegreesOfFreedom(0, last.time).position()) /
+       (6000 * Metre)).coordinates();
+  EXPECT_THAT(clamped_points.back().x,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.x),
+                                   1e-5f));
+  EXPECT_THAT(clamped_points.back().y,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.y),
+                                   1e-5f));
+  EXPECT_THAT(extended_points.back().x,
+              ::testing::FloatNear(static_cast<float>(expected_at_end.x),
+                                   1e-5f));
+  EXPECT_THAT(extended_points.back().y,
+              ::testing::FloatNear(static_cast<float>(expected_at_end.y),
+                                   1e-5f));
+  EXPECT_THAT(extended_points.back().z,
+              ::testing::FloatNear(static_cast<float>(expected_at_end.z),
+                                   1e-5f));
 }
 
 // An anchored plot at an interstellar distance from the plotting frame's

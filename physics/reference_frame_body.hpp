@@ -22,6 +22,11 @@ using namespace principia::physics::_rotating_pulsating_reference_frame;
 using namespace principia::quantities::_si;
 
 template<typename InertialFrame, typename ThisFrame>
+Instant ReferenceFrame<InertialFrame, ThisFrame>::render_t_max() const {
+  return t_max();
+}
+
+template<typename InertialFrame, typename ThisFrame>
 int ReferenceFrame<InertialFrame, ThisFrame>::subsystem() const {
   return 0;
 }

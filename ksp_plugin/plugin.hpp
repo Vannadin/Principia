@@ -13,6 +13,7 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/status/status.h"
+#include "absl/synchronization/mutex.h"
 #include "base/disjoint_sets.hpp"
 #include "base/monostable.hpp"
 #include "base/not_null.hpp"
@@ -35,6 +36,7 @@
 #include "ksp_plugin/renderer.hpp"
 #include "ksp_plugin/vessel.hpp"
 #include "numerics/elementary_functions.hpp"
+#include "physics/analytic_subsystem_motion.hpp"
 #include "physics/apsides.hpp"
 #include "physics/body.hpp"
 #include "physics/degrees_of_freedom.hpp"
@@ -85,6 +87,7 @@ using namespace principia::ksp_plugin::_planetarium;
 using namespace principia::ksp_plugin::_renderer;
 using namespace principia::ksp_plugin::_vessel;
 using namespace principia::numerics::_elementary_functions;
+using namespace principia::physics::_analytic_subsystem_motion;
 using namespace principia::physics::_apsides;
 using namespace principia::physics::_body;
 using namespace principia::physics::_degrees_of_freedom;
@@ -656,6 +659,13 @@ class Plugin {
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
           Ephemeris<Barycentric>::SubsystemPlacement::Stock()) const;
 
+  // The analytic model of the motion of the bodies of `centre`'s subsystem
+  // at the ephemeris' current horizon, and the index of `centre` among its
+  // members.  The model is cached while the horizon stands still, and the
+  // superseded model steadies the tier of a borderline pair (hysteresis).
+  std::pair<std::shared_ptr<AnalyticSubsystemMotion<Barycentric> const>, int>
+  SubsystemMotionModelFor(not_null<MassiveBody const*> centre) const;
+
   // The rigid motion that translates positions represented relative to the
   // local origin of subsystem `s1` so that they become represented relative
   // to the local origin of subsystem `s2` at time `t`.
@@ -742,6 +752,15 @@ class Plugin {
 
   // Not null after initialization.
   std::unique_ptr<Renderer> renderer_;
+
+  // See `SubsystemMotionModelFor`; keyed by subsystem.
+  struct CachedSubsystemMotionModel {
+    Instant t;
+    std::vector<not_null<MassiveBody const*>> bodies;
+    std::shared_ptr<AnalyticSubsystemMotion<Barycentric> const> model;
+  };
+  mutable absl::Mutex subsystem_motion_models_lock_;
+  mutable std::map<int, CachedSubsystemMotionModel> subsystem_motion_models_;
 
   RotatingBody<Barycentric> const* main_body_ = nullptr;
   AngularVelocity<Barycentric> angular_velocity_of_world_;

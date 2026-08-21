@@ -63,6 +63,23 @@ Planetarium::Planetarium(
       plotting_to_scaled_space_displacement_(
           std::move(plotting_to_scaled_space_displacement)) {}
 
+Planetarium::Planetarium(
+    Parameters const& parameters,
+    Perspective<Navigation, Camera> perspective,
+    not_null<Ephemeris<Barycentric> const*> const ephemeris,
+    std::unique_ptr<PlottingFrame const> plotting_frame,
+    PlottingToScaledSpaceConversion plotting_to_scaled_space,
+    PlottingToScaledSpaceDisplacementConversion
+        plotting_to_scaled_space_displacement)
+    : parameters_(parameters),
+      perspective_(std::move(perspective)),
+      ephemeris_(ephemeris),
+      owned_plotting_frame_(std::move(plotting_frame)),
+      plotting_frame_(owned_plotting_frame_.get()),
+      plotting_to_scaled_space_(std::move(plotting_to_scaled_space)),
+      plotting_to_scaled_space_displacement_(
+          std::move(plotting_to_scaled_space_displacement)) {}
+
 Planetarium::PlottingToScaledSpaceConversion
 Planetarium::MakePlottingToScaledSpaceConversion(
     Similarity<World, Navigation> const& world_to_plotting,
@@ -323,7 +340,7 @@ void Planetarium::PlotMethod3(
   auto last = std::prev(end);
   auto const begin_time = std::max(begin->time, plotting_frame_->t_min());
   auto const last_time =
-      std::min({last->time, plotting_frame_->t_max(), t_max});
+      std::min({last->time, plotting_frame_->render_t_max(), t_max});
   PlotMethod3(
       trajectory, begin_time, last_time, reverse, add_point, max_points);
 }
@@ -348,7 +365,7 @@ void Planetarium::PlotMethod4(
   auto last = std::prev(end);
   auto const begin_time = std::max(begin->time, plotting_frame_->t_min());
   auto const last_time =
-      std::min({last->time, plotting_frame_->t_max(), t_max});
+      std::min({last->time, plotting_frame_->render_t_max(), t_max});
   PlotMethod4(trajectory, begin_time, last_time, reverse, add_point,
               max_points, /*minimal_distance=*/nullptr, placement, anchor_out,
               registration);

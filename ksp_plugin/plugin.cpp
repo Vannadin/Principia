@@ -34,6 +34,7 @@
 #include "geometry/space_transformations.hpp"
 #include "google/protobuf/repeated_field.h"
 #include "ksp_plugin/equator_relevance_threshold.hpp"
+#include "ksp_plugin/extrapolating_plotting_frame.hpp"
 #include "ksp_plugin/integrators.hpp"
 #include "ksp_plugin/part.hpp"
 #include "ksp_plugin/part_subsets.hpp"  // 🧙 For Subset<Part>.
@@ -69,6 +70,7 @@ using namespace principia::geometry::_identity;
 using namespace principia::geometry::_permutation;
 using namespace principia::geometry::_space_transformations;
 using namespace principia::ksp_plugin::_equator_relevance_threshold;
+using namespace principia::ksp_plugin::_extrapolating_plotting_frame;
 using namespace principia::ksp_plugin::_integrators;
 using namespace principia::ksp_plugin::_part;
 using namespace principia::physics::_barycentric_rotating_reference_frame;
@@ -1783,13 +1785,102 @@ not_null<std::unique_ptr<Planetarium>> Plugin::NewPlanetarium(
     Planetarium::PlottingToScaledSpaceConversion plotting_to_scaled_space,
     Planetarium::PlottingToScaledSpaceDisplacementConversion
         plotting_to_scaled_space_displacement) const {
+  not_null<PlottingFrame const*> const plotting_frame =
+      renderer_->GetPlottingFrame();
+  // The plot of this planetarium reaches past the ephemeris through a twin of
+  // the plotting frame whose centre is continued analytically.  Only the
+  // body-centred non-rotating frame can be twinned: the rotating frames
+  // evaluate the ephemeris inside their conversions.  The renderer keeps the
+  // real frame; the decorator lives and dies with this planetarium.
+  if (auto const* const body_centred = dynamic_cast<
+          BodyCentredNonRotatingReferenceFrame<Barycentric,
+                                               Navigation> const*>(
+          &*plotting_frame);
+      body_centred != nullptr) {
+    not_null<MassiveBody const*> const centre = body_centred->centre();
+    auto const [model, member] = SubsystemMotionModelFor(centre);
+    auto decorator = std::make_unique<ExtrapolatingPlottingFrame>(
+        ephemeris_.get(),
+        plotting_frame,
+        centre,
+        model,
+        member,
+        /*horizon=*/model->epoch());
+    return make_not_null_unique<Planetarium>(
+        parameters,
+        perspective,
+        ephemeris_.get(),
+        std::move(decorator),
+        std::move(plotting_to_scaled_space),
+        std::move(plotting_to_scaled_space_displacement));
+  }
   return make_not_null_unique<Planetarium>(
       parameters,
       perspective,
       ephemeris_.get(),
-      renderer_->GetPlottingFrame(),
+      plotting_frame,
       std::move(plotting_to_scaled_space),
       std::move(plotting_to_scaled_space_displacement));
+}
+
+std::pair<std::shared_ptr<AnalyticSubsystemMotion<Barycentric> const>, int>
+Plugin::SubsystemMotionModelFor(
+    not_null<MassiveBody const*> const centre) const {
+  int const subsystem = ephemeris_->subsystem_of_body(centre);
+  Instant const t = ephemeris_->t_max();
+
+  // The bodies of the subsystem, in index order so that the composition of
+  // the cached model can be compared.
+  std::vector<Celestial const*> celestials;
+  std::vector<not_null<MassiveBody const*>> bodies;
+  int member = -1;
+  for (auto const& [index, celestial] : celestials_) {
+    if (celestial->subsystem() == subsystem) {
+      celestials.push_back(celestial.get());
+      bodies.push_back(celestial->body());
+      if (bodies.back() == centre) {
+        member = static_cast<int>(bodies.size()) - 1;
+      }
+    }
+  }
+  CHECK_NE(member, -1) << "Body " << centre->name() << " not in subsystem "
+                       << subsystem;
+
+  absl::MutexLock l(&subsystem_motion_models_lock_);
+  auto& cache = subsystem_motion_models_[subsystem];
+  if (cache.model == nullptr || cache.t != t || cache.bodies != bodies) {
+    std::vector<AnalyticSubsystemMotion<Barycentric>::Member> members;
+    members.reserve(bodies.size());
+    for (int i = 0; i < static_cast<int>(bodies.size()); ++i) {
+      // The KSP tree restricted to the subsystem.
+      std::optional<int> parent;
+      Celestial const* const celestial_parent = celestials[i]->parent();
+      if (celestial_parent != nullptr &&
+          celestial_parent->subsystem() == subsystem) {
+        for (int j = 0; j < static_cast<int>(celestials.size()); ++j) {
+          if (celestials[j] == celestial_parent) {
+            parent = j;
+            break;
+          }
+        }
+      }
+      members.push_back(
+          {bodies[i]->gravitational_parameter(),
+           ephemeris_->trajectory(bodies[i])->EvaluateDegreesOfFreedom(t),
+           parent});
+    }
+    AdoptTheRootless(members);
+    // The superseded model steadies the tier of a borderline pair, but only
+    // if it modelled the same tree.
+    auto const* const previous =
+        cache.bodies == bodies ? cache.model.get() : nullptr;
+    cache.model =
+        std::make_shared<AnalyticSubsystemMotion<Barycentric> const>(
+            members, t, previous);
+    cache.t = t;
+    cache.bodies = std::move(bodies);
+  }
+  return {cache.model, member};
 }
 
 not_null<std::unique_ptr<NavigationFrame>>

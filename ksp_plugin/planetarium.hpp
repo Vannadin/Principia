@@ -130,6 +130,17 @@ class Planetarium {
               PlottingToScaledSpaceDisplacementConversion
                   plotting_to_scaled_space_displacement = nullptr);
 
+  // A planetarium that owns its plotting frame: the extrapolating decorator
+  // is built for one plot and must live exactly as long as it.  The frame
+  // must not be null.
+  Planetarium(Parameters const& parameters,
+              Perspective<Navigation, Camera> perspective,
+              not_null<Ephemeris<Barycentric> const*> ephemeris,
+              std::unique_ptr<PlottingFrame const> plotting_frame,
+              PlottingToScaledSpaceConversion plotting_to_scaled_space,
+              PlottingToScaledSpaceDisplacementConversion
+                  plotting_to_scaled_space_displacement = nullptr);
+
   // NOTE: unlike `PlotMethod4`, methods 0–3 feed the trajectory to the
   // plotting frame without any subsystem conversion: they must only be given
   // trajectories represented in the plotting frame's subsystem.  They have no
@@ -280,6 +291,9 @@ class Planetarium {
   Parameters const parameters_;
   Perspective<Navigation, Camera> const perspective_;
   not_null<Ephemeris<Barycentric> const*> const ephemeris_;
+  // Null unless this planetarium owns its plotting frame, in which case
+  // `plotting_frame_` points at it.
+  std::unique_ptr<PlottingFrame const> const owned_plotting_frame_;
   not_null<PlottingFrame const*> const plotting_frame_;
   PlottingToScaledSpaceConversion plotting_to_scaled_space_;
   PlottingToScaledSpaceDisplacementConversion

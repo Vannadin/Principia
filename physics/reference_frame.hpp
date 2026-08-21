@@ -55,6 +55,12 @@ class ReferenceFrame {
   virtual Instant t_min() const = 0;
   virtual Instant t_max() const = 0;
 
+  // The bound up to which a plot may be drawn in this frame: `t_max`, except
+  // for a frame whose kinematic conversions are continued analytically beyond
+  // it.  The paths that compute data — nodes, apsides, collisions — must keep
+  // reading `t_max`.
+  virtual Instant render_t_max() const;
+
   // The subsystem of the ephemeris relative to whose local origin the
   // `InertialFrame` degrees of freedom consumed and produced by this frame are
   // represented.
