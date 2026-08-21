@@ -9,6 +9,8 @@
   <Import Project="..\shared\numerics.vcxitems" Label="Shared" />
   <Import Project="$(SolutionDir)principia.props" />
   <ItemGroup>
+    <ClInclude Include="analytic_subsystem_motion.hpp" />
+    <ClInclude Include="analytic_subsystem_motion_body.hpp" />
     <ClInclude Include="apsides.hpp" />
     <ClInclude Include="apsides_body.hpp" />
     <ClInclude Include="barycentric_rotating_reference_frame.hpp" />
@@ -93,6 +95,8 @@
     <ClInclude Include="solar_system_body.hpp" />
     <ClInclude Include="tensors.hpp" />
     <ClInclude Include="trajectory.hpp" />
+    <ClInclude Include="extrapolated_trajectory.hpp" />
+    <ClInclude Include="extrapolated_trajectory_body.hpp" />
     <ClInclude Include="translated_trajectory.hpp" />
     <ClInclude Include="translated_trajectory_body.hpp" />
     <ClInclude Include="clientele.hpp" />

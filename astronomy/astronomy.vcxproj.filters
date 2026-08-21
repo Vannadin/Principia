@@ -287,6 +287,9 @@
     <ClCompile Include="date_time_test.cpp">
       <Filter>Test Files</Filter>
     </ClCompile>
+    <ClCompile Include="analytic_subsystem_motion_test.cpp">
+      <Filter>Test Files</Filter>
+    </ClCompile>
     <ClCompile Include="interstellar_precision_test.cpp">
       <Filter>Test Files</Filter>
     </ClCompile>

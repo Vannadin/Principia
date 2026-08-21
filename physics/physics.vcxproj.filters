@@ -122,6 +122,18 @@
     <ClInclude Include="trajectory.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="analytic_subsystem_motion.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="analytic_subsystem_motion_body.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="extrapolated_trajectory.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="extrapolated_trajectory_body.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="translated_trajectory.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
