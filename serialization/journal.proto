@@ -2376,6 +2376,9 @@ message PlanetariumPlotFlightPlanSegment {
   message Out {
     required int32 vertex_count = 1;
     required XYZ anchor = 2;
+    // The number of leading vertices at or before the plotting frame's own
+    // horizon; the vertices past it are the analytically extended tail.
+    required int32 seam_vertex_count = 3;
   }
   optional In in = 1;
   optional Out out = 2;
@@ -2399,6 +2402,9 @@ message PlanetariumPlotPrediction {
   message Out {
     required int32 vertex_count = 1;
     required XYZ anchor = 2;
+    // The number of leading vertices at or before the plotting frame's own
+    // horizon; the vertices past it are the analytically extended tail.
+    required int32 seam_vertex_count = 3;
   }
   optional In in = 1;
   optional Out out = 2;
@@ -2423,6 +2429,9 @@ message PlanetariumPlotPsychohistory {
   message Out {
     required int32 vertex_count = 1;
     required XYZ anchor = 2;
+    // The number of leading vertices at or before the plotting frame's own
+    // horizon; the vertices past it are the analytically extended tail.
+    required int32 seam_vertex_count = 3;
   }
   optional In in = 1;
   optional Out out = 2;

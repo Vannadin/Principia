@@ -83,7 +83,8 @@ class Plotter {
             VertexBuffer.data,
             VertexBuffer.size,
             out int vertex_count,
-            out XYZ anchor);
+            out XYZ anchor,
+            out _);
         DrawLineMesh(ref psychohistory_mesh_,
                      vertex_count,
                      anchor,
@@ -98,7 +99,8 @@ class Plotter {
                                               VertexBuffer.data,
                                               VertexBuffer.size,
                                               out int vertex_count,
-                                              out XYZ anchor);
+                                              out XYZ anchor,
+                                              out _);
         DrawLineMesh(ref prediction_mesh_,
                      vertex_count,
                      anchor,
@@ -115,6 +117,7 @@ class Plotter {
              i < number_of_segments;
              ++i) {
           flight_plan_segment_meshes_.Add(MakeDynamicMesh());
+          flight_plan_segment_tail_meshes_.Add(MakeDynamicMesh());
         }
         for (int i = 0; i < number_of_segments; ++i) {
           bool is_burn = i % 2 == 1;
@@ -129,16 +132,29 @@ class Plotter {
               VertexBuffer.data,
               VertexBuffer.size,
               out int vertex_count,
-              out XYZ anchor);
+              out XYZ anchor,
+              out int seam_vertex_count);
           // No need for dynamic initialization, that was done above.
           DrawLineMesh(flight_plan_segment_meshes_[i],
-                       vertex_count,
+                       seam_vertex_count,
                        anchor,
                        colour,
                        is_burn
                            ? adapter_.burn_style
                            : adapter_.flight_plan_style,
                        main_reference);
+          if (seam_vertex_count < vertex_count) {
+            // The vertices past the seam are the analytically extended tail,
+            // set apart by colour: a plausible continuation, not an
+            // integration.
+            DrawLineMesh(flight_plan_segment_tail_meshes_[i],
+                         vertex_count - seam_vertex_count,
+                         anchor,
+                         adapter_.flight_plan_tail_colour,
+                         adapter_.flight_plan_tail_style,
+                         main_reference,
+                         first_vertex: seam_vertex_count);
+          }
         }
       }
     }
@@ -160,7 +176,8 @@ class Plotter {
             VertexBuffer.data,
             VertexBuffer.size,
             out int vertex_count,
-            out XYZ anchor);
+            out XYZ anchor,
+            out _);
         DrawLineMesh(ref target_psychohistory_mesh_,
                      vertex_count,
                      anchor,
@@ -176,7 +193,8 @@ class Plotter {
             VertexBuffer.data,
             VertexBuffer.size,
             out int vertex_count,
-            out XYZ anchor);
+            out XYZ anchor,
+            out _);
         DrawLineMesh(ref target_prediction_mesh_,
                      vertex_count,
                      anchor,
@@ -301,26 +319,31 @@ class Plotter {
                             UnityEngine.Color colour,
                             GLLines.Style style,
                             Vector3d? registration_reference_world = null,
-                            Vector3d? correction_reference_world = null) {
+                            Vector3d? correction_reference_world = null,
+                            int first_vertex = 0) {
     // Construct the mesh on the first call because Unity doesn't want us to do
     // that at construction.
     if (mesh == null) {
       mesh = MakeDynamicMesh();
     }
     DrawLineMesh(mesh, vertex_count, anchor, colour, style,
-                 registration_reference_world, correction_reference_world);
+                 registration_reference_world, correction_reference_world,
+                 first_vertex);
   }
 
+  // Draws the `vertex_count` vertices of the buffer starting at
+  // `first_vertex`.
   private void DrawLineMesh(UnityEngine.Mesh mesh,
                             int vertex_count,
                             XYZ anchor,
                             UnityEngine.Color colour,
                             GLLines.Style style,
                             Vector3d? registration_reference_world = null,
-                            Vector3d? correction_reference_world = null) {
-    if (vertex_count > VertexBuffer.size) {
+                            Vector3d? correction_reference_world = null,
+                            int first_vertex = 0) {
+    if (first_vertex + vertex_count > VertexBuffer.size) {
       Log.Fatal("Trying to draw " +
-                vertex_count +
+                (first_vertex + vertex_count) +
                 " vertices, maximum is " +
                 VertexBuffer.size);
     }
@@ -342,17 +365,17 @@ class Plotter {
         // Fade from the opacity of `colour` (when i = 0) down to 20% of that
         // opacity.
         faded_colour.a *= 1 - 0.8f * (i / (float)vertex_count);
-        colours_[i] = faded_colour;
+        colours_[first_vertex + i] = faded_colour;
       }
     } else {
       for (int i = 0; i < vertex_count; ++i) {
-        colours_[i] = colour;
+        colours_[first_vertex + i] = colour;
       }
     }
 
     mesh.colors = colours_;
     mesh.SetIndices(indices_,
-                    indicesStart: 0,
+                    indicesStart: first_vertex,
                     indicesLength: index_count,
                     style == GLLines.Style.Dashed
                         ? UnityEngine.MeshTopology.Lines
@@ -434,6 +457,8 @@ class Plotter {
   private UnityEngine.Mesh psychohistory_mesh_;
   private UnityEngine.Mesh prediction_mesh_;
   private readonly List<UnityEngine.Mesh> flight_plan_segment_meshes_ =
+      new List<UnityEngine.Mesh>();
+  private readonly List<UnityEngine.Mesh> flight_plan_segment_tail_meshes_ =
       new List<UnityEngine.Mesh>();
   private readonly List<UnityEngine.Mesh> equipotential_meshes_ =
       new List<UnityEngine.Mesh>();

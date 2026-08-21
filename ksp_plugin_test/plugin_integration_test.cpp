@@ -3583,6 +3583,7 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
 
   std::vector<ScaledSpacePoint> vertices(100);
   int vertex_count = 0;
+  int seam_vertex_count = 0;
   interface::XYZ anchor;
   interface::principia__PlanetariumPlotFlightPlanSegment(
       planetarium.get(),
@@ -3593,7 +3594,8 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
       vertices.data(),
       vertices.size(),
       &vertex_count,
-      &anchor);
+      &anchor,
+      &seam_vertex_count);
 
   ASSERT_GT(vertex_count, 1);
   // `XYZ` and `ScaledSpacePoint` are interface PODs without arithmetic.

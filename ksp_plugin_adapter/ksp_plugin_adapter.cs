@@ -158,6 +158,11 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   internal GLLines.Style prediction_style = GLLines.Style.Solid;
   internal UnityEngine.Color flight_plan_colour = XKCDColors.PeriwinkleBlue;
   internal GLLines.Style flight_plan_style = GLLines.Style.Dashed;
+  // The analytically extended tail of a flight plan, beyond the plotting
+  // frame's own horizon: a plausible continuation, not an integration, so it
+  // is set apart by colour.
+  internal UnityEngine.Color flight_plan_tail_colour = XKCDColors.Orange;
+  internal GLLines.Style flight_plan_tail_style = GLLines.Style.Dashed;
   internal UnityEngine.Color burn_colour = XKCDColors.Pink;
   internal GLLines.Style burn_style = GLLines.Style.Solid;
   internal UnityEngine.Color target_history_colour = XKCDColors.Goldenrod;
@@ -3457,6 +3462,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
         draw_styles.GetAtMostOneNode("flight_plan");
     flight_plan_parameters?.GetDrawStyle(out flight_plan_colour,
                                          out flight_plan_style);
+    ConfigNode flight_plan_tail_parameters =
+        draw_styles.GetAtMostOneNode("flight_plan_tail");
+    flight_plan_tail_parameters?.GetDrawStyle(out flight_plan_tail_colour,
+                                              out flight_plan_tail_style);
     ConfigNode burn_parameters = draw_styles.GetAtMostOneNode("burn");
     burn_parameters?.GetDrawStyle(out burn_colour, out burn_style);
     ConfigNode target_history_parameters =

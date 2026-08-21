@@ -218,6 +218,10 @@ class Planetarium {
   // scaled-space origin, and the caller must translate the drawn mesh by the
   // anchor.  With a single subsystem the anchor is zero and the vertices
   // reproduce the absolute rendering bit for bit.
+  // If `seam_vertex_count` is not null it receives the number of leading
+  // vertices at or before the plotting frame's own horizon; the plot is then
+  // emitted in two runs seamed at that horizon, so that the vertices past it
+  // — the analytically extended tail — start exactly at the seam.
   void PlotMethod4(
       Trajectory<Barycentric> const& trajectory,
       DiscreteTrajectory<Barycentric>::iterator begin,
@@ -229,7 +233,8 @@ class Planetarium {
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
           Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
       R3Element<double>* anchor_out = nullptr,
-      std::optional<Registration> const& registration = std::nullopt) const;
+      std::optional<Registration> const& registration = std::nullopt,
+      int* seam_vertex_count = nullptr) const;
 
   // The same method, operating on the `Trajectory` interface for any frame that
   // can be converted to `Navigation`.  `placement` and `registration` are only

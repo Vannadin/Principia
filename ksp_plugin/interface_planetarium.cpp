@@ -194,13 +194,15 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
     ScaledSpacePoint* const vertices,
     int const vertices_size,
     int* const vertex_count,
-    XYZ* const anchor) {
+    XYZ* const anchor,
+    int* const seam_vertex_count) {
   journal::Method<journal::PlanetariumPlotFlightPlanSegment> m(
       {planetarium, plugin, vessel_guid, index, t_max, vertices, vertices_size},
-      {vertex_count, anchor});
+      {vertex_count, anchor, seam_vertex_count});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  *seam_vertex_count = 0;
   R3Element<double> anchor_coordinates;
 
   Vessel const& vessel = *plugin->GetVessel(vessel_guid);
@@ -226,7 +228,8 @@ void __cdecl principia__PlanetariumPlotFlightPlanSegment(
         vertices_size,
         vessel.flight_plan().placement(),
         AnchorFor(registration, anchor_coordinates),
-        registration);
+        registration,
+        seam_vertex_count);
   }
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
@@ -242,13 +245,15 @@ void __cdecl principia__PlanetariumPlotPrediction(
     ScaledSpacePoint* const vertices,
     int const vertices_size,
     int* const vertex_count,
-    XYZ* const anchor) {
+    XYZ* const anchor,
+    int* const seam_vertex_count) {
   journal::Method<journal::PlanetariumPlotPrediction> m(
       {planetarium, plugin, vessel_guid, t_max, vertices, vertices_size},
-      {vertex_count, anchor});
+      {vertex_count, anchor, seam_vertex_count});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  *seam_vertex_count = 0;
   R3Element<double> anchor_coordinates;
 
   auto const vessel = plugin->GetVessel(vessel_guid);
@@ -266,7 +271,8 @@ void __cdecl principia__PlanetariumPlotPrediction(
       vertices_size,
       vessel->placement(),
       AnchorFor(registration, anchor_coordinates),
-      registration);
+      registration,
+      seam_vertex_count);
   *anchor = ToXYZ(anchor_coordinates);
   return m.Return();
 }
@@ -284,7 +290,8 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
     ScaledSpacePoint* const vertices,
     int const vertices_size,
     int* const vertex_count,
-    XYZ* const anchor) {
+    XYZ* const anchor,
+    int* const seam_vertex_count) {
   journal::Method<journal::PlanetariumPlotPsychohistory> m(
       {planetarium,
        plugin,
@@ -293,10 +300,11 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
        t_max,
        vertices,
        vertices_size},
-      {vertex_count, anchor});
+      {vertex_count, anchor, seam_vertex_count});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  *seam_vertex_count = 0;
   R3Element<double> anchor_coordinates;
 
   // Do not plot the psychohistory when there is a target vessel as it is
@@ -330,7 +338,8 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
         vertices_size,
         vessel->placement(),
         AnchorFor(registration, anchor_coordinates),
-        registration);
+        registration,
+        seam_vertex_count);
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();
   }

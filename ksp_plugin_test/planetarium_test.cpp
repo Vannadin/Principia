@@ -773,6 +773,36 @@ TEST_F(PlanetariumTest, PlotMethod4ThroughAnExtrapolatingFrame) {
   EXPECT_THAT(extended_points.back().z,
               ::testing::FloatNear(static_cast<float>(expected_at_end.z),
                                    1e-5f));
+
+  // The seam count separates the head from the tail, and the tail's first
+  // vertex sits exactly at the horizon.
+  std::vector<ScaledSpacePoint> seamed_points;
+  int seam_vertex_count = 0;
+  extended.PlotMethod4(
+      vessel_trajectory,
+      vessel_trajectory.begin(),
+      vessel_trajectory.end(),
+      /*t_max=*/InfiniteFuture,
+      /*reverse=*/false,
+      [&seamed_points](ScaledSpacePoint const& point) {
+        seamed_points.push_back(point);
+      },
+      /*max_points=*/std::numeric_limits<int>::max(),
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      /*anchor_out=*/nullptr,
+      /*registration=*/std::nullopt,
+      &seam_vertex_count);
+  ASSERT_GT(seam_vertex_count, 0);
+  ASSERT_LT(seam_vertex_count, static_cast<int>(seamed_points.size()));
+  EXPECT_THAT(seamed_points[seam_vertex_count].x,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.x),
+                                   1e-5f));
+  EXPECT_THAT(seamed_points[seam_vertex_count].y,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.y),
+                                   1e-5f));
+  EXPECT_THAT(seamed_points.back().x,
+              ::testing::FloatNear(static_cast<float>(expected_at_end.x),
+                                   1e-5f));
 }
 
 // An anchored plot at an interstellar distance from the plotting frame's
