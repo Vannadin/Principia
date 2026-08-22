@@ -532,6 +532,11 @@ class Vessel {
   std::queue<ReanimatedTrajectory> reanimated_trajectories_
       ABSL_GUARDED_BY(lock_);
 
+  // Set when the reanimator cannot proceed — the ephemeris itself has nothing
+  // this far back — so that waiters are released instead of expecting a
+  // trajectory that will never come.
+  bool reanimation_abandoned_ ABSL_GUARDED_BY(lock_) = false;
+
   // The last (most recent) segment of the `history_` prior to the
   // `psychohistory_`.  May be identical to `history_`.  Always identical to
   // `std::prev(psychohistory_)`.

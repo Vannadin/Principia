@@ -761,6 +761,19 @@ TEST_F(FlightPlanTest, HorizonOutOfReachIsNotPursued) {
   EXPECT_THAT(ephemeris_->t_max(), Lt(out_of_reach));
 }
 
+// A plan starting before anything the ephemeris can be reanimated to comes up
+// anomalous instead of waiting forever (or evaluating out of range).
+TEST_F(FlightPlanTest, StartingBeforeTheEphemerisIsAnomalous) {
+  FlightPlan plan(1 * Kilogram,
+                  /*initial_time=*/t0_ - 10 * Day,
+                  root_.front().degrees_of_freedom,
+                  /*desired_final_time=*/t0_ + 1.5 * Second,
+                  ephemeris_.get(),
+                  flight_plan_->adaptive_step_parameters(),
+                  flight_plan_->generalized_adaptive_step_parameters());
+  EXPECT_EQ(FlightPlan::beyond_reanimation, plan.anomalous_status().code());
+}
+
 // A horizon within reach, in the field, is pursued: the void exemption applies
 // only when the final coast is the analytic line.  Analysis is disabled so
 // that the coast analyser's own prolongation cannot mask a missing

@@ -869,15 +869,18 @@ void Ephemeris<Frame>::RequestReanimation(Instant const& desired_t_min) {
 
 template<typename Frame>
 void Ephemeris<Frame>::AwaitReanimation(Instant const& desired_t_min) {
-  auto desired_t_min_reached = [this, desired_t_min]() {
+  // The full-reanimation escape keeps a wait for a time below the oldest
+  // checkpoint from blocking forever; the caller must check `t_min()` to see
+  // whether it got what it asked for.
+  auto reached_or_done = [this, desired_t_min]() {
     lock_.AssertReaderHeld();
-    return t_min_locked() <= desired_t_min;
+    return DesiredTMinReachedOrFullyReanimated(desired_t_min);
   };
 
   Client const me(desired_t_min, reanimator_clientele_);
   RequestReanimation(desired_t_min);
   absl::ReaderMutexLock l(&lock_);
-  lock_.Await(absl::Condition(&desired_t_min_reached));
+  lock_.Await(absl::Condition(&reached_or_done));
 }
 
 template<typename Frame>
@@ -1837,7 +1840,12 @@ template<typename Frame>
 bool Ephemeris<Frame>::DesiredTMinReachedOrFullyReanimated(
     Instant const& desired_t_min) {
   lock_.AssertReaderHeld();
+  // At birth the watermark is `InfinitePast`: everything is animate, and
+  // `Reanimate` is structurally a no-op.  Anything that trims the trajectories
+  // must set the watermark to the checkpoint it trimmed to, or both the
+  // reanimation and this escape would give up on a rebuildable past.
   return t_min_locked() <= desired_t_min ||
+         oldest_reanimated_checkpoint_ == InfinitePast ||
          oldest_reanimated_checkpoint_ == checkpointer_->oldest_checkpoint();
 }
 

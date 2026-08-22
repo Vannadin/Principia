@@ -215,6 +215,28 @@ TEST_P(EphemerisTest, ProlongSpecialCases) {
   EXPECT_EQ(t_max, ephemeris.t_max());
 }
 
+// Awaiting a time that no checkpoint can reach must return — with `t_min`
+// falling short — rather than block forever.
+TEST_P(EphemerisTest, AwaitReanimationBeforeTheFirstCheckpoint) {
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  std::vector<DegreesOfFreedom<ICRS>> initial_state;
+  Position<ICRS> centre_of_mass;
+  Time period;
+  SetUpEarthMoonSystem(bodies, initial_state, centre_of_mass, period);
+
+  Ephemeris<ICRS> ephemeris(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      /*accuracy_parameters=*/{/*fitting_tolerance=*/5 * Milli(Metre),
+                               /*geopotential_tolerance=*/0x1p-24},
+      Ephemeris<ICRS>::FixedStepParameters(integrator(), period / 100));
+  EXPECT_OK(ephemeris.Prolong(t0_ + period));
+
+  ephemeris.AwaitReanimation(t0_ - 1 * Second);
+  EXPECT_EQ(t0_, ephemeris.t_min());
+}
+
 TEST_P(EphemerisTest, FlowWithAdaptiveStepSpecialCase) {
   Length const distance = 1e9 * Metre;
   Speed const velocity = 1e3 * Metre / Second;

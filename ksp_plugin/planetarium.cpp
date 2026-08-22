@@ -419,9 +419,12 @@ ScaledSpacePoint Planetarium::PlotPoint(
     R3Element<double>& anchor_out,
     Registration const& registration) const {
   // This mirrors `PlotMethod4Anchored` for a single point; see there for the
-  // error analysis of each term.
+  // error analysis of each term.  A frame that does not cover `t` maps the
+  // point through the nearest state it has, on either side; the point itself
+  // stays at its own time.
   CHECK(plotting_to_scaled_space_displacement_ != nullptr);
-  Instant const t_frame = std::min(t, plotting_frame_->render_t_max());
+  Instant const t_frame = std::min(std::max(t, plotting_frame_->t_min()),
+                                   plotting_frame_->render_t_max());
   Instant const t_ref = registration.time;
 
   Displacement<Barycentric> offset;

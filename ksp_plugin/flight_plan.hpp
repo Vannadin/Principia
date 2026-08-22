@@ -196,6 +196,10 @@ class FlightPlan {
 
   static constexpr absl::StatusCode bad_desired_final_time =
       absl::StatusCode::kOutOfRange;
+  // Kept off the codes the flight planner maps to a specific diagnosis: the
+  // generic display shows this status's own message.
+  static constexpr absl::StatusCode beyond_reanimation =
+      absl::StatusCode::kNotFound;
   static constexpr absl::StatusCode does_not_fit =
       absl::StatusCode::kOutOfRange;
   static constexpr absl::StatusCode singular =

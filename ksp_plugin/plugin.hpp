@@ -302,9 +302,9 @@ class Plugin {
   // The degrees of freedom of the celestial with the given `Index` at `t`, in
   // the representation of its own subsystem: from its trajectory within the
   // ephemeris' reach, and from the analytic model of its subsystem beyond it.
-  virtual DegreesOfFreedom<Barycentric> CelestialFutureDegreesOfFreedom(
-      Index index,
-      Instant const& t) const;
+  // Nothing covers the times before the trajectory: nullopt there.
+  virtual std::optional<DegreesOfFreedom<Barycentric>>
+  CelestialFutureDegreesOfFreedom(Index index, Instant const& t) const;
 
   // Makes the vessel with the given GUID inherit the placement — subsystem
   // and anchor — of its parent vessel, if it is fresh (no trajectory, parts,

@@ -91,6 +91,11 @@ inline absl::Status Singular(Square<Speed> const& Δv²) {
                       absl::StrCat("Singular: ", DebugString(Δv²)));
 }
 
+inline absl::Status BeyondReanimation() {
+  return absl::Status(FlightPlan::beyond_reanimation,
+                      "The ephemeris cannot be reanimated this far back");
+}
+
 }  // namespace
 
 FlightPlan::FlightPlan(
@@ -585,6 +590,9 @@ absl::Status FlightPlan::BurnSegment(
     Instant const starting_time = segment->back().time;
     if (starting_time < ephemeris_->t_min()) {
       ephemeris_->AwaitReanimation(starting_time);
+      if (starting_time < ephemeris_->t_min()) {
+        return BeyondReanimation();
+      }
     }
 
     if (manœuvre.is_inertially_fixed()) {
@@ -619,6 +627,13 @@ absl::Status FlightPlan::CoastSegment(
   Instant const starting_time = segment->back().time;
   if (starting_time < ephemeris_->t_min()) {
     ephemeris_->AwaitReanimation(starting_time);
+    if (starting_time < ephemeris_->t_min()) {
+      // This final coast ran and did not cross the void.
+      if (may_coast_the_void) {
+        last_coast_is_void_ = false;
+      }
+      return BeyondReanimation();
+    }
   }
 
   Instant const void_final_time =

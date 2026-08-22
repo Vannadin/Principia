@@ -211,14 +211,16 @@ void __cdecl principia__PlanetariumPlotArrivalGhost(
     auto const t = vessel.flight_plan().actual_final_time();
     auto const degrees_of_freedom =
         plugin->CelestialFutureDegreesOfFreedom(celestial_index, t);
-    ScaledSpacePoint const point = planetarium->PlotPoint(
-        t,
-        degrees_of_freedom.position(),
-        {plugin->GetCelestial(celestial_index).subsystem(), std::nullopt},
-        anchor_coordinates,
-        *registration);
-    ghost_coordinates = R3Element<double>(point.x, point.y, point.z);
-    *plotted = true;
+    if (degrees_of_freedom.has_value()) {
+      ScaledSpacePoint const point = planetarium->PlotPoint(
+          t,
+          degrees_of_freedom->position(),
+          {plugin->GetCelestial(celestial_index).subsystem(), std::nullopt},
+          anchor_coordinates,
+          *registration);
+      ghost_coordinates = R3Element<double>(point.x, point.y, point.z);
+      *plotted = true;
+    }
   }
   *ghost = ToXYZ(ghost_coordinates);
   *anchor = ToXYZ(anchor_coordinates);

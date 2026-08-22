@@ -613,7 +613,7 @@ void Vessel::AwaitReanimation(Instant const& desired_t_min,
                               bool const quiet) {
   auto has_reanimated_trajectories = [this] {
     lock_.AssertReaderHeld();
-    return !reanimated_trajectories_.empty();
+    return reanimation_abandoned_ || !reanimated_trajectories_.empty();
   };
 
   Client const me(desired_t_min, reanimator_clientele_);
@@ -1426,6 +1426,12 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
   // Make sure that the ephemeris covers the times that we are going to
   // reanimate.
   ephemeris_->AwaitReanimation(t_initial);
+  if (ephemeris_->t_min() > t_initial) {
+    absl::MutexLock l(&lock_);
+    reanimation_abandoned_ = true;
+    return absl::NotFoundError(
+        "The ephemeris cannot be reanimated this far back");
+  }
   int const checkpoint_subsystem = message.subsystem();
   std::optional<Ephemeris<Barycentric>::Anchor> checkpoint_anchor;
   if (message.has_anchor()) {
@@ -1462,7 +1468,8 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
 
 bool Vessel::DesiredTMinReachedOrFullyReanimated(Instant const& desired_t_min) {
   lock_.AssertReaderHeld();
-  return trajectory_.t_min() <= desired_t_min ||
+  return reanimation_abandoned_ ||
+         trajectory_.t_min() <= desired_t_min ||
          oldest_reanimated_checkpoint_ == checkpointer_->oldest_checkpoint();
 }
 

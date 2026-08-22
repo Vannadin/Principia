@@ -3330,6 +3330,25 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidFlightPlanManœuvreIsAnomalous) {
               Lt(t0 + 25 * 365.25 * Day));
 }
 
+// The arrival ghost's source declines a time before the celestial's
+// trajectory instead of evaluating out of range.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       CelestialFutureDegreesOfFreedomBelowTheTrajectory) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+  plugin->AdvanceTime(Instant() + 100 * Second, 1 * Radian);
+
+  auto const& star_trajectory = plugin->GetCelestial(star_a).trajectory();
+  EXPECT_FALSE(plugin->CelestialFutureDegreesOfFreedom(
+                   star_a, star_trajectory.t_min() - 1 * Second)
+                   .has_value());
+  EXPECT_TRUE(plugin->CelestialFutureDegreesOfFreedom(
+                  star_a, star_trajectory.t_min())
+                  .has_value());
+}
+
 // A void plan within the ephemeris's reach needs the ephemeris no more than
 // one beyond it: the prolongator must not pursue a horizon that only the
 // analytic line reaches.

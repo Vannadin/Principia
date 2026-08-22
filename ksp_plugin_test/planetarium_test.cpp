@@ -848,6 +848,29 @@ TEST_F(PlanetariumTest, PlotMethod4ThroughAnExtrapolatingFrame) {
               ::testing::DoubleNear(expected_ghost.y, 0.02));
   EXPECT_THAT(ghost.z + ghost_anchor.z,
               ::testing::DoubleNear(expected_ghost.z, 0.02));
+
+  // Below the frame's own past, the point is mapped through the oldest state
+  // the frame has.
+  R3Element<double> before_anchor;
+  ScaledSpacePoint const before = extended.PlotPoint(
+      t0_ - period,
+      planet_position,
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      before_anchor,
+      ghost_registration);
+  R3Element<double> oldest_anchor;
+  ScaledSpacePoint const oldest = extended.PlotPoint(
+      t0_,
+      planet_position,
+      Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+      oldest_anchor,
+      ghost_registration);
+  EXPECT_EQ(oldest.x, before.x);
+  EXPECT_EQ(oldest.y, before.y);
+  EXPECT_EQ(oldest.z, before.z);
+  EXPECT_EQ(oldest_anchor.x, before_anchor.x);
+  EXPECT_EQ(oldest_anchor.y, before_anchor.y);
+  EXPECT_EQ(oldest_anchor.z, before_anchor.z);
 }
 
 // An anchored plot at an interstellar distance from the plotting frame's
