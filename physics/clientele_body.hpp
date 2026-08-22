@@ -26,7 +26,7 @@ void Clientele<Key>::Leave(Key const& key) {
 }
 
 template<typename Key>
-Key const& Clientele<Key>::first() const {
+Key Clientele<Key>::first() const {
   absl::MutexLock l(&lock_);
   if (auto const it = clients_.begin(); it == clients_.end()) {
     return default_key_;

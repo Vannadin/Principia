@@ -25,8 +25,10 @@ class Clientele {
   void Join(Key const& key);
   void Leave(Key const& key);
 
-  // Returns the smallest key of all clients currently in this object.
-  Key const& first() const;
+  // Returns the smallest key of all clients currently in this object.  By
+  // value: a reference into the container would dangle as soon as another
+  // client joined or left.
+  Key first() const;
 
  private:
   Key const default_key_;
@@ -41,6 +43,10 @@ class Client {
  public:
   Client(Key const& key, Clientele<Key>& clientele);
   ~Client();
+
+  // A copy would leave more often than it joined.
+  Client(Client const&) = delete;
+  Client& operator=(Client const&) = delete;
 
  private:
   Key const t_;
