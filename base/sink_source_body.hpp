@@ -57,12 +57,21 @@ template<typename Element>
 char* ArraySink<Element>::GetAppendBuffer(
     std::size_t const min_size,
     std::size_t const desired_size_hint,
-    char* const /*scratch*/,
-    std::size_t const /*scratch_size*/,
+    char* const scratch,
+    std::size_t const scratch_size,
     std::size_t* const allocated_size) {
   // The caller is entitled to write `min_size` characters into the buffer we
-  // return, so we must not return a shorter one.
-  CHECK_LE(static_cast<std::int64_t>(min_size), array_.size - next_to_write_);
+  // return, so we must not return a shorter one.  If the array cannot
+  // guarantee that (the compressor sizes its requests from the actual number
+  // of commands, which may exceed the worst case assumed by
+  // `MaxCompressedLength`) we return the caller-owned scratch buffer, as the
+  // `Sink` contract prescribes; the bytes actually written then come back
+  // through `Append`.
+  if (static_cast<std::int64_t>(min_size) > array_.size - next_to_write_) {
+    CHECK_LE(min_size, scratch_size);
+    *allocated_size = scratch_size;
+    return scratch;
+  }
   *allocated_size = std::min(static_cast<std::int64_t>(desired_size_hint),
                              array_.size - next_to_write_);
   return reinterpret_cast<char*>(array_.data + next_to_write_);

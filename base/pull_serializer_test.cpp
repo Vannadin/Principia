@@ -14,6 +14,7 @@
 #include "absl/log/log.h"
 #include "base/array.hpp"
 #include "base/not_null.hpp"
+#include "base/sink_source.hpp"
 #include "gipfeli/compression.h"
 #include "gipfeli/gipfeli.h"
 #include "gmock/gmock.h"
@@ -35,6 +36,7 @@ using ::testing::ElementsAreArray;
 using namespace principia::base::_array;
 using namespace principia::base::_not_null;
 using namespace principia::base::_pull_serializer;
+using namespace principia::base::_sink_source;
 
 namespace this_internal = _pull_serializer::internal;
 
@@ -228,6 +230,75 @@ TEST_F(PullSerializerTest, SerializationThreading) {
       }
     }
   }
+}
+
+TEST(ArraySinkTest, GetAppendBufferFallsBackToScratch) {
+  // The compressor may request more room than the array has left even though
+  // its actual output fits; the `Sink` contract then lets us return the
+  // caller-owned scratch buffer (seen in the field: 82050 vs. 82049).
+  std::uint8_t data[16];
+  ArraySink<std::uint8_t> sink(Array<std::uint8_t>(data, 16));
+  sink.Append("0123456789", 10);
+
+  // A request that fits — exactly — stays on the zero-copy path.
+  char scratch[32];
+  std::size_t allocated_size;
+  char* buffer = sink.GetAppendBuffer(/*min_size=*/6,
+                                      /*desired_size_hint=*/32,
+                                      scratch,
+                                      /*scratch_size=*/32,
+                                      &allocated_size);
+  EXPECT_EQ(reinterpret_cast<char*>(&data[10]), buffer);
+  EXPECT_EQ(6, allocated_size);
+
+  buffer = sink.GetAppendBuffer(/*min_size=*/7,
+                                /*desired_size_hint=*/7,
+                                scratch,
+                                /*scratch_size=*/32,
+                                &allocated_size);
+  EXPECT_EQ(scratch, buffer);
+  EXPECT_GE(allocated_size, 7);
+
+  // The actual output is smaller than the request and must still fit.
+  std::memcpy(buffer, "abcdef", 6);
+  sink.Append(buffer, 6);
+  EXPECT_EQ(16, sink.array().size);
+  EXPECT_EQ(0, std::memcmp(data, "0123456789abcdef", 16));
+}
+
+TEST(ArraySinkTest, CompressorOverRequestGoesThroughScratch) {
+  // Compress a compressible block once to learn its actual output size, then
+  // again into an array with exactly that much room: the compressor's
+  // conservative request no longer fits and must take the scratch path —
+  // exercising the `AppendMemBlock` handoff — while producing the same bytes.
+  std::vector<std::uint8_t> input;
+  std::uint8_t filler = 0;
+  while (input.size() < std::size_t{64 << 10}) {
+    for (std::uint8_t const c : {'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'}) {
+      input.push_back(c);
+    }
+    input.push_back(++filler);
+  }
+  input.resize(std::size_t{64 << 10});
+  auto const compressor = google::compression::NewGipfeliCompressor();
+  auto const compress =
+      [&compressor, &input](Array<std::uint8_t> const array) {
+    ArraySource<std::uint8_t> source(
+        Array<std::uint8_t>(input.data(), input.size()));
+    ArraySink<std::uint8_t> sink(array);
+    compressor->CompressStream(&source, &sink);
+    return sink.array().size;
+  };
+
+  UniqueArray<std::uint8_t> const generous(2 * input.size());
+  std::int64_t const actual_size = compress(generous.get());
+  EXPECT_LT(0, actual_size);
+  EXPECT_LT(actual_size, static_cast<std::int64_t>(input.size()));
+
+  UniqueArray<std::uint8_t> const tight(actual_size);
+  EXPECT_EQ(actual_size, compress(tight.get()));
+  EXPECT_EQ(0,
+            std::memcmp(generous.data.get(), tight.data.get(), actual_size));
 }
 
 }  // namespace base
