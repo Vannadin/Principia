@@ -60,7 +60,6 @@ using namespace std::chrono_literals;
 
 constexpr Length pre_ἐρατοσθένης_default_ephemeris_fitting_tolerance =
     1 * Milli(Metre);
-constexpr Time max_time_between_checkpoints = 180 * Day;
 // Below this threshold detect a collision to prevent the integrator and the
 // downsampling from going postal.
 constexpr double min_radius_tolerance = 0.99;
@@ -893,38 +892,57 @@ Client<Instant> Ephemeris<Frame>::GuardPast(Instant const& t) {
 
 template<typename Frame>
 void Ephemeris<Frame>::EvictBefore(Instant const& t) {
-  // Quiesce the reanimator first, without holding the lock (it needs the lock
-  // to finish): a reanimation stitched against the evicted state would be
+  // Never trim past what a client needs — a waiter could no longer be woken,
+  // a guard is reading — nor into the newest checkpoint interval, where the
+  // integration lives.  The watermark comparison keeps the trimmed frontier
+  // and the reanimation bookkeeping in exact agreement — see
+  // `DesiredTMinReachedOrFullyReanimated`.
+  auto const trimming_checkpoint = [this, &t]() {
+    lock_.AssertReaderHeld();
+    return checkpointer_->checkpoint_at_or_before(
+        std::min({t,
+                  reanimator_clientele_.first(),
+                  eviction_clientele_.first()}));
+  };
+  auto const nothing_to_trim = [this](Instant const& checkpoint) {
+    lock_.AssertReaderHeld();
+    return empty() ||
+           checkpoint <= oldest_reanimated_checkpoint_ ||
+           checkpoint == checkpointer_->newest_checkpoint();
+  };
+
+  // This runs at the `Prolong` cadence; do not disturb the reanimator when
+  // there is nothing to trim.
+  {
+    absl::ReaderMutexLock l(&lock_);
+    if (nothing_to_trim(trimming_checkpoint())) {
+      return;
+    }
+  }
+
+  // Quiesce the reanimator, without holding the lock (it needs the lock to
+  // finish): a reanimation stitched against the evicted state would be
   // misaligned.
   reanimator_.Stop();
 
   std::vector<not_null<std::unique_ptr<Polynomial<Position<Frame>, Instant>>>>
       graveyard;
-  std::optional<Instant> interrupted_pursuit;
+  Instant waiter = InfiniteFuture;
   {
     absl::MutexLock l(&lock_);
-    interrupted_pursuit = last_desired_t_min_;
-    // Never trim past what a waiting client needs — it could no longer be
-    // woken — nor into the newest checkpoint interval, where the integration
-    // lives.  The watermark comparison keeps the trimmed frontier and the
-    // reanimation bookkeeping in exact agreement — see
-    // `DesiredTMinReachedOrFullyReanimated`.
-    Instant const checkpoint = checkpointer_->checkpoint_at_or_before(
-        std::min({t,
-                  reanimator_clientele_.first(),
-                  eviction_clientele_.first()}));
-    if (!empty() &&
-        checkpoint > oldest_reanimated_checkpoint_ &&
-        checkpoint != checkpointer_->newest_checkpoint()) {
+    waiter = reanimator_clientele_.first();
+    Instant const checkpoint = trimming_checkpoint();
+    if (!nothing_to_trim(checkpoint)) {
       for (auto const& trajectory : trajectories_) {
         CHECK_OK(trajectory->EvictBefore(checkpoint, graveyard));
       }
       oldest_reanimated_checkpoint_ = checkpoint;
     }
   }
-  // Resume any pursuit that the quiescing interrupted.
-  if (interrupted_pursuit.has_value()) {
-    RequestReanimation(interrupted_pursuit.value());
+  // Resume only what someone still waits for: resuming a stale pursuit would
+  // re-integrate what was just trimmed.
+  if (waiter < InfiniteFuture) {
+    RequestReanimation(waiter);
   }
   if (!graveyard.empty()) {
     // Freeing the polynomials one by one is a visible hitch at this quantity;

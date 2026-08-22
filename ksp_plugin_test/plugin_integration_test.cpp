@@ -3330,6 +3330,44 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidFlightPlanManœuvreIsAnomalous) {
               Lt(t0 + 25 * 365.25 * Day));
 }
 
+// Under sustained warp the plugin trims the ephemeris's old polynomials —
+// the practical ceiling of century-scale play — and the trimmed past
+// rebuilds on demand and stays while the requests recur.
+TEST_F(PluginIntegrationTestWithoutPlugin, EphemerisPastIsEvictedUnderWarp) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+  auto const& star_trajectory = plugin->GetCelestial(star_a).trajectory();
+
+  Instant const t0 = Instant();
+  for (Instant t = t0 + 30 * Day; t <= t0 + 1100 * Day; t += 30 * Day) {
+    plugin->AdvanceTime(t, 1 * Radian);
+  }
+  EXPECT_THAT(star_trajectory.t_min(), Gt(t0));
+  EXPECT_THAT(star_trajectory.t_min(), Le(t0 + 1100 * Day - 360 * Day));
+
+  // The plotting of the past asks for it back.
+  plugin->RequestReanimation(t0);
+  using namespace std::chrono_literals;
+  for (int i = 0; i < 600 && star_trajectory.t_min() > t0; ++i) {
+    std::this_thread::sleep_for(50ms);
+  }
+  EXPECT_EQ(t0, star_trajectory.t_min());
+
+  // While the request is fresh, advancing does not trim it away again.
+  plugin->AdvanceTime(t0 + 1330 * Day, 1 * Radian);
+  EXPECT_EQ(t0, star_trajectory.t_min());
+
+  // Once the request has stopped recurring, the trim resumes.
+  Instant t = t0 + 1330 * Day;
+  for (int i = 0; i < 130; ++i) {
+    t += 1 * Hour;
+    plugin->AdvanceTime(t, 1 * Radian);
+  }
+  EXPECT_THAT(star_trajectory.t_min(), Gt(t0));
+}
+
 // The arrival ghost's source declines a time before the celestial's
 // trajectory instead of evaluating out of range.
 TEST_F(PluginIntegrationTestWithoutPlugin,

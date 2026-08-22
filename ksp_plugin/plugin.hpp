@@ -709,6 +709,14 @@ class Plugin {
   // Whether `loaded_vessels_` contains `vessel`.
   bool is_loaded(not_null<Vessel*> vessel) const;
 
+  // Trims the ephemeris's past that nothing still reads: older than the
+  // retention behind the current time, and not covered by a recent
+  // reanimation request from the plotting of the past — the map re-requests
+  // every frame it is open, so a request that stopped recurring no longer
+  // floors the trim.  Called once per `AdvanceTime`, throttled to the
+  // checkpoint granularity.
+  void EvictEphemerisPast();
+
   // Initialization objects.
   ElementaryFunctionsConfigurationSaver configuration_saver_;  // Must be first.
   bool uses_correct_sin_cos_ = true;
@@ -736,6 +744,12 @@ class Plugin {
 
   // Not null after initialization.
   std::unique_ptr<Ephemeris<Barycentric>> ephemeris_;
+
+  // Bookkeeping for `EvictEphemerisPast`; transient, main thread only.
+  // `mutable` because `RequestReanimation` is const.
+  mutable Instant last_past_plot_request_ = InfinitePast;
+  mutable int steps_since_past_plot_request_ =
+      std::numeric_limits<int>::max();
 
   // The parameters for computing the various trajectories.
   DiscreteTrajectorySegment<Barycentric>::DownsamplingParameters

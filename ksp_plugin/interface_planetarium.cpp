@@ -368,8 +368,11 @@ void __cdecl principia__PlanetariumPlotPsychohistory(
 
     // Since we would want to plot starting from `desired_first_time`, ask the
     // reanimator to reconstruct the past.  That may take a while, during which
-    // time the history will be shorter than desired.
+    // time the history will be shorter than desired.  The plugin's request
+    // covers the ephemeris, whose frames the plot evaluates — and floors the
+    // trim while this recurs.
     vessel->RequestReanimation(desired_first_time);
+    plugin->RequestReanimation(desired_first_time);
 
     planetarium->PlotMethod4(
         trajectory,

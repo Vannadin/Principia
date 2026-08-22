@@ -1057,8 +1057,27 @@ void Plugin::AdvanceTime(Instant const& t, Angle const& planetarium_rotation) {
   current_time_ = t;
   planetarium_rotation_ = planetarium_rotation;
   ephemeris_->Prolong(current_time_).IgnoreError();
+  EvictEphemerisPast();
   UpdatePlanetariumRotation();
   loaded_vessels_.clear();
+}
+
+void Plugin::EvictEphemerisPast() {
+  // The requests from the plotting of the past recur every frame the map is
+  // open; one that has stopped recurring for this many frames no longer
+  // floors the trim.  No further throttle: `EvictBefore` declines cheaply
+  // when the floor's checkpoint has nothing left to trim.
+  constexpr int plot_request_recurrence_frames = 120;
+  if (steps_since_past_plot_request_ < plot_request_recurrence_frames) {
+    ++steps_since_past_plot_request_;
+  }
+  constexpr Time retention =
+      2 * Ephemeris<Barycentric>::max_time_between_checkpoints;
+  Instant floor = current_time_ - retention;
+  if (steps_since_past_plot_request_ < plot_request_recurrence_frames) {
+    floor = std::min(floor, last_past_plot_request_);
+  }
+  ephemeris_->EvictBefore(floor);
 }
 
 void Plugin::ApplyPlacementChangesToVessels(
@@ -1584,6 +1603,11 @@ Plugin::ComputeAndRenderFirstCollision(
     std::optional<Renderer::WorldRegistration> const& registration) const {
   auto const& celestial = FindOrDie(celestials_, celestial_index);
   auto const& celestial_body = *celestial->body();
+  if (begin == end) {
+    return std::nullopt;
+  }
+  // This runs on the executor's own thread; pin the past it reads.
+  auto const guard = ephemeris_->GuardPast(begin->time);
   // See `ComputeAndRenderApsides` for the placement composition.
   auto const [celestial_displacement, celestial_velocity] =
       ephemeris_->placement_conversion(
@@ -2117,6 +2141,8 @@ Velocity<World> Plugin::VesselVelocity(GUID const& vessel_guid) const {
 }
 
 void Plugin::RequestReanimation(Instant const& desired_t_min) const {
+  last_past_plot_request_ = desired_t_min;
+  steps_since_past_plot_request_ = 0;
   ephemeris_->RequestReanimation(desired_t_min);
 }
 

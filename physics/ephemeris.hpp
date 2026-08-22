@@ -37,6 +37,7 @@
 #include "physics/tensors.hpp"
 #include "quantities/named_quantities.hpp"
 #include "quantities/quantities.hpp"
+#include "quantities/si.hpp"
 #include "serialization/ksp_plugin.pb.h"
 #include "serialization/numerics.pb.h"
 #include "serialization/physics.pb.h"
@@ -69,6 +70,7 @@ using namespace principia::physics::_sector;
 using namespace principia::physics::_tensors;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
+using namespace principia::quantities::_si;
 
 // Partitions the given `positions` into subsystems by single-linkage
 // clustering: two positions within `threshold` of each other end up in the
@@ -391,6 +393,10 @@ class Ephemeris {
   // after `t`.  Consumers that evaluate the past off the main thread hold one
   // across their reads.
   Client<Instant> GuardPast(Instant const& t);
+
+  // The period of the checkpoints, which is also the granularity of
+  // `EvictBefore` and of reanimation.
+  static constexpr Time max_time_between_checkpoints = 180 * Day;
 
   // Creates an instance suitable for integrating the given `trajectories` with
   // their `intrinsic_accelerations` using a fixed-step integrator parameterized
