@@ -241,8 +241,15 @@ absl::Status EmbeddedExplicitGeneralizedRungeKuttaNyströmIntegrator<
       first_stage = 1;
     }
 
-    // Increment the solution with the high-order approximation.
-    t.Increment(h);
+    // Increment the solution with the high-order approximation.  The exact
+    // last step lands exactly on `t_final`: the double-precision increment is
+    // exact only to a rounding, and the appended point must be findable at
+    // the time the caller requested.
+    if (parameters.last_step_is_exact && at_end) {
+      t = DoublePrecision<Instant>(t_final);
+    } else {
+      t.Increment(h);
+    }
     for (int k = 0; k < dimension; ++k) {
       q̂[k].Increment(Δq̂[k]);
       v̂[k].Increment(Δv̂[k]);
