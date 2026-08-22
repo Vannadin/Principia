@@ -1424,7 +1424,9 @@ absl::StatusOr<Instant> Vessel::ReanimateOneCheckpoint(
   auto const collapsible_segment = reanimated_trajectory.NewSegment();
 
   // Make sure that the ephemeris covers the times that we are going to
-  // reanimate.
+  // reanimate.  The guard comes first: once it is joined no trim can pass
+  // `t_initial`, so the check below is definitive and holds across the flow.
+  auto const guard = ephemeris_->GuardPast(t_initial);
   ephemeris_->AwaitReanimation(t_initial);
   if (ephemeris_->t_min() > t_initial) {
     absl::MutexLock l(&lock_);

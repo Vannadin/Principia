@@ -178,13 +178,14 @@ std::vector<Interval<Instant>> ComputeCollisionIntervals(
 
   // Construct the set of all extrema times (apsides and extremities).  In this
   // set, apoapsides and periapsides alternate.  `trajectory` may extend beyond
-  // `reference`; the extremities are clamped where `reference` can still be
-  // evaluated, as `ComputeApsides` clamps the apsides.
+  // `reference` on either side; the extremities are clamped where `reference`
+  // can still be evaluated, as `ComputeApsides` clamps the apsides.
   Instant const t_max = std::min(trajectory.t_max(), reference.t_max());
-  if (t_max < trajectory.t_min()) {
+  Instant const t_min = std::max(trajectory.t_min(), reference.t_min());
+  if (t_max < t_min) {
     return {};
   }
-  absl::btree_set<Instant> apsides_times{trajectory.t_min(), t_max};
+  absl::btree_set<Instant> apsides_times{t_min, t_max};
   for (auto const& [time, _] : apoapsides) {
     apsides_times.insert(time);
   }

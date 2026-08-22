@@ -134,6 +134,12 @@ double OrbitAnalyser::progress_of_next_analysis() const {
 absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
   Analysis analysis{parameters.first_time};
 
+  // Holds the past across the analysis, which evaluates `first_time` on this
+  // thread throughout; a trim may nevertheless have won the race before the
+  // guard, in which case there is nothing to evaluate there any more.
+  auto const guard = ephemeris_->GuardPast(parameters.first_time);
+  bool const evaluable = ephemeris_->t_min() <= parameters.first_time;
+
   // In the force-free void there is no orbit to analyse (though the state may
   // be formally bound to some distant star), and flowing the mission there
   // grows the ephemeris and holds its lock for as long as the mission lasts.
@@ -144,8 +150,10 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
     first_position +=
         parameters.placement.anchor->OffsetAt(parameters.first_time);
   }
-  bool const in_void = ephemeris_->FarFieldIsZero(
-      first_position, parameters.placement.subsystem, parameters.first_time);
+  bool const in_void = evaluable &&
+      ephemeris_->FarFieldIsZero(
+          first_position, parameters.placement.subsystem,
+          parameters.first_time);
 
   // The flow prolongs the ephemeris as it goes, so the analysed span is
   // subject to the same reach as the flight plan whose coasts are being
@@ -156,7 +164,7 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
 
   RotatingBody<Barycentric> const* primary = nullptr;
   auto smallest_osculating_period = Infinity<Time>;
-  if (!in_void && reachable_duration > Time{}) {
+  if (evaluable && !in_void && reachable_duration > Time{}) {
     auto const primary_status =
         FindBodyWithSmallestOsculatingPeriod(parameters,
                                              primary,
@@ -252,7 +260,11 @@ absl::Status OrbitAnalyser::AnalyseOrbit(Parameters const& parameters) {
   }
 
   absl::MutexLock l(&lock_);
-  next_analysis_ = std::move(analysis);
+  // A trimmed past is not an answer about the orbit — unlike the void, which
+  // is — so it must not displace the last analysis that was one.
+  if (evaluable) {
+    next_analysis_ = std::move(analysis);
+  }
   analyser_idle_ = true;
   return absl::OkStatus();
 }

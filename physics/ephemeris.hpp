@@ -384,8 +384,13 @@ class Ephemeris {
   // would: the past rebuilds on demand through `RequestReanimation`.  The
   // dropped polynomials are destroyed on a background thread.  No-op when
   // that checkpoint is the newest, or does not go beyond what is already
-  // trimmed.
+  // trimmed, or a guard (below) protects an older time.
   virtual void EvictBefore(Instant const& t) EXCLUDES(lock_);
+
+  // While the returned client lives, `EvictBefore` keeps the times at or
+  // after `t`.  Consumers that evaluate the past off the main thread hold one
+  // across their reads.
+  Client<Instant> GuardPast(Instant const& t);
 
   // Creates an instance suitable for integrating the given `trajectories` with
   // their `intrinsic_accelerations` using a fixed-step integrator parameterized
@@ -957,6 +962,9 @@ class Ephemeris {
   // The techniques and terminology follow [Lov22].
   RecurringThread<Instant> reanimator_;
   Clientele<Instant> reanimator_clientele_;
+  // Guards from `GuardPast` live here, separately from the waiters above:
+  // they floor the trim without ordering any reanimation.
+  Clientele<Instant> eviction_clientele_;
 
   // The fields above this line are fixed at construction and therefore not
   // protected.  Note that `ContinuousTrajectory` is thread-safe.  `lock_` is

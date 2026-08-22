@@ -1,5 +1,6 @@
 #include "ksp_plugin/renderer.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -102,12 +103,17 @@ Renderer::RenderBarycentricTrajectoryInPlotting(
     Ephemeris<Barycentric>::SubsystemPlacement const& placement) const {
   Ephemeris<Barycentric>::SubsystemPlacement const frame_placement =
       GetPlottingFrame()->placement();
-  // A void flight-plan coast reaches beyond the plotting frame's domain,
-  // where the frame cannot be evaluated.
+  // A void flight-plan coast reaches beyond the plotting frame's domain, and
+  // a trimmed past can recede behind a stale plan's start; the frame cannot
+  // be evaluated on either side.
+  Instant const frame_t_min = GetPlottingFrame()->t_min();
   Instant const frame_t_max = GetPlottingFrame()->t_max();
   DiscreteTrajectory<Navigation> trajectory;
   for (auto it = begin; it != end; ++it) {
     auto const& [time, degrees_of_freedom] = *it;
+    if (time < frame_t_min) {
+      continue;
+    }
     if (time > frame_t_max) {
       break;
     }
@@ -304,8 +310,13 @@ OrthogonalMap<Frenet<Navigation>, World> Renderer::FrenetToWorld(
     Instant const& time,
     NavigationManœuvre const& manœuvre,
     Rotation<Barycentric, AliceSun> const& planetarium_rotation) const {
-  // Same "abilities some consider unnatural" as above.
-  Instant const& initial_time = manœuvre.initial_time();
+  // Same "abilities some consider unnatural" as above.  A frame that does not
+  // cover the manœuvre — a stale plan can start before a trimmed past, a void
+  // plan can burn past the render ceiling — maps it through the nearest state
+  // it has, on either side.
+  Instant const initial_time =
+      std::min(std::max(manœuvre.initial_time(), GetPlottingFrame()->t_min()),
+               GetPlottingFrame()->render_t_max());
   return PlottingToWorld(time, planetarium_rotation).orthogonal_map¹₁() *
          BarycentricToPlotting(initial_time)
              .conformal_map().orthogonal_map¹₁() *

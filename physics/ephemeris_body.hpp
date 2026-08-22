@@ -223,7 +223,8 @@ Ephemeris<Frame>::Ephemeris(
             return Reanimate(desired_t_min);
           },
           20ms),  // 50 Hz.
-      reanimator_clientele_(/*default_key=*/InfiniteFuture) {
+      reanimator_clientele_(/*default_key=*/InfiniteFuture),
+      eviction_clientele_(/*default_key=*/InfiniteFuture) {
   CHECK(!bodies.empty());
   CHECK_EQ(bodies.size(), initial_state.size());
 
@@ -886,6 +887,11 @@ void Ephemeris<Frame>::AwaitReanimation(Instant const& desired_t_min) {
 }
 
 template<typename Frame>
+Client<Instant> Ephemeris<Frame>::GuardPast(Instant const& t) {
+  return Client<Instant>(t, eviction_clientele_);
+}
+
+template<typename Frame>
 void Ephemeris<Frame>::EvictBefore(Instant const& t) {
   // Quiesce the reanimator first, without holding the lock (it needs the lock
   // to finish): a reanimation stitched against the evicted state would be
@@ -904,7 +910,9 @@ void Ephemeris<Frame>::EvictBefore(Instant const& t) {
     // reanimation bookkeeping in exact agreement — see
     // `DesiredTMinReachedOrFullyReanimated`.
     Instant const checkpoint = checkpointer_->checkpoint_at_or_before(
-        std::min(t, reanimator_clientele_.first()));
+        std::min({t,
+                  reanimator_clientele_.first(),
+                  eviction_clientele_.first()}));
     if (!empty() &&
         checkpoint > oldest_reanimated_checkpoint_ &&
         checkpoint != checkpointer_->newest_checkpoint()) {
@@ -1737,7 +1745,8 @@ Ephemeris<Frame>::Ephemeris(
           make_not_null_unique<Checkpointer<serialization::Ephemeris>>(
               /*reader=*/nullptr, /*writer=*/nullptr)),
       reanimator_(/*action=*/nullptr, 0ms),
-      reanimator_clientele_(InfiniteFuture) {}
+      reanimator_clientele_(InfiniteFuture),
+      eviction_clientele_(InfiniteFuture) {}
 
 template<typename Frame>
 void Ephemeris<Frame>::WriteToCheckpointIfNeeded(Instant const& time) const {

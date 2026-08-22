@@ -331,6 +331,12 @@ TEST_F(InterfaceFlightPlanTest, FlightPlan) {
       .WillRepeatedly(Return(Instant() - 4 * Second));
   EXPECT_CALL(renderer_, GetPlottingFrame())
       .WillRepeatedly(Return(plotting_frame.get()));
+  // The frame's domain covers the manœuvre, so the domain clamp is an
+  // identity.
+  EXPECT_CALL(*plotting_frame, t_min())
+      .WillRepeatedly(Return(InfinitePast));
+  EXPECT_CALL(*plotting_frame, t_max())
+      .WillRepeatedly(Return(InfiniteFuture));
   EXPECT_CALL(*plotting_frame, ToThisFrameAtTime(Instant()))
       .WillOnce(Return(barycentric_to_plotting));
   EXPECT_CALL(*plotting_frame, FromThisFrameAtTime(Instant() - 4 * Second))

@@ -1,5 +1,6 @@
 #include "ksp_plugin/interface.hpp"
 
+#include <algorithm>
 #include <iterator>
 #include <vector>
 #include <utility>
@@ -378,8 +379,13 @@ XYZ __cdecl principia__FlightPlanGetManoeuvreInitialPlottedVelocity(
   DegreesOfFreedom<Barycentric> const converted_degrees_of_freedom = {
       dof.position() + conversion_displacement,
       dof.velocity() + conversion_velocity};
+  // A frame that does not cover `t` maps through the nearest state it has,
+  // on either side: a stale plan can start before a trimmed past.
+  auto const& plotting_frame = *plugin->renderer().GetPlottingFrame();
+  Instant const t_frame = std::min(std::max(t, plotting_frame.t_min()),
+                                   plotting_frame.render_t_max());
   Velocity<Navigation> const v =
-      plugin->renderer().BarycentricToPlotting(t)(
+      plugin->renderer().BarycentricToPlotting(t_frame)(
           converted_degrees_of_freedom).velocity();
   return m.Return(ToXYZ(plugin->renderer().PlottingToWorld(
       plugin->CurrentTime(), plugin->PlanetariumRotation())(v)));

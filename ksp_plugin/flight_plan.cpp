@@ -588,6 +588,10 @@ absl::Status FlightPlan::BurnSegment(
     // Make sure that the ephemeris covers the entire segment, reanimating and
     // waiting if necessary.
     Instant const starting_time = segment->back().time;
+    // The guard comes first: once it is joined no trim can pass
+    // `starting_time`, so the check below is definitive and holds across the
+    // flow.
+    auto const guard = ephemeris_->GuardPast(starting_time);
     if (starting_time < ephemeris_->t_min()) {
       ephemeris_->AwaitReanimation(starting_time);
       if (starting_time < ephemeris_->t_min()) {
@@ -625,6 +629,10 @@ absl::Status FlightPlan::CoastSegment(
   // Make sure that the ephemeris covers the entire segment, reanimating and
   // waiting if necessary.
   Instant const starting_time = segment->back().time;
+  // The guard comes first: once it is joined no trim can pass
+  // `starting_time`, so the check below is definitive and holds across the
+  // flow.
+  auto const guard = ephemeris_->GuardPast(starting_time);
   if (starting_time < ephemeris_->t_min()) {
     ephemeris_->AwaitReanimation(starting_time);
     if (starting_time < ephemeris_->t_min()) {

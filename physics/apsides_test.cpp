@@ -613,6 +613,48 @@ TEST_F(ApsidesTest_ComputeCollisionIntervals, TrajectoryBeyondReference) {
                   AlmostEquals(t0_ + (4 + Sqrt(3)) * Second, 0))));
 }
 
+// A linear trajectory that starts before the body's own trajectory.  The
+// extremity is clamped where the body is first known; the collision interval
+// is unaffected.
+TEST_F(ApsidesTest_ComputeCollisionIntervals, TrajectoryBeforeReference) {
+  DiscreteTrajectory<World> vessel_trajectory;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(
+          DegreesOfFreedom<World>(
+              World::origin +
+                  Displacement<World>({-84 * Metre, 1 * Metre, 0 * Metre}),
+              Velocity<World>({1 * Metre / Second,
+                               0 * Metre / Second,
+                               0 * Metre / Second})),
+          /*Δt=*/1 * Second,
+          t1_ - 80 * Second,
+          t2_),
+      vessel_trajectory);
+
+  DistinguishedPoints<World> apoapsides;
+  DistinguishedPoints<World> periapsides;
+  ComputeApsides(body_trajectory_,
+                 vessel_trajectory,
+                 vessel_trajectory.begin(),
+                 vessel_trajectory.end(),
+                 /*t_max=*/InfiniteFuture,
+                 /*max_points=*/10,
+                 apoapsides,
+                 periapsides);
+  EXPECT_THAT(apoapsides, IsEmpty());
+  EXPECT_THAT(periapsides, SizeIs(1));
+
+  const auto intervals = ComputeCollisionIntervals(body_,
+                                                   body_trajectory_,
+                                                   vessel_trajectory,
+                                                   apoapsides,
+                                                   periapsides);
+  EXPECT_THAT(intervals,
+              ElementsAre(IntervalMatches(
+                  AlmostEquals(t0_ + (4 - Sqrt(3)) * Second, 0),
+                  AlmostEquals(t0_ + (4 + Sqrt(3)) * Second, 0))));
+}
+
 // A linear trajectory entirely beyond the end of the body's own trajectory.
 // No collision may be computed, as the body is nowhere known.
 TEST_F(ApsidesTest_ComputeCollisionIntervals, TrajectoryAfterReference) {

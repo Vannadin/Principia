@@ -74,7 +74,8 @@ class RendererTest : public ::testing::Test {
                   std::make_unique<
                       MockRigidReferenceFrame<Barycentric, Navigation>>()),
         reference_frame_(renderer_.GetPlottingFrame()) {
-    // The plotting frame bounds the rendering at its `t_max`.
+    // The plotting frame bounds the rendering at its `t_min` and `t_max`.
+    ON_CALL(*reference_frame_, t_min()).WillByDefault(Return(InfinitePast));
     ON_CALL(*reference_frame_, t_max()).WillByDefault(Return(InfiniteFuture));
   }
 
@@ -189,6 +190,37 @@ TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingStopsAtFrameTMax) {
 
   EXPECT_EQ(6, rendered_trajectory.size());
   EXPECT_EQ(t0_ + 5 * Second, rendered_trajectory.back().time);
+}
+
+// The plotting frame bounds the rendering at its `t_min` too: a trimmed past
+// can recede behind the start of a stale flight plan.
+TEST_F(RendererTest, RenderBarycentricTrajectoryInPlottingStartsAtFrameTMin) {
+  Velocity<Barycentric> const v(
+      {6 * Metre / Second, 5 * Metre / Second, 4 * Metre / Second});
+  DiscreteTrajectory<Barycentric> trajectory_to_render;
+  AppendTrajectoryTimeline(
+      NewLinearTrajectoryTimeline(v,
+                                  /*Δt=*/1 * Second,
+                                  /*t1=*/t0_,
+                                  /*t2=*/t0_ + 10 * Second),
+      /*to=*/trajectory_to_render);
+
+  ON_CALL(*reference_frame_, t_min())
+      .WillByDefault(Return(t0_ + 5 * Second));
+  RigidMotion<Barycentric, Navigation> const rigid_motion(
+      RigidTransformation<Barycentric, Navigation>::Identity(),
+      Barycentric::nonrotating,
+      Barycentric::unmoving);
+  EXPECT_CALL(*reference_frame_, ToThisFrameAtTime(_))
+      .WillRepeatedly(Return(rigid_motion));
+
+  auto const rendered_trajectory =
+      renderer_.RenderBarycentricTrajectoryInPlotting(
+          trajectory_to_render.begin(),
+          trajectory_to_render.end());
+
+  EXPECT_EQ(5, rendered_trajectory.size());
+  EXPECT_EQ(t0_ + 5 * Second, rendered_trajectory.front().time);
 }
 
 // WS6-5: a vessel coasting in the void is anchored — its trajectory is near the
