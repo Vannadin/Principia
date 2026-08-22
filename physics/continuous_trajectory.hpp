@@ -87,6 +87,18 @@ class ContinuousTrajectory : public Trajectory<Frame> {
   // we require the use of std::move.
   void Prepend(ContinuousTrajectory&& prefix);
 
+  // Drops the polynomials that a reanimation of the times before the
+  // checkpoint at `t` would reproduce, moving them to `graveyard` so that the
+  // caller may destroy them off the critical path; `t_min` moves to the
+  // polynomial boundary recorded by that checkpoint, where a later `Prepend`
+  // seams exactly.  The state of the appending machinery is untouched.  `t`
+  // must be a checkpoint of this trajectory, and the polynomials must extend
+  // beyond its boundary.
+  absl::Status EvictBefore(
+      Instant const& t,
+      std::vector<not_null<std::unique_ptr<
+          Polynomial<Position<Frame>, Instant>>>>& graveyard);
+
   // Implementation of the interface `Trajectory`.
 
   // `t_max` may be less than the last time passed to Append because the

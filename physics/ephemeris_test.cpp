@@ -67,6 +67,7 @@ using ::testing::AllOf;
 using ::testing::AnyOf;
 using ::testing::Eq;
 using ::testing::Gt;
+using ::testing::Le;
 using ::testing::Lt;
 using ::testing::Ref;
 using namespace principia::astronomy::_frames;
@@ -235,6 +236,80 @@ TEST_P(EphemerisTest, AwaitReanimationBeforeTheFirstCheckpoint) {
 
   ephemeris.AwaitReanimation(t0_ - 1 * Second);
   EXPECT_EQ(t0_, ephemeris.t_min());
+}
+
+// Eviction puts the ephemeris in the state a save and a load would, and
+// reanimation rebuilds the evicted past bit-for-bit; the cycle composes.
+TEST_P(EphemerisTest, EvictBeforeIsUndoneByReanimation) {
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  std::vector<DegreesOfFreedom<ICRS>> initial_state;
+  Position<ICRS> centre_of_mass;
+  Time period;
+  SetUpEarthMoonSystem(bodies, initial_state, centre_of_mass, period);
+
+  Ephemeris<ICRS> ephemeris(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      /*accuracy_parameters=*/{/*fitting_tolerance=*/5 * Milli(Metre),
+                               /*geopotential_tolerance=*/0x1p-24},
+      Ephemeris<ICRS>::FixedStepParameters(integrator(), period / 100));
+  // Far enough for three checkpoints, 180 days apart.
+  EXPECT_OK(ephemeris.Prolong(t0_ + 500 * Day));
+
+  auto const& earth_trajectory = *ephemeris.trajectory(ephemeris.bodies()[0]);
+  std::vector<Instant> const times = {t0_ + 10 * Day,
+                                      t0_ + 100 * Day,
+                                      t0_ + 250 * Day,
+                                      t0_ + 450 * Day};
+  std::vector<DegreesOfFreedom<ICRS>> before;
+  for (Instant const& t : times) {
+    before.push_back(earth_trajectory.EvaluateDegreesOfFreedom(t));
+  }
+
+  ephemeris.EvictBefore(t0_ + 200 * Day);
+  EXPECT_THAT(ephemeris.t_min(), AllOf(Gt(t0_), Le(t0_ + 200 * Day)));
+  EXPECT_EQ(before[3].position(),
+            earth_trajectory.EvaluateDegreesOfFreedom(times[3]).position());
+
+  // Trimming to the same checkpoint again is a no-op, and a time below every
+  // checkpoint asks for nothing.
+  Instant const trimmed_t_min = ephemeris.t_min();
+  ephemeris.EvictBefore(t0_ + 200 * Day);
+  ephemeris.EvictBefore(t0_ - 1 * Day);
+  EXPECT_EQ(trimmed_t_min, ephemeris.t_min());
+
+  ephemeris.AwaitReanimation(t0_);
+  EXPECT_EQ(t0_, ephemeris.t_min());
+  for (int i = 0; i < times.size(); ++i) {
+    auto const degrees_of_freedom =
+        earth_trajectory.EvaluateDegreesOfFreedom(times[i]);
+    EXPECT_EQ(before[i].position(), degrees_of_freedom.position()) << i;
+    EXPECT_EQ(before[i].velocity(), degrees_of_freedom.velocity()) << i;
+  }
+
+  // The cycle composes: evict once more after the reanimation.
+  ephemeris.EvictBefore(t0_ + 200 * Day);
+  EXPECT_EQ(trimmed_t_min, ephemeris.t_min());
+  ephemeris.AwaitReanimation(t0_);
+  EXPECT_EQ(t0_, ephemeris.t_min());
+  EXPECT_EQ(before[0].position(),
+            earth_trajectory.EvaluateDegreesOfFreedom(times[0]).position());
+
+  // A freshly-loaded, not-yet-prolonged ephemeris holds no polynomials at
+  // all; eviction must decline, not abort.
+  serialization::Ephemeris message;
+  ephemeris.WriteToMessage(&message);
+  // The oldest checkpoint sits at the first integrator step, so this restores
+  // there, with no polynomials in memory at all.
+  auto const ephemeris2 =
+      Ephemeris<ICRS>::ReadFromMessage(t0_ + 1 * Day, message);
+  ephemeris2->EvictBefore(t0_ + 250 * Day);
+  EXPECT_OK(ephemeris2->Prolong(t0_ + 500 * Day));
+  EXPECT_EQ(before[3].position(),
+            ephemeris2->trajectory(ephemeris2->bodies()[0])
+                ->EvaluateDegreesOfFreedom(times[3])
+                .position());
 }
 
 TEST_P(EphemerisTest, FlowWithAdaptiveStepSpecialCase) {

@@ -574,6 +574,42 @@ ContinuousTrajectory<Frame>::ReadFromMessage(
 }
 
 template<typename Frame>
+absl::Status ContinuousTrajectory<Frame>::EvictBefore(
+    Instant const& t,
+    std::vector<not_null<std::unique_ptr<
+        Polynomial<Position<Frame>, Instant>>>>& graveyard) {
+  return checkpointer_->ReadFromCheckpointAt(
+      t,
+      [this, &graveyard](
+          serialization::ContinuousTrajectory::Checkpoint const& message) {
+        absl::MutexLock l(&lock_);
+        CHECK(!message.last_point().empty());
+        // The boundary a reanimated prefix ends at: the checkpoint's first
+        // last point sits on the last polynomial of its time (see the
+        // invariant on `last_points_`).
+        Instant const boundary =
+            Instant::ReadFromMessage(message.last_point(0).instant());
+        CHECK_LE(*first_time_, boundary);
+        auto const end_of_prefix =
+            std::upper_bound(polynomials_.begin(),
+                             polynomials_.end(),
+                             boundary,
+                             [](Instant const& left,
+                                InstantPolynomialPair const& right) {
+                               return left < right.t_max;
+                             });
+        CHECK(end_of_prefix != polynomials_.end());
+        for (auto it = polynomials_.begin(); it != end_of_prefix; ++it) {
+          graveyard.push_back(std::move(it->polynomial));
+        }
+        polynomials_.erase(polynomials_.begin(), end_of_prefix);
+        first_time_ = boundary;
+        last_accessed_polynomial_ = 0;  // Always a valid value.
+        return absl::OkStatus();
+      });
+}
+
+template<typename Frame>
 void ContinuousTrajectory<Frame>::WriteToCheckpoint(Instant const& t) const {
   checkpointer_->WriteToCheckpoint(t);
 }

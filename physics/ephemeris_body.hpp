@@ -26,6 +26,7 @@
 #include "numerics/double_precision.hpp"
 #include "numerics/elementary_functions.hpp"
 #include "numerics/hermite3.hpp"
+#include "numerics/polynomial.hpp"
 #include "numerics/root_finders.hpp"
 #include "physics/oblate_body.hpp"
 #include "quantities/si.hpp"
@@ -50,6 +51,7 @@ using namespace principia::integrators::_methods;
 using namespace principia::numerics::_double_precision;
 using namespace principia::numerics::_elementary_functions;
 using namespace principia::numerics::_hermite3;
+using namespace principia::numerics::_polynomial;
 using namespace principia::numerics::_root_finders;
 using namespace principia::physics::_oblate_body;
 using namespace principia::quantities::_si;
@@ -881,6 +883,48 @@ void Ephemeris<Frame>::AwaitReanimation(Instant const& desired_t_min) {
   RequestReanimation(desired_t_min);
   absl::ReaderMutexLock l(&lock_);
   lock_.Await(absl::Condition(&reached_or_done));
+}
+
+template<typename Frame>
+void Ephemeris<Frame>::EvictBefore(Instant const& t) {
+  // Quiesce the reanimator first, without holding the lock (it needs the lock
+  // to finish): a reanimation stitched against the evicted state would be
+  // misaligned.
+  reanimator_.Stop();
+
+  std::vector<not_null<std::unique_ptr<Polynomial<Position<Frame>, Instant>>>>
+      graveyard;
+  std::optional<Instant> interrupted_pursuit;
+  {
+    absl::MutexLock l(&lock_);
+    interrupted_pursuit = last_desired_t_min_;
+    // Never trim past what a waiting client needs — it could no longer be
+    // woken — nor into the newest checkpoint interval, where the integration
+    // lives.  The watermark comparison keeps the trimmed frontier and the
+    // reanimation bookkeeping in exact agreement — see
+    // `DesiredTMinReachedOrFullyReanimated`.
+    Instant const checkpoint = checkpointer_->checkpoint_at_or_before(
+        std::min(t, reanimator_clientele_.first()));
+    if (!empty() &&
+        checkpoint > oldest_reanimated_checkpoint_ &&
+        checkpoint != checkpointer_->newest_checkpoint()) {
+      for (auto const& trajectory : trajectories_) {
+        CHECK_OK(trajectory->EvictBefore(checkpoint, graveyard));
+      }
+      oldest_reanimated_checkpoint_ = checkpoint;
+    }
+  }
+  // Resume any pursuit that the quiescing interrupted.
+  if (interrupted_pursuit.has_value()) {
+    RequestReanimation(interrupted_pursuit.value());
+  }
+  if (!graveyard.empty()) {
+    // Freeing the polynomials one by one is a visible hitch at this quantity;
+    // do it on a thread of its own, joining the previous batch first.
+    reaper_ = std::jthread([corpses = std::move(graveyard)]() mutable {
+      corpses.clear();
+    });
+  }
 }
 
 template<typename Frame>
@@ -1827,6 +1871,11 @@ absl::Status Ephemeris<Frame>::ReanimateOneCheckpoint(
   // we will not reanimate this checkpoint again.
   {
     absl::MutexLock l(&lock_);
+    // A concurrent trim may have moved the frontier since this reanimation was
+    // planned; the prefix would not seam.
+    if (oldest_reanimated_checkpoint_ != t_final) {
+      return absl::AbortedError("The frontier moved while reanimating");
+    }
     for (int i = 0; i < trajectories_.size(); ++i) {
       trajectories_[i]->Prepend(std::move(*trajectories[i]));
     }

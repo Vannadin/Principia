@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -374,8 +375,17 @@ class Ephemeris {
   void RequestReanimation(Instant const& desired_t_min);
 
   // Same as `RequestReanimation`, but synchronous.  This function blocks until
-  // the `t_min()` of the ephemeris is at or before `desired_t_min`.
+  // the `t_min()` of the ephemeris is at or before `desired_t_min`, or nothing
+  // reanimatable remains; the caller must check `t_min()`.
   void AwaitReanimation(Instant const& desired_t_min);
+
+  // Drops the polynomials before the checkpoint at or before `t`, for all
+  // bodies together, putting the ephemeris in the state a save and a load
+  // would: the past rebuilds on demand through `RequestReanimation`.  The
+  // dropped polynomials are destroyed on a background thread.  No-op when
+  // that checkpoint is the newest, or does not go beyond what is already
+  // trimmed.
+  virtual void EvictBefore(Instant const& t) EXCLUDES(lock_);
 
   // Creates an instance suitable for integrating the given `trajectories` with
   // their `intrinsic_accelerations` using a fixed-step integrator parameterized
@@ -956,6 +966,10 @@ class Ephemeris {
 
   // Parameter passed to the last call to `RequestReanimation`, if any.
   std::optional<Instant> last_desired_t_min_ ABSL_GUARDED_BY(lock_);
+
+  // Destroys the polynomials dropped by `EvictBefore` off the critical path.
+  // Only accessed by the (single) thread that calls `EvictBefore`.
+  std::jthread reaper_;
 
   std::unique_ptr<typename Integrator<NewtonianMotionEquation>::Instance>
       instance_ ABSL_GUARDED_BY(lock_);
