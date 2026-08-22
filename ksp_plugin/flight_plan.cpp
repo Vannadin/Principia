@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <iterator>
 #include <memory>
@@ -64,6 +65,27 @@ inline absl::Status BeyondTheVoidHorizon() {
                       "Beyond the void horizon");
 }
 
+// Whether the force-free straight line from `degrees_of_freedom` — expressed
+// in the representation of `placement`, whose anchor is restored here — stays
+// in the exactly-damped void over [t1, t2].
+bool LineStaysInTheVoid(
+    Ephemeris<Barycentric> const& ephemeris,
+    Ephemeris<Barycentric>::SubsystemPlacement const& placement,
+    DegreesOfFreedom<Barycentric> const& degrees_of_freedom,
+    Instant const& t1,
+    Instant const& t2) {
+  auto const [offset, velocity] =
+      Ephemeris<Barycentric>::Anchor::Conversion(placement.anchor,
+                                                 std::nullopt,
+                                                 t1);
+  return ephemeris.FarFieldIsZeroAlong(
+      DegreesOfFreedom<Barycentric>(degrees_of_freedom.position() + offset,
+                                    degrees_of_freedom.velocity() + velocity),
+      placement.subsystem,
+      t1,
+      t2);
+}
+
 inline absl::Status Singular(Square<Speed> const& Δv²) {
   return absl::Status(FlightPlan::singular,
                       absl::StrCat("Singular: ", DebugString(Δv²)));
@@ -91,7 +113,6 @@ FlightPlan::FlightPlan(
           std::move(generalized_adaptive_step_parameters)),
       placement_(std::move(placement)) {
   CHECK(desired_final_time_ >= initial_time_);
-  MakeProlongator(desired_final_time_);
 
   // Set the first point of the first coasting trajectory.
   trajectory_.Append(initial_time_, initial_degrees_of_freedom_).IgnoreError();
@@ -116,10 +137,11 @@ FlightPlan::FlightPlan(FlightPlan const& other)
       placement_(other.placement_),
       manœuvres_(other.manœuvres_),
       analysis_is_enabled_(other.analysis_is_enabled_),
+      last_coast_is_void_(other.last_coast_is_void_),
       adaptive_step_parameters_(other.adaptive_step_parameters_),
       generalized_adaptive_step_parameters_(
           other.generalized_adaptive_step_parameters_) {
-  MakeProlongator(desired_final_time_);
+  MakeProlongator(prolongation_horizon());
   bool first_segment = true;
   for (auto const& other_segment : other.trajectory_.segments()) {
     if (!first_segment) {
@@ -267,7 +289,6 @@ absl::Status FlightPlan::SetDesiredFinalTime(
   }
 
   desired_final_time_ = desired_final_time;
-  MakeProlongator(desired_final_time_);
 
   // Reset the last coast and recompute it.
   ResetLastSegment();
@@ -454,7 +475,19 @@ std::unique_ptr<FlightPlan> FlightPlan::ReadFromMessage(
   // time the plan is touched, so pursuing one stopped the game there.  Such a
   // plan comes up anomalous with the deadline status, which the flight planner
   // reports.
-  if (HorizonIsWithinReach(*flight_plan->ephemeris_,
+  // If the straight line from the plan's initial state stays in the void, the
+  // final coast is the analytic line, and what the burns need is pursued by
+  // the prolongator instead.  With burns the line is a heuristic — the
+  // trajectory bends — and a wrong guess degrades to the deadline retry.
+  bool const line_stays_in_the_void =
+      LineStaysInTheVoid(*ephemeris,
+                         flight_plan->placement_,
+                         *initial_degrees_of_freedom,
+                         initial_time,
+                         std::min(flight_plan->desired_final_time_,
+                                  initial_time + max_void_horizon));
+  if (!line_stays_in_the_void &&
+      HorizonIsWithinReach(*flight_plan->ephemeris_,
                            flight_plan->desired_final_time_)) {
     flight_plan->ephemeris_->Prolong(flight_plan->desired_final_time_)
         .IgnoreError();
@@ -601,13 +634,8 @@ absl::Status FlightPlan::CoastSegment(
     if (!may_coast_the_void || void_final_time <= t) {
       return false;
     }
-    auto const [offset, velocity] = Ephemeris<Barycentric>::Anchor::Conversion(
-        placement_.anchor, std::nullopt, t);
-    DegreesOfFreedom<Barycentric> const state(
-        degrees_of_freedom.position() + offset,
-        degrees_of_freedom.velocity() + velocity);
-    if (!ephemeris_->FarFieldIsZeroAlong(
-            state, placement_.subsystem, t, void_final_time)) {
+    if (!LineStaysInTheVoid(
+            *ephemeris_, placement_, degrees_of_freedom, t, void_final_time)) {
       return false;
     }
     return trajectory_.Append(
@@ -621,7 +649,11 @@ absl::Status FlightPlan::CoastSegment(
       void_final_time == desired_final_time ? absl::OkStatus()
                                             : BeyondTheVoidHorizon();
 
+  if (may_coast_the_void) {
+    last_coast_is_void_ = false;
+  }
   if (void_coast()) {
+    last_coast_is_void_ = true;
     return void_coast_status;
   }
   absl::Status const status = ephemeris_->FlowWithAdaptiveStep(
@@ -638,6 +670,7 @@ absl::Status FlightPlan::CoastSegment(
   // where a coast leaving a system arrives — the rest of the coast is the
   // line.  Any other failure, e.g. a cancellation, is returned as it is.
   if (absl::IsDeadlineExceeded(status) && void_coast()) {
+    last_coast_is_void_ = true;
     return void_coast_status;
   }
   return status;
@@ -735,6 +768,7 @@ absl::Status FlightPlan::ComputeSegments(
       anomalous_status_ = status;
     }
   }
+  MakeProlongator(prolongation_horizon());
   return overall_status;
 }
 
@@ -803,10 +837,17 @@ void FlightPlan::MakeProlongator(Instant const& prolongation_time) {
     return absl::OkStatus();
   };
 
+  if (prolongation_time == last_prolongation_time_) {
+    // Already pursued.  This is called at every recomputation, and replacing
+    // the thread would join it.
+    return;
+  }
   if (prolongation_time < last_prolongation_time_) {
     // The desired prolongation became shorter, just kill the prolongator
-    // thread.  We may recreate it below, but shorter.
+    // thread.  We may recreate it below, but shorter; forgetting the pursuit
+    // lets the guard above accept this target again later.
     prolongator_ = std::jthread();
+    last_prolongation_time_ = InfinitePast;
   }
   if (ephemeris_->t_max() < prolongation_time &&
       HorizonIsWithinReach(*ephemeris_, prolongation_time)) {
@@ -818,6 +859,18 @@ void FlightPlan::MakeProlongator(Instant const& prolongation_time) {
           prolong_with_status(prolongation_time).IgnoreError();
         });
   }
+}
+
+Instant FlightPlan::prolongation_horizon() const {
+  if (!last_coast_is_void_) {
+    return desired_final_time_;
+  }
+  // Rounded up to a whole day so that the optimizer's small perturbations of
+  // the last burn keep one stable target instead of retargeting — and thus
+  // joining — the prolongator at every evaluation.
+  Time const needed = start_of_last_coast() - initial_time_;
+  return std::min(desired_final_time_,
+                  initial_time_ + std::ceil(needed / Day) * Day);
 }
 
 Instant FlightPlan::start_of_last_coast() const {

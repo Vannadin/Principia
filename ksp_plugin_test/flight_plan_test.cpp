@@ -44,6 +44,7 @@ namespace ksp_plugin {
 
 using ::testing::AllOf;
 using ::testing::Eq;
+using ::testing::Ge;
 using ::testing::Gt;
 using ::testing::Lt;
 using namespace principia::astronomy::_epoch;
@@ -758,6 +759,20 @@ TEST_F(FlightPlanTest, HorizonOutOfReachIsNotPursued) {
   // twenty milliseconds.
   std::this_thread::sleep_for(1s);
   EXPECT_THAT(ephemeris_->t_max(), Lt(out_of_reach));
+}
+
+// A horizon within reach, in the field, is pursued: the void exemption applies
+// only when the final coast is the analytic line.  Analysis is disabled so
+// that the coast analyser's own prolongation cannot mask a missing
+// prolongator.
+TEST_F(FlightPlanTest, HorizonWithinReachIsPursued) {
+  flight_plan_->EnableAnalysis(false);
+  Instant const within_reach = t0_ + 30 * Day;
+  flight_plan_->SetDesiredFinalTime(within_reach).IgnoreError();
+  for (int i = 0; i < 200 && ephemeris_->t_max() < within_reach; ++i) {
+    std::this_thread::sleep_for(50ms);
+  }
+  EXPECT_THAT(ephemeris_->t_max(), Ge(within_reach));
 }
 
 TEST_F(FlightPlanTest, Copy) {

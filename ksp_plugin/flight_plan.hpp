@@ -269,6 +269,11 @@ class FlightPlan {
   // Starts a thread to prolong the ephemeris if needed.
   void MakeProlongator(Instant const& prolongation_time);
 
+  // The time up to which this plan actually reads the ephemeris: the desired
+  // final time, except that a final coast crossing the void as the analytic
+  // line needs nothing past the last burn.
+  Instant prolongation_horizon() const;
+
   Instant start_of_last_coast() const;
 
   // In the following functions, `index` refers to the index of a manœuvre.
@@ -304,9 +309,15 @@ class FlightPlan {
   std::vector<not_null<std::unique_ptr<OrbitAnalyser>>> coast_analysers_;
   bool analysis_is_enabled_ = true;
 
-  // These members are only accessed by the main thread.
+  // These members are only accessed by the thread that owns this flight plan
+  // (the main thread, or the optimizer's thread for its copies).
   std::jthread prolongator_;
   Instant last_prolongation_time_ = InfinitePast;
+  // Whether the last coast most recently crossed the void as the analytic
+  // line.  Written only by the final `CoastSegment`, so a recomputation that
+  // turns anomalous earlier keeps the previous value, which still aims the
+  // prolongation at the last burn.
+  bool last_coast_is_void_ = false;
 
   Ephemeris<Barycentric>::AdaptiveStepParameters adaptive_step_parameters_;
   Ephemeris<Barycentric>::GeneralizedAdaptiveStepParameters

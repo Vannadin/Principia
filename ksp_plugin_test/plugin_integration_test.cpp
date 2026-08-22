@@ -3330,6 +3330,288 @@ TEST_F(PluginIntegrationTestWithoutPlugin, VoidFlightPlanManœuvreIsAnomalous) {
               Lt(t0 + 25 * 365.25 * Day));
 }
 
+// A void plan within the ephemeris's reach needs the ephemeris no more than
+// one beyond it: the prolongator must not pursue a horizon that only the
+// analytic line reaches.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       VoidFlightPlanWithinReachDoesNotPursueTheEphemeris) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      307, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  Instant const t0 = drifter->psychohistory()->back().time;
+  plugin->CreateFlightPlan(guid_void, t0 + 50 * 365.25 * Day, 1 * Kilogram);
+  auto& flight_plan = drifter->flight_plan();
+  EXPECT_EQ(t0 + 50 * 365.25 * Day,
+            flight_plan.GetAllSegments().back().time);
+
+  // A pursuing prolongator would be given a thousand steps every twenty
+  // milliseconds, a whole month of this system per chunk.
+  using namespace std::chrono_literals;
+  std::this_thread::sleep_for(1s);
+  EXPECT_THAT(plugin->GetCelestial(star_a).trajectory().t_max(),
+              Lt(t0 + 5 * Day));
+}
+
+// A burn deep in a void plan is what still needs the ephemeris: the
+// prolongator pursues the burn's end and not the desired final time.  The
+// burn's own flow in the deep void is a separate, still-open piece of the
+// void-burn work, so only the pursuit is asserted.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       VoidFlightPlanBurnProlongsToTheBurnOnly) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      308, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  Instant const t0 = drifter->psychohistory()->back().time;
+  Instant const burn_time = t0 + 2 * 365.25 * Day;
+  plugin->CreateFlightPlan(guid_void, t0 + 50 * 365.25 * Day, 1 * Kilogram);
+  auto& flight_plan = drifter->flight_plan();
+
+  NavigationManœuvre::Intensity intensity;
+  intensity.Δv = Velocity<Frenet<Navigation>>({1 * Metre / Second,
+                                               0 * Metre / Second,
+                                               0 * Metre / Second});
+  NavigationManœuvre::Timing timing;
+  timing.initial_time = burn_time;
+  NavigationManœuvre::Burn const burn{
+      intensity,
+      timing,
+      /*thrust=*/1 * Newton,
+      /*specific_impulse=*/1 * Newton * Second / Kilogram,
+      plugin->NewBodyCentredNonRotatingNavigationFrame(star_a),
+      /*is_inertially_fixed=*/true};
+  flight_plan.Insert(burn, 0).IgnoreError();
+
+  using namespace std::chrono_literals;
+  for (int i = 0; i < 600; ++i) {
+    flight_plan.GetAllSegmentsAvoidingDeadlines();
+    if (plugin->GetCelestial(star_a).trajectory().t_max() >= burn_time) {
+      break;
+    }
+    std::this_thread::sleep_for(50ms);
+  }
+  EXPECT_THAT(plugin->GetCelestial(star_a).trajectory().t_max(),
+              Ge(burn_time));
+
+  // The pursuit ends at the burn (rounded up to a whole day), not at the
+  // desired final time fifty years out.
+  std::this_thread::sleep_for(1s);
+  EXPECT_THAT(plugin->GetCelestial(star_a).trajectory().t_max(),
+              Lt(burn_time + 5 * Day));
+}
+
+// Reading a void plan back must not grind the ephemeris to the plan's horizon
+// on the calling thread — which is the main thread the first time the plan is
+// touched.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       VoidFlightPlanLoadsWithoutProlonging) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      309, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  Instant const t0 = drifter->psychohistory()->back().time;
+  plugin->CreateFlightPlan(guid_void, t0 + 50 * 365.25 * Day, 1 * Kilogram);
+
+  // Only one `Plugin` may exist at a time, so destroy it before reading.
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  plugin = nullptr;
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+  not_null<Vessel*> const drifter2 = plugin2->GetVessel(guid_void);
+  drifter2->ReadFlightPlanFromMessage();
+  EXPECT_EQ(t0 + 50 * 365.25 * Day,
+            drifter2->flight_plan().GetAllSegments().back().time);
+  EXPECT_THAT(plugin2->GetCelestial(star_a).trajectory().t_max(),
+              Lt(t0 + 365.25 * Day));
+}
+
+// Reading a void plan whose burn lies beyond the ephemeris must not grind the
+// ephemeris on the calling thread either: the burns are left to the
+// prolongator, which resumes the pursuit of the burn's end after the load.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       VoidFlightPlanWithBurnLoadsWithoutProlonging) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      310, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  Instant const t0 = drifter->psychohistory()->back().time;
+  Instant const burn_time = t0 + 2 * 365.25 * Day;
+  plugin->CreateFlightPlan(guid_void, t0 + 50 * 365.25 * Day, 1 * Kilogram);
+  auto& flight_plan = drifter->flight_plan();
+
+  NavigationManœuvre::Intensity intensity;
+  intensity.Δv = Velocity<Frenet<Navigation>>({1 * Metre / Second,
+                                               0 * Metre / Second,
+                                               0 * Metre / Second});
+  NavigationManœuvre::Timing timing;
+  timing.initial_time = burn_time;
+  NavigationManœuvre::Burn const burn{
+      intensity,
+      timing,
+      /*thrust=*/1 * Newton,
+      /*specific_impulse=*/1 * Newton * Second / Kilogram,
+      plugin->NewBodyCentredNonRotatingNavigationFrame(star_a),
+      /*is_inertially_fixed=*/true};
+  flight_plan.Insert(burn, 0).IgnoreError();
+
+  serialization::Plugin message;
+  plugin->WriteToMessage(&message);
+  plugin = nullptr;
+  auto const plugin2 = Plugin::ReadFromMessage(message);
+  not_null<Vessel*> const drifter2 = plugin2->GetVessel(guid_void);
+  drifter2->ReadFlightPlanFromMessage();
+  EXPECT_THAT(plugin2->GetCelestial(star_a).trajectory().t_max(),
+              Lt(t0 + 365.25 * Day));
+
+  using namespace std::chrono_literals;
+  for (int i = 0; i < 600; ++i) {
+    if (plugin2->GetCelestial(star_a).trajectory().t_max() >= burn_time) {
+      break;
+    }
+    std::this_thread::sleep_for(50ms);
+  }
+  std::this_thread::sleep_for(1s);
+  EXPECT_THAT(plugin2->GetCelestial(star_a).trajectory().t_max(),
+              AllOf(Ge(burn_time), Lt(burn_time + 5 * Day)));
+}
+
+// Shortening the pursuit and then asking for the same horizon again must
+// respawn the prolongator: the kill also forgets the pursued target.
+TEST_F(PluginIntegrationTestWithoutPlugin,
+       ProlongationResumesAfterAShorterHorizon) {
+  Index const star_a = 0;
+  auto plugin =
+      std::make_unique<Plugin>("JD2451545.0", "JD2451545.0", 1 * Radian);
+  InsertTwoStarVoid(*plugin);
+
+  bool inserted;
+  GUID const guid_void = "drifter";
+  plugin->InsertOrKeepVessel(guid_void, "drifter", star_a,
+                             /*loaded=*/false, inserted);
+  plugin->InsertUnloadedPart(
+      311, "part-drifter", guid_void,
+      {Displacement<AliceSun>({2e16 * Metre, 0 * Metre, 0 * Metre}),
+       Velocity<AliceSun>({0 * Metre / Second,
+                           3 * Kilo(Metre) / Second,
+                           0 * Metre / Second})});
+  plugin->PrepareToReportCollisions();
+  plugin->FreeVesselsAndPartsAndCollectPileUps(20 * Milli(Second));
+  {
+    VesselSet collided_vessels;
+    plugin->CatchUpLaggingVessels(collided_vessels);
+  }
+  not_null<Vessel*> const drifter = plugin->GetVessel(guid_void);
+
+  Instant const t0 = drifter->psychohistory()->back().time;
+  Instant const burn_time = t0 + 2 * 365.25 * Day;
+  plugin->CreateFlightPlan(guid_void, t0 + 50 * 365.25 * Day, 1 * Kilogram);
+  auto& flight_plan = drifter->flight_plan();
+
+  NavigationManœuvre::Intensity intensity;
+  intensity.Δv = Velocity<Frenet<Navigation>>({1 * Metre / Second,
+                                               0 * Metre / Second,
+                                               0 * Metre / Second});
+  NavigationManœuvre::Timing timing;
+  timing.initial_time = burn_time;
+  NavigationManœuvre::Burn const burn{
+      intensity,
+      timing,
+      /*thrust=*/1 * Newton,
+      /*specific_impulse=*/1 * Newton * Second / Kilogram,
+      plugin->NewBodyCentredNonRotatingNavigationFrame(star_a),
+      /*is_inertially_fixed=*/true};
+  flight_plan.Insert(burn, 0).IgnoreError();
+  flight_plan.Remove(0).IgnoreError();
+  flight_plan.Insert(burn, 0).IgnoreError();
+
+  using namespace std::chrono_literals;
+  Instant const resumed = t0 + 200 * Day;
+  for (int i = 0; i < 600; ++i) {
+    if (plugin->GetCelestial(star_a).trajectory().t_max() >= resumed) {
+      break;
+    }
+    std::this_thread::sleep_for(50ms);
+  }
+  EXPECT_THAT(plugin->GetCelestial(star_a).trajectory().t_max(), Ge(resumed));
+}
+
 // The void regime judgement that keeps KSP's own orbit machinery off a vessel
 // whose stock orbit KSP's hierarchy cannot express.  It must distinguish a
 // vessel near a star from one in the deep void, and it must be silent in a
