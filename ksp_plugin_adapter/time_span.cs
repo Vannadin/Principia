@@ -20,26 +20,26 @@ class PrincipiaTimeSpan {
     hours = 0;
     minutes = 0;
     seconds = seconds_;
-    // The conversions below cast a duration in seconds to an `int`, which is
-    // unchecked in C#: a value that does not fit yields an unspecified result
-    // instead of throwing, so the magnitude must be tested here.  A duration
-    // that does not fit is reported as such, and the caller saturates; this also
+    // The conversions below cast to an `int`, which is unchecked in C#: a
+    // value that does not fit yields an unspecified result instead of
+    // throwing, so the magnitude must be tested here.  The days are split off
+    // in double precision, so the limit is the day count fitting an `int`,
+    // not the seconds doing so (a mere 68 Earth years); a duration that does
+    // not fit is reported as such, and the caller saturates.  This also
     // rejects a duration that is not a number.
-    if (!(Math.Abs(seconds_) < int.MaxValue)) {
+    if (!(Math.Abs(seconds_) / date_time_formatter.Day < int.MaxValue)) {
       return false;
     }
-    seconds = seconds_ % date_time_formatter.Minute;
-    minutes = ((int)(seconds_ - seconds) % date_time_formatter.Hour) /
+    days = (int)(seconds_ / date_time_formatter.Day);
+    // Exact: the product of two integers below 2⁵³.
+    double remainder = seconds_ - (double)days * date_time_formatter.Day;
+    seconds = remainder % date_time_formatter.Minute;
+    minutes = ((int)(remainder - seconds) % date_time_formatter.Hour) /
               date_time_formatter.Minute;
     hours =
-        ((int)(seconds_ - seconds - minutes * date_time_formatter.Minute) %
+        ((int)(remainder - seconds - minutes * date_time_formatter.Minute) %
          date_time_formatter.Day) /
         date_time_formatter.Hour;
-    days = (int)(seconds_ -
-                 seconds -
-                 minutes * date_time_formatter.Minute -
-                 hours * date_time_formatter.Hour) /
-           date_time_formatter.Day;
     return true;
   }
 
