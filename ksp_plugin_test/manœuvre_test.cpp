@@ -191,6 +191,36 @@ TEST_F(ManœuvreTest, TimedBurn) {
             acceleration(manœuvre.final_time() + 1 * Second).Norm());
 }
 
+TEST_F(ManœuvreTest, CoastingTrajectoryLandsAnUlpAway) {
+  // A coast that landed an ulp away from the manœuvre's initial time (seen in
+  // the field on a rebased plan) is accepted; a coast that plainly never got
+  // there is not.
+  Manœuvre<World, Rendering>::Intensity intensity;
+  intensity.direction = Vector<double, Frenet<Rendering>>({0, 1, 0});
+  intensity.duration = 1 * Second;
+  Manœuvre<World, Rendering>::Timing timing;
+  timing.initial_time = t0_;
+  Manœuvre<World, Rendering>::Burn const burn{
+      intensity,
+      timing,
+      /*thrust=*/1 * Newton,
+      /*specific_impulse=*/1 * Newton * Second / Kilogram,
+      MakeMockReferenceFrame(),
+      /*is_inertially_fixed=*/true};
+  Manœuvre<World, Rendering> manœuvre(/*initial_mass=*/2 * Kilogram, burn);
+  EXPECT_OK(discrete_trajectory_.Append(t0_ - 3600 * Second, dof_));
+  // The granularity of Instant in 1950, see burn_editor.cs.
+  EXPECT_OK(
+      discrete_trajectory_.Append(t0_ + 2.3841857910156250e-7 * Second, dof_));
+  manœuvre.set_coasting_trajectory(discrete_trajectory_.segments().begin());
+
+  DiscreteTrajectory<World> truncated_trajectory;
+  EXPECT_OK(truncated_trajectory.Append(t0_ - 2 * Second, dof_));
+  EXPECT_DEATH(
+      manœuvre.set_coasting_trajectory(truncated_trajectory.segments().begin()),
+      "nowhere near");
+}
+
 TEST_F(ManœuvreTest, TargetΔv) {
   Vector<double, Frenet<Rendering>> const e_y({0, 1, 0});
 

@@ -5,8 +5,12 @@
 #include <functional>
 #include <memory>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "numerics/elementary_functions.hpp"
 #include "physics/discrete_trajectory.hpp"
 #include "physics/rigid_motion.hpp"
+#include "quantities/si.hpp"
 
 namespace principia {
 namespace ksp_plugin {
@@ -14,8 +18,10 @@ namespace _manœuvre {
 namespace internal {
 
 using std::placeholders::_1;
+using namespace principia::numerics::_elementary_functions;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_rigid_motion;
+using namespace principia::quantities::_si;
 
 template<typename Frame>
 Vector<Acceleration, Frame> ThrustAcceleration(
@@ -192,8 +198,21 @@ void Manœuvre<InertialFrame, Frame>::set_coasting_trajectory(
     Velocity<InertialFrame> const& subsystem_velocity_conversion) {
   typename DiscreteTrajectory<InertialFrame>::iterator const it =
       trajectory->find(initial_time());
-  CHECK(it != trajectory->end());
-  initial_degrees_of_freedom_ = it->degrees_of_freedom;
+  if (it == trajectory->end()) {
+    // The caller has just coasted `trajectory` to `initial_time()`, but the
+    // adaptive integrator's last step is exact only to a rounding, so the
+    // landing may be an ulp away from the requested time.  Take the
+    // endpoint, checking that it is a rounding — not a truncation — away.
+    auto const& [time, degrees_of_freedom] = trajectory->back();
+    CHECK_LT(Abs(time - initial_time()), 1 * Second)
+        << "Coast ends at " << time << ", nowhere near " << initial_time();
+    LOG_EVERY_N_SEC(WARNING, 1)
+        << "Coast landed at " << time << " for a manœuvre at "
+        << initial_time();
+    initial_degrees_of_freedom_ = degrees_of_freedom;
+  } else {
+    initial_degrees_of_freedom_ = it->degrees_of_freedom;
+  }
   subsystem_conversion_ = subsystem_conversion;
   subsystem_velocity_conversion_ = subsystem_velocity_conversion;
 }
