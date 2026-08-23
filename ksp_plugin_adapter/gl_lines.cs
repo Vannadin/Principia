@@ -51,7 +51,20 @@ internal static class GLLines {
     UnityEngine.Vector3 opengl_camera_z_in_world =
         camera.cameraToWorldMatrix.MultiplyVector(
             new UnityEngine.Vector3(0, 0, 1));
-    Vector3d camera_position_in_world = PreciseCameraWorldPosition(camera);
+    // Reconstruct the camera's world position from its focus through the
+    // scene's forward mapping: the inverse transform sample drifts from the
+    // forward one by the float32 rounding of the transform state (~1e8 m at
+    // interstellar magnitudes), which overstates the camera distance at close
+    // focus and starves the adaptive plotting.
+    Vector3d camera_scaled = (Vector3d)camera.transform.position;
+    Vector3d? focus_world = CameraFocusWorldPosition();
+    Vector3d camera_position_in_world =
+        focus_world.HasValue
+            ? focus_world.Value +
+              (camera_scaled -
+               (Vector3d)ScaledSpace.LocalToScaledSpace(focus_world.Value)) *
+                  ScaledSpace.ScaleFactor
+            : (Vector3d)ScaledSpace.ScaledToLocalSpace(camera_scaled);
 
     // For explanations regarding the OpenGL projection matrix, see
     // http://www.songho.ca/opengl/gl_projectionmatrix.html.  The on-centre
@@ -87,24 +100,6 @@ internal static class GLLines {
   private static UnityEngine.Vector3 WorldToMapScreen(Vector3d world) {
     return PlanetariumCamera.Camera.WorldToScreenPoint(
         ScaledSpace.LocalToScaledSpace(world));
-  }
-
-  // Reconstructs the camera's world position from its focus through the
-  // scene's forward mapping: the inverse transform sample drifts from the
-  // forward one by the float32 rounding of the transform state (~1e8 m at
-  // interstellar magnitudes), which overstates the camera distance at close
-  // focus — starving the adaptive plotting, and inflating anything scaled by
-  // that distance, e.g. the manœuvre markers.
-  public static Vector3d PreciseCameraWorldPosition(
-      UnityEngine.Camera camera) {
-    Vector3d camera_scaled = (Vector3d)camera.transform.position;
-    Vector3d? focus_world = CameraFocusWorldPosition();
-    return focus_world.HasValue
-        ? focus_world.Value +
-          (camera_scaled -
-           (Vector3d)ScaledSpace.LocalToScaledSpace(focus_world.Value)) *
-              ScaledSpace.ScaleFactor
-        : (Vector3d)ScaledSpace.ScaledToLocalSpace(camera_scaled);
   }
 
   private static Vector3d? CameraFocusWorldPosition() {

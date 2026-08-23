@@ -83,15 +83,15 @@ internal class ManœuvreMarker : UnityEngine.MonoBehaviour {
         UnityEngine.Vector3.up,
         (Vector3d)trihedron.binormal);
 
-    // The camera position must be reconstructed from the focus: the raw
-    // transform sample carries the float32 rounding of its magnitude, which
-    // at interstellar distances exceeds the true camera–marker distance and
-    // blows the marker up.
+    // Both transforms live in the same recentred scene frame, so measure the
+    // separation there, as Unity will render it.  Going through world space
+    // multiplies by ScaleFactor · InverseScaleFactor ≠ 1, an error that rides
+    // the absolute world magnitude — ~1e11 m at interstellar distances, far
+    // beyond the true camera–marker distance, and the marker blows up.
     normalized_scale_ =
-        (GLLines.PreciseCameraWorldPosition(PlanetariumCamera.Camera) -
-         world_position).magnitude *
-        rescale_factor *
-        ScaledSpace.InverseScaleFactor;
+        ((Vector3d)(PlanetariumCamera.Camera.transform.position -
+                    transform.position)).magnitude *
+        rescale_factor;
     UpdateScale();
 
     UpdateColours();
