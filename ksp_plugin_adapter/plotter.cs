@@ -70,6 +70,7 @@ class Plotter {
                                       double history_length,
                                       double? prediction_t_max,
                                       double? flight_plan_t_max) {
+    burn_start_scene_positions_.Clear();
     if (main_vessel_guid != null) {
       Vessel main_vessel =
           FlightGlobals.FindVessel(new Guid(main_vessel_guid));
@@ -134,6 +135,15 @@ class Plotter {
               out int vertex_count,
               out XYZ anchor,
               out int seam_vertex_count);
+          if (is_burn) {
+            Vector3d? translation = MeshTranslation(anchor,
+                                                    main_reference,
+                                                    null);
+            burn_start_scene_positions_.Add(
+                vertex_count > 0 && translation.HasValue
+                    ? translation.Value + (Vector3d)VertexBuffer.vertices[0]
+                    : (Vector3d?)null);
+          }
           // No need for dynamic initialization, that was done above.
           DrawLineMesh(flight_plan_segment_meshes_[i],
                        seam_vertex_count,
@@ -420,36 +430,13 @@ class Plotter {
                       submesh: 0);
     }
     mesh.RecalculateBounds();
-    // The vertices are relative to the camera, which bounds their float
-    // rounding by the ULP of their distance from it, angularly sub-pixel from
-    // any viewpoint.  An anchored plot reports the camera as a displacement
-    // from the plot's own reference — the plotted vessel at the present, the
-    // very position the scene draws its icon at — so drawing at the scene's
-    // mapping of that position, plus the displacement — the camera's own
-    // scene position — reassembles the plot through the scene's own
-    // arithmetic: the camera term cancels and neither
-    // side ever expresses a point in scaled space across the distance to the
-    // plotting frame's origin, where it would round to a kilometre.  A zero
-    // anchor is the stock bit-identical path, left untouched.
-    Vector3d translation = (Vector3d)anchor;
-    if (anchor.x != 0 || anchor.y != 0 || anchor.z != 0) {
-      if (registration_reference_world.HasValue) {
-        // The anchor is the camera as a displacement from the plot's own
-        // registration point; the scene's mapping of that point plus the
-        // displacement is the camera's own scene position.
-        translation = SceneReferenceTranslation(
-            registration_reference_world.Value, anchor);
-      } else if (correction_reference_world.HasValue) {
-        // The anchor is the camera's absolute scaled-space position.
-        translation += SceneMappingCorrection(
-            correction_reference_world.Value);
-      } else {
-        // A nonzero anchor is meaningless without the reference it was
-        // reported against; drawing it raw would put the mesh at the
-        // scaled-space origin.
-        return;
-      }
+    Vector3d? maybe_translation = MeshTranslation(anchor,
+                                                  registration_reference_world,
+                                                  correction_reference_world);
+    if (!maybe_translation.HasValue) {
+      return;
     }
+    Vector3d translation = maybe_translation.Value;
     // If the lines are drawn in layer 31 (Vectors), which sounds more
     // appropriate, they vanish when zoomed out.  Layer 9 works; pay no
     // attention to its name.
@@ -506,13 +493,54 @@ class Plotter {
         PlanetariumCamera.Camera);
   }
 
-  // Fills the dash buffers with dashes cut by apparent arc — the angle swept
-  // as seen from the camera — along the polyline, and returns the number of
-  // vertices used.  The boundaries are a function of that arc alone, so a
-  // re-plot that moves the vertices leaves the dashes still, and the dashes
-  // are pixel-sized on screen whatever their depth; the period grows only if
-  // the whole line sweeps too large an angle.  On a line plotted from a
-  // moving origin the pattern rides that origin.
+  // The scene translation at which a mesh with this anchor is drawn.  The
+  // vertices are relative to the camera, which bounds their float rounding by
+  // the ULP of their distance from it, angularly sub-pixel from any
+  // viewpoint.  An anchored plot reports the camera as a displacement from
+  // the plot's own reference — the plotted vessel at the present, the very
+  // position the scene draws its icon at — so the scene's mapping of that
+  // position, plus the displacement, reassembles the plot through the
+  // scene's own arithmetic: the camera term cancels and neither side ever
+  // expresses a point in scaled space across the distance to the plotting
+  // frame's origin, where it would round to a kilometre.  A zero anchor is
+  // the stock bit-identical path, left untouched.  A nonzero anchor without
+  // its reference is meaningless — drawing it raw would put the mesh at the
+  // scaled-space origin — and yields null.
+  private Vector3d? MeshTranslation(XYZ anchor,
+                                    Vector3d? registration_reference_world,
+                                    Vector3d? correction_reference_world) {
+    Vector3d translation = (Vector3d)anchor;
+    if (anchor.x != 0 || anchor.y != 0 || anchor.z != 0) {
+      if (registration_reference_world.HasValue) {
+        translation = SceneReferenceTranslation(
+            registration_reference_world.Value, anchor);
+      } else if (correction_reference_world.HasValue) {
+        translation += SceneMappingCorrection(
+            correction_reference_world.Value);
+      } else {
+        return null;
+      }
+    }
+    return translation;
+  }
+
+  // The scene position of the start of the manœuvre's burn segment, as the
+  // last plot placed it; null when the burn was not plotted.  The manœuvre
+  // markers take their position from here, so that they ride the same
+  // jitter-free reassembly as the lines they sit on.
+  public Vector3d? BurnStartScenePosition(int manœuvre_index) {
+    return manœuvre_index < burn_start_scene_positions_.Count
+               ? burn_start_scene_positions_[manœuvre_index]
+               : null;
+  }
+
+  // Fills the dash buffers with dashes cut along the polyline's 3D arc — a
+  // camera-independent parameter, so moving the viewpoint never slides the
+  // boundaries — at the local period nearest a 16-pixel dash for that
+  // point's camera distance, rounded to a power of two.  Powers of two with
+  // a common origin nest, so a change of viewpoint or zoom only merges or
+  // splits dashes in place.  Returns the number of vertices used.  On a
+  // line plotted from a moving origin the pattern rides that origin.
   private int FillDashBuffers(int first_vertex,
                               int vertex_count,
                               UnityEngine.Color colour,
@@ -528,77 +556,66 @@ class Plotter {
         camera_relative
             ? UnityEngine.Vector3.zero
             : PlanetariumCamera.Camera.transform.position;
+    double angular_period = 32 * TanAngularResolution();
 
-    // The apparent arc of a segment over which the camera distance varies
-    // linearly is (ds / (r1 - r0)) ln(r1 / r0), and the position at a given
-    // arc inverts it exactly; both degenerate gracefully to ds / r as
-    // r1 → r0.  A segment through the camera subtends no more than π.
-    double total = 0;
+    // Estimate the dash count to bound the buffers: a plot coiled by a
+    // twisted frame can sweep an enormous apparent arc.
+    double estimated_periods = 0;
     for (int i = 1; i < vertex_count; ++i) {
       UnityEngine.Vector3 p0 = vertices[first_vertex + i - 1];
       UnityEngine.Vector3 p1 = vertices[first_vertex + i];
-      total += SegmentApparentArc((p0 - camera).magnitude,
-                                  (p1 - camera).magnitude,
-                                  (p1 - p0).magnitude);
+      double r = Math.Max(
+          0.5 * ((p0 - camera).magnitude + (p1 - camera).magnitude),
+          minimal_camera_distance);
+      estimated_periods += (p1 - p0).magnitude / (angular_period * r);
     }
-    if (!(total > 0) || double.IsInfinity(total)) {
+    if (!(estimated_periods > 0) || double.IsInfinity(estimated_periods)) {
       return 0;
     }
-    // A 16-pixel dash and a 16-pixel gap, lengthened if the line sweeps such
-    // an angle that the dashes would not fit the buffers.
-    double period = Math.Max(32 * TanAngularResolution(),
-                             total / max_dash_periods);
+    int extra_octaves = (int)Math.Max(
+        0,
+        Math.Ceiling(Math.Log(estimated_periods / max_dash_periods, 2)));
 
     int n = 0;
-    double s = 0;
-    for (int i = 1; i < vertex_count; ++i) {
+    double s = 0;  // 3D arc length from the first vertex.
+    for (int i = 1;
+         i < vertex_count && n < 8 * max_dash_periods;
+         ++i) {
       UnityEngine.Vector3 p0 = vertices[first_vertex + i - 1];
       UnityEngine.Vector3 p1 = vertices[first_vertex + i];
-      double r0 = Math.Max((p0 - camera).magnitude, minimal_camera_distance);
-      double r1 = Math.Max((p1 - camera).magnitude, minimal_camera_distance);
       double ds = (p1 - p0).magnitude;
-      double arc = SegmentApparentArc(r0, r1, ds);
-      if (arc == 0) {
+      if (!(ds > 0)) {
         continue;
       }
-      double k = (r1 - r0) / ds;
-      double s1 = s + arc;
-      for (double on_start = Math.Floor(s / period) * period;
-           on_start < s1;
-           on_start += period) {
-        double a = Math.Max(s, on_start);
-        double b = Math.Min(s1, on_start + period / 2);
-        if (b <= a) {
-          continue;
+      double r0 = Math.Max((p0 - camera).magnitude, minimal_camera_distance);
+      double r1 = Math.Max((p1 - camera).magnitude, minimal_camera_distance);
+      double pos = 0;
+      while (pos < ds && n < 8 * max_dash_periods) {
+        double r = r0 + (r1 - r0) * (pos / ds);
+        double period = Math.Pow(
+            2,
+            Math.Round(Math.Log(angular_period * r, 2)) + extra_octaves);
+        double a = s + pos;
+        double cell = Math.Floor(a / period);
+        double next = Math.Min((cell + 1) * period - s, ds);
+        if (next <= pos) {
+          // A rounding stall at a cell boundary; step clear of it.
+          next = Math.Min(pos + period / 2, ds);
         }
-        dash_vertices_.Add(UnityEngine.Vector3.Lerp(
-            p0, p1, (float)(PositionAtApparentArc(a - s, r0, k) / ds)));
-        dash_colours_.Add(colour);
-        dash_vertices_.Add(UnityEngine.Vector3.Lerp(
-            p0, p1, (float)(PositionAtApparentArc(b - s, r0, k) / ds)));
-        dash_colours_.Add(colour);
-        n += 2;
+        if (cell % 2 == 0) {
+          dash_vertices_.Add(
+              UnityEngine.Vector3.Lerp(p0, p1, (float)(pos / ds)));
+          dash_colours_.Add(colour);
+          dash_vertices_.Add(
+              UnityEngine.Vector3.Lerp(p0, p1, (float)(next / ds)));
+          dash_colours_.Add(colour);
+          n += 2;
+        }
+        pos = next;
       }
-      s = s1;
+      s += ds;
     }
     return n;
-  }
-
-  private static double SegmentApparentArc(double r0, double r1, double ds) {
-    if (!(ds > 0)) {
-      return 0;
-    }
-    r0 = Math.Max(r0, minimal_camera_distance);
-    r1 = Math.Max(r1, minimal_camera_distance);
-    double arc = Math.Abs(r1 - r0) < 1e-6 * r0
-                     ? ds / r0
-                     : ds * Math.Log(r1 / r0) / (r1 - r0);
-    return Math.Min(arc, Math.PI);
-  }
-
-  private static double PositionAtApparentArc(double arc, double r0, double k) {
-    return Math.Abs(k) < 1e-12 ? arc * r0
-                               : r0 * (Math.Exp(k * arc) - 1) / k;
   }
 
   private static UnityEngine.Mesh MakeDynamicMesh() {
@@ -650,6 +667,8 @@ class Plotter {
   private int[] indices_ = null;
   private UnityEngine.Color[] colours_ =
       new UnityEngine.Color[VertexBuffer.size];
+  private readonly List<Vector3d?> burn_start_scene_positions_ =
+      new List<Vector3d?>();
   private List<UnityEngine.Vector3> dash_vertices_ = null;
   private List<UnityEngine.Color> dash_colours_ = null;
   private const int max_dash_periods = 6000;

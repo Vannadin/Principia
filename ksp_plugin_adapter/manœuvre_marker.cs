@@ -62,16 +62,19 @@ internal class ManœuvreMarker : UnityEngine.MonoBehaviour {
     Disable();
   }
 
-  // Call on each frame (at or later than `Update`) to set the state of the marker.
+  // Call on each frame (at or later than `Update`) to set the state of the
+  // marker.  The position is given in the scene's scaled space, as the
+  // plotter placed the burn it marks: mapping a raw world position here
+  // would round at the ULP of its magnitude, kilometres of jitter at
+  // interstellar distances.
   public void Render(int index,
-                     Vector3d world_position,
+                     Vector3d scene_position,
                      Vector3d initial_plotted_velocity,
                      NavigationManoeuvreFrenetTrihedron trihedron) {
     index_ = index;
     initial_plotted_velocity_ = initial_plotted_velocity;
 
-    var screen_position = ScaledSpace.LocalToScaledSpace(world_position);
-    transform.position = screen_position;
+    transform.position = scene_position;
 
     tangent_.transform.localRotation = UnityEngine.Quaternion.FromToRotation(
         UnityEngine.Vector3.up,
@@ -95,7 +98,7 @@ internal class ManœuvreMarker : UnityEngine.MonoBehaviour {
     UpdateScale();
 
     UpdateColours();
-    UpdateCaption(screen_position);
+    UpdateCaption(scene_position);
 
     gameObject.SetActive(true);
     // `UpdateCaption` will have updated its activity state appropriately.

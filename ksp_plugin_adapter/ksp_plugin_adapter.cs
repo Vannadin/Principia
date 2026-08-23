@@ -3090,78 +3090,61 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
       return;
     }
     string main_vessel_guid = PredictedVessel()?.id.ToString();
-    if (MapView.MapIsEnabled) {
-      var sun_world_position = (XYZ)Planetarium.fetch.Sun.position;
-      using (DisposablePlanetarium planetarium =
-        GLLines.NewPlanetarium(plugin_, sun_world_position)) {
-        int number_of_rendered_manœuvres = 0;
-        if (main_vessel_guid != null &&
-            plugin_.FlightPlanExists(main_vessel_guid) &&
-            SceneReference(main_vessel_guid) is XYZ reference) {
-          int number_of_anomalous_manœuvres =
-              plugin_.FlightPlanNumberOfAnomalousManoeuvres(main_vessel_guid);
-          int number_of_manœuvres =
-              plugin_.FlightPlanNumberOfManoeuvres(main_vessel_guid);
-          int number_of_segments =
-              plugin_.FlightPlanNumberOfSegments(main_vessel_guid);
-          for (int i = 0; i < number_of_segments; ++i) {
-            bool is_burn = i % 2 == 1;
-            using (DisposableIterator rendered_segments =
-                plugin_.FlightPlanRenderedSegment(main_vessel_guid,
-                                                  sun_world_position,
-                                                  reference,
-                                                  i)) {
-              if (rendered_segments.IteratorAtEnd()) {
-                Log.Info("Skipping segment " + i);
-                continue;
-              }
-              Vector3d position_at_start = (Vector3d)rendered_segments.
-                  IteratorGetDiscreteTrajectoryXYZ();
-              double time_at_start =
-                  rendered_segments.IteratorGetDiscreteTrajectoryTime();
-              if (is_burn &&
-                  (flight_plan_collision_ == null ||
-                   time_at_start <= flight_plan_collision_.Value.t)) {
-                int manœuvre_index = i / 2;
-                if (manœuvre_index <
-                    number_of_manœuvres - number_of_anomalous_manœuvres) {
-                  NavigationManoeuvreFrenetTrihedron trihedron =
-                      plugin_.FlightPlanGetManoeuvreFrenetTrihedron(
-                          main_vessel_guid,
-                          manœuvre_index);
-                  if (number_of_rendered_manœuvres
-                      >= manœuvre_marker_pool_.Count) {
-                    manœuvre_marker_pool_.Add(
-                        ManœuvreMarker.Create(main_window_, flight_planner_));
-                  }
-                  var initial_plotted_velocity =
-                      (Vector3d)plugin_.FlightPlanGetManoeuvreInitialPlottedVelocity(
-                          main_vessel_guid, manœuvre_index);
-                  manœuvre_marker_pool_[number_of_rendered_manœuvres].
-                      Render(manœuvre_index,
-                             world_position: position_at_start,
-                             initial_plotted_velocity,
-                             trihedron);
-                  ++number_of_rendered_manœuvres;
-                }
-              }
-            }
-          }
+    int number_of_rendered_manœuvres = 0;
+    if (MapView.MapIsEnabled &&
+        main_vessel_guid != null &&
+        plugin_.FlightPlanExists(main_vessel_guid)) {
+      int number_of_anomalous_manœuvres =
+          plugin_.FlightPlanNumberOfAnomalousManoeuvres(main_vessel_guid);
+      int number_of_manœuvres =
+          plugin_.FlightPlanNumberOfManoeuvres(main_vessel_guid);
+      for (int i = 0;
+           i < number_of_manœuvres - number_of_anomalous_manœuvres;
+           ++i) {
+        // The position comes from the plotted burn segment itself, so the
+        // marker rides the same jitter-free reassembly as the lines; a burn
+        // that was not plotted has no marker.
+        Vector3d? scene_position = plotter_.BurnStartScenePosition(i);
+        if (!scene_position.HasValue) {
+          continue;
         }
-        // This cleanup must occur even if there is no flight plan or no
-        // predicted vessel. In the tracking station, one may switch from a
-        // vessel with a plan to one without.  One may also delete a vessel.
-        for (int i = number_of_rendered_manœuvres;
-             i < manœuvre_marker_pool_.Count;
-             ++i) {
-          // Since markers are used sequentially, all subsequent ones will
-          // be in the disabled state.
-          if (manœuvre_marker_pool_[i].is_disabled) {
-            break;
-          }
-          manœuvre_marker_pool_[i].Disable();
+        NavigationManoeuvre manœuvre =
+            plugin_.FlightPlanGetManoeuvre(main_vessel_guid, i);
+        if (flight_plan_collision_ != null &&
+            manœuvre.burn.initial_time > flight_plan_collision_.Value.t) {
+          continue;
         }
+        NavigationManoeuvreFrenetTrihedron trihedron =
+            plugin_.FlightPlanGetManoeuvreFrenetTrihedron(main_vessel_guid,
+                                                          i);
+        if (number_of_rendered_manœuvres >= manœuvre_marker_pool_.Count) {
+          manœuvre_marker_pool_.Add(
+              ManœuvreMarker.Create(main_window_, flight_planner_));
+        }
+        var initial_plotted_velocity =
+            (Vector3d)plugin_.FlightPlanGetManoeuvreInitialPlottedVelocity(
+                main_vessel_guid,
+                i);
+        manœuvre_marker_pool_[number_of_rendered_manœuvres].Render(
+            i,
+            scene_position.Value,
+            initial_plotted_velocity,
+            trihedron);
+        ++number_of_rendered_manœuvres;
       }
+    }
+    // This cleanup must occur even if there is no flight plan or no
+    // predicted vessel.  In the tracking station, one may switch from a
+    // vessel with a plan to one without.  One may also delete a vessel.
+    for (int i = number_of_rendered_manœuvres;
+         i < manœuvre_marker_pool_.Count;
+         ++i) {
+      // Since markers are used sequentially, all subsequent ones will
+      // be in the disabled state.
+      if (manœuvre_marker_pool_[i].is_disabled) {
+        break;
+      }
+      manœuvre_marker_pool_[i].Disable();
     }
   }
 
