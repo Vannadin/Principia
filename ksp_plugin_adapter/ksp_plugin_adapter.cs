@@ -3094,6 +3094,17 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
     if (MapView.MapIsEnabled &&
         main_vessel_guid != null &&
         plugin_.FlightPlanExists(main_vessel_guid)) {
+      // Reading a segment through this entry point is what drives the
+      // incremental recomputation of a deadline-anomalous plan, once per
+      // frame on the UI thread; the rendering itself is discarded — the
+      // markers take their positions from the plotter.
+      if (SceneReference(main_vessel_guid) is XYZ reference) {
+        using (plugin_.FlightPlanRenderedSegment(
+                   main_vessel_guid,
+                   (XYZ)Planetarium.fetch.Sun.position,
+                   reference,
+                   0)) {}
+      }
       int number_of_anomalous_manœuvres =
           plugin_.FlightPlanNumberOfAnomalousManoeuvres(main_vessel_guid);
       int number_of_manœuvres =
@@ -3103,15 +3114,10 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
            ++i) {
         // The position comes from the plotted burn segment itself, so the
         // marker rides the same jitter-free reassembly as the lines; a burn
-        // that was not plotted has no marker.
+        // that was not plotted — beyond the plotted window or past a
+        // collision, which the plot already clips — has no marker.
         Vector3d? scene_position = plotter_.BurnStartScenePosition(i);
         if (!scene_position.HasValue) {
-          continue;
-        }
-        NavigationManoeuvre manœuvre =
-            plugin_.FlightPlanGetManoeuvre(main_vessel_guid, i);
-        if (flight_plan_collision_ != null &&
-            manœuvre.burn.initial_time > flight_plan_collision_.Value.t) {
           continue;
         }
         NavigationManoeuvreFrenetTrihedron trihedron =

@@ -536,11 +536,15 @@ class Plotter {
 
   // Fills the dash buffers with dashes cut along the polyline's 3D arc — a
   // camera-independent parameter, so moving the viewpoint never slides the
-  // boundaries — at the local period nearest a 16-pixel dash for that
-  // point's camera distance, rounded to a power of two.  Powers of two with
-  // a common origin nest, so a change of viewpoint or zoom only merges or
-  // splits dashes in place.  Returns the number of vertices used.  On a
-  // line plotted from a moving origin the pattern rides that origin.
+  // boundaries — into cells of the local period nearest 16 pixels at that
+  // point's camera distance, rounded to a power of two; even cells draw.
+  // Powers of two with a common origin nest, so a change of viewpoint or
+  // zoom mostly merges or splits dashes in place (a band about one dash
+  // wide can shift where the local period crosses an octave).  The arc is
+  // measured from the start of the buffer, not of the drawn range, so a
+  // tail drawn after a seam keeps the phase of its segment.  Returns the
+  // number of vertices used.  On a line plotted from a moving origin the
+  // pattern rides that origin.
   private int FillDashBuffers(int first_vertex,
                               int vertex_count,
                               UnityEngine.Color colour,
@@ -556,30 +560,42 @@ class Plotter {
         camera_relative
             ? UnityEngine.Vector3.zero
             : PlanetariumCamera.Camera.transform.position;
-    double angular_period = 32 * TanAngularResolution();
+    double cell_angle = 16 * TanAngularResolution();
 
-    // Estimate the dash count to bound the buffers: a plot coiled by a
-    // twisted frame can sweep an enormous apparent arc.
-    double estimated_periods = 0;
+    // The apparent arc under the walk's own linear model of the camera
+    // distance, ∫ds/r = ds ln(r1/r0)/(r1 − r0); it bounds the cell count so
+    // that a plot coiled by a twisted frame cannot overrun the buffers.
+    double estimated_cells = 0;
     for (int i = 1; i < vertex_count; ++i) {
       UnityEngine.Vector3 p0 = vertices[first_vertex + i - 1];
       UnityEngine.Vector3 p1 = vertices[first_vertex + i];
-      double r = Math.Max(
-          0.5 * ((p0 - camera).magnitude + (p1 - camera).magnitude),
-          minimal_camera_distance);
-      estimated_periods += (p1 - p0).magnitude / (angular_period * r);
+      double r0 = Math.Max((p0 - camera).magnitude, minimal_camera_distance);
+      double r1 = Math.Max((p1 - camera).magnitude, minimal_camera_distance);
+      double ds = (p1 - p0).magnitude;
+      if (!(ds > 0)) {
+        continue;
+      }
+      double arc = Math.Abs(r1 - r0) < 1e-6 * r0
+                       ? ds / r0
+                       : ds * Math.Log(r1 / r0) / (r1 - r0);
+      estimated_cells += arc / cell_angle;
     }
-    if (!(estimated_periods > 0) || double.IsInfinity(estimated_periods)) {
+    if (!(estimated_cells > 0) || double.IsInfinity(estimated_cells)) {
       return 0;
     }
+    // √2 covers the octave rounding of the local period.
     int extra_octaves = (int)Math.Max(
         0,
-        Math.Ceiling(Math.Log(estimated_periods / max_dash_periods, 2)));
+        Math.Ceiling(
+            Math.Log(Math.Sqrt(2) * estimated_cells / max_dash_periods, 2)));
 
     int n = 0;
-    double s = 0;  // 3D arc length from the first vertex.
+    double s = 0;  // 3D arc length from the start of the buffer.
+    for (int i = 1; i <= first_vertex; ++i) {
+      s += (vertices[i] - vertices[i - 1]).magnitude;
+    }
     for (int i = 1;
-         i < vertex_count && n < 8 * max_dash_periods;
+         i < vertex_count && n + 2 <= dash_vertex_capacity;
          ++i) {
       UnityEngine.Vector3 p0 = vertices[first_vertex + i - 1];
       UnityEngine.Vector3 p1 = vertices[first_vertex + i];
@@ -590,17 +606,18 @@ class Plotter {
       double r0 = Math.Max((p0 - camera).magnitude, minimal_camera_distance);
       double r1 = Math.Max((p1 - camera).magnitude, minimal_camera_distance);
       double pos = 0;
-      while (pos < ds && n < 8 * max_dash_periods) {
+      while (pos < ds && n + 2 <= dash_vertex_capacity) {
         double r = r0 + (r1 - r0) * (pos / ds);
         double period = Math.Pow(
             2,
-            Math.Round(Math.Log(angular_period * r, 2)) + extra_octaves);
+            Math.Round(Math.Log(cell_angle * r, 2)) + extra_octaves);
         double a = s + pos;
         double cell = Math.Floor(a / period);
         double next = Math.Min((cell + 1) * period - s, ds);
         if (next <= pos) {
-          // A rounding stall at a cell boundary; step clear of it.
-          next = Math.Min(pos + period / 2, ds);
+          // The cell index has saturated the double; give the rest of this
+          // segment up rather than walk it at rounding scale.
+          break;
         }
         if (cell % 2 == 0) {
           dash_vertices_.Add(
@@ -672,6 +689,8 @@ class Plotter {
   private List<UnityEngine.Vector3> dash_vertices_ = null;
   private List<UnityEngine.Color> dash_colours_ = null;
   private const int max_dash_periods = 6000;
+  // Bounded by the identity index array, 4 × VertexBuffer.size.
+  private const int dash_vertex_capacity = 32768;
   private const double minimal_camera_distance = 1e-6;
 }
 
