@@ -314,10 +314,16 @@ class Plotter {
       // Plot the trajectory of an orbiting body if it could be separated from
       // that of its parent by a pixel of empty space, instead of merely making
       // the line wider; but always traverse the subtree if the current body is
-      // hidden.
+      // hidden.  The reach of the child is its apoapsis, except that the
+      // osculating conic about its designated parent is unbound for an
+      // interstellar body, and reports no usable apoapsis; the present
+      // separation stands in there.
+      double apoapsis = child.orbit.ApR;
+      double reach = apoapsis > 0
+                         ? apoapsis
+                         : (child.position - root.position).magnitude;
       if (!adapter_.show_celestial_trajectory(root) ||
-          child.orbit.ApR / min_distance_from_camera >
-              2 * tan_angular_resolution) {
+          reach / min_distance_from_camera > 2 * tan_angular_resolution) {
         PlotSubtreeTrajectories(planetarium, main_vessel_guid, history_length,
                                 child, tan_angular_resolution);
       }
