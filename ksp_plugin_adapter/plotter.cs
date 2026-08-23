@@ -364,39 +364,57 @@ class Plotter {
                 VertexBuffer.size);
     }
 
-    mesh.vertices = VertexBuffer.vertices;
-    int index_count = style == GLLines.Style.Dashed ? vertex_count & ~1
-                                                    : vertex_count;
-
     if (indices_ == null) {
-      indices_ = new int[VertexBuffer.size];
+      indices_ = new int[2 * VertexBuffer.size];
       for (int i = 0; i < indices_.Length; ++i) {
         indices_[i] = i;
       }
     }
 
-    if (style == GLLines.Style.Faded) {
-      for (int i = 0; i < vertex_count; ++i) {
-        var faded_colour = colour;
-        // Fade from the opacity of `colour` (when i = 0) down to 20% of that
-        // opacity.
-        faded_colour.a *= 1 - 0.8f * (i / (float)vertex_count);
-        colours_[first_vertex + i] = faded_colour;
-      }
+    if (style == GLLines.Style.Dashed && vertex_count >= 2) {
+      // Dashes are cut by arc length along the plotted curve, not by pairing
+      // raw vertices: a vertex pair is one adaptive-sampler segment, whose
+      // length breathes with the local curvature and whose phase reshuffles
+      // on every re-plot, so the dashes crawl.  Arc length is a property of
+      // the curve itself and leaves them still.
+      int dash_vertex_count = FillDashBuffers(first_vertex,
+                                              vertex_count,
+                                              colour);
+      mesh.vertices = dash_vertices_;
+      mesh.colors = dash_colours_;
+      mesh.SetIndices(indices_,
+                      indicesStart: 0,
+                      indicesLength: dash_vertex_count,
+                      UnityEngine.MeshTopology.Lines,
+                      submesh: 0);
     } else {
-      for (int i = 0; i < vertex_count; ++i) {
-        colours_[first_vertex + i] = colour;
-      }
-    }
+      mesh.vertices = VertexBuffer.vertices;
+      int index_count = style == GLLines.Style.Dashed ? vertex_count & ~1
+                                                      : vertex_count;
 
-    mesh.colors = colours_;
-    mesh.SetIndices(indices_,
-                    indicesStart: first_vertex,
-                    indicesLength: index_count,
-                    style == GLLines.Style.Dashed
-                        ? UnityEngine.MeshTopology.Lines
-                        : UnityEngine.MeshTopology.LineStrip,
-                    submesh: 0);
+      if (style == GLLines.Style.Faded) {
+        for (int i = 0; i < vertex_count; ++i) {
+          var faded_colour = colour;
+          // Fade from the opacity of `colour` (when i = 0) down to 20% of
+          // that opacity.
+          faded_colour.a *= 1 - 0.8f * (i / (float)vertex_count);
+          colours_[first_vertex + i] = faded_colour;
+        }
+      } else {
+        for (int i = 0; i < vertex_count; ++i) {
+          colours_[first_vertex + i] = colour;
+        }
+      }
+
+      mesh.colors = colours_;
+      mesh.SetIndices(indices_,
+                      indicesStart: first_vertex,
+                      indicesLength: index_count,
+                      style == GLLines.Style.Dashed
+                          ? UnityEngine.MeshTopology.Lines
+                          : UnityEngine.MeshTopology.LineStrip,
+                      submesh: 0);
+    }
     mesh.RecalculateBounds();
     // The vertices are relative to the camera, which bounds their float
     // rounding by the ULP of their distance from it, angularly sub-pixel from
@@ -484,6 +502,64 @@ class Plotter {
         PlanetariumCamera.Camera);
   }
 
+  // Fills `dash_vertices_`/`dash_colours_` with dashes of a fixed arc length
+  // along the polyline in the vertex buffer and returns the number of
+  // vertices used.  The dash-plus-gap period is a power of two of the total
+  // length, so it does not breathe as the line grows.
+  private int FillDashBuffers(int first_vertex,
+                              int vertex_count,
+                              UnityEngine.Color colour) {
+    if (dash_vertices_ == null) {
+      dash_vertices_ = new UnityEngine.Vector3[2 * VertexBuffer.size];
+      dash_colours_ = new UnityEngine.Color[2 * VertexBuffer.size];
+    }
+    var vertices = VertexBuffer.vertices;
+    double total = 0;
+    for (int i = 1; i < vertex_count; ++i) {
+      total += (vertices[first_vertex + i] -
+                vertices[first_vertex + i - 1]).magnitude;
+    }
+    if (!(total > 0)) {
+      return 0;
+    }
+    double period = Math.Pow(2, Math.Ceiling(Math.Log(total / 256, 2)));
+
+    int n = 0;
+    double s = 0;
+    for (int i = 1;
+         i < vertex_count && n + 2 <= dash_vertices_.Length;
+         ++i) {
+      UnityEngine.Vector3 p0 = vertices[first_vertex + i - 1];
+      UnityEngine.Vector3 p1 = vertices[first_vertex + i];
+      double ds = (p1 - p0).magnitude;
+      if (ds == 0) {
+        continue;
+      }
+      double s1 = s + ds;
+      for (double on_start = Math.Floor(s / period) * period;
+           on_start < s1 && n + 2 <= dash_vertices_.Length;
+           on_start += period) {
+        double a = Math.Max(s, on_start);
+        double b = Math.Min(s1, on_start + period / 2);
+        if (b <= a) {
+          continue;
+        }
+        dash_vertices_[n] = UnityEngine.Vector3.Lerp(p0,
+                                                     p1,
+                                                     (float)((a - s) / ds));
+        dash_colours_[n] = colour;
+        ++n;
+        dash_vertices_[n] = UnityEngine.Vector3.Lerp(p0,
+                                                     p1,
+                                                     (float)((b - s) / ds));
+        dash_colours_[n] = colour;
+        ++n;
+      }
+      s = s1;
+    }
+    return n;
+  }
+
   private static UnityEngine.Mesh MakeDynamicMesh() {
     var result = new UnityEngine.Mesh();
     result.MarkDynamic();
@@ -533,6 +609,8 @@ class Plotter {
   private int[] indices_ = null;
   private UnityEngine.Color[] colours_ =
       new UnityEngine.Color[VertexBuffer.size];
+  private UnityEngine.Vector3[] dash_vertices_ = null;
+  private UnityEngine.Color[] dash_colours_ = null;
 }
 
 }  // namespace ksp_plugin_adapter
