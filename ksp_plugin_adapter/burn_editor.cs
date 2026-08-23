@@ -444,9 +444,23 @@ class BurnEditor : ScalingRenderer {
     return projection < 1e-3 ? 0 : projection;
   }
 
+  // The spacing of doubles just above |x| — at a power of two, the larger of
+  // the two neighbouring spacings.
+  private static double Ulp(double x) {
+    long bits = BitConverter.DoubleToInt64Bits(Math.Abs(x));
+    return BitConverter.Int64BitsToDouble(bits + 1) -
+           BitConverter.Int64BitsToDouble(bits);
+  }
+
   private string FormatΔvComponent(double metres_per_second) {
-    // The granularity of Instant in 1950.
-    const double dt = 2.3841857910156250e-7; // 2⁻²² s.
+    // The granularity of `Instant` at the end of the burn, approximating its
+    // magnitude by the game time (exact for a J2000 game epoch); the floor is
+    // its value in 1950.  Edits finer than this cannot move the integration
+    // endpoint.
+    double dt = Math.Max(
+        2.3841857910156250e-7,  // 2⁻²² s.
+        Ulp(Math.Max(Math.Abs(initial_time_),
+                     Math.Abs(initial_time_ + duration_))));
     double initial_acceleration =
         thrust_in_kilonewtons_ / initial_mass_in_tonnes_;
     double Isp = specific_impulse_in_seconds_g0_ * 9.80665;
