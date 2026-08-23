@@ -365,23 +365,27 @@ class Plotter {
     }
 
     if (indices_ == null) {
-      indices_ = new int[2 * VertexBuffer.size];
+      indices_ = new int[4 * VertexBuffer.size];
       for (int i = 0; i < indices_.Length; ++i) {
         indices_[i] = i;
       }
     }
 
     if (style == GLLines.Style.Dashed && vertex_count >= 2) {
-      // Dashes are cut by arc length along the plotted curve, not by pairing
-      // raw vertices: a vertex pair is one adaptive-sampler segment, whose
-      // length breathes with the local curvature and whose phase reshuffles
-      // on every re-plot, so the dashes crawl.  Arc length is a property of
-      // the curve itself and leaves them still.
+      // Dashes are cut by apparent arc along the plotted curve, not by
+      // pairing raw vertices: a vertex pair is one adaptive-sampler segment,
+      // whose length breathes with the local curvature and whose phase
+      // reshuffles on every re-plot, so the dashes crawl.  The apparent arc
+      // is a property of the curve as seen, which leaves the dashes still
+      // and pixel-sized whatever the depth.
+      bool camera_relative = anchor.x != 0 || anchor.y != 0 || anchor.z != 0;
       int dash_vertex_count = FillDashBuffers(first_vertex,
                                               vertex_count,
-                                              colour);
-      mesh.vertices = dash_vertices_;
-      mesh.colors = dash_colours_;
+                                              colour,
+                                              camera_relative);
+      mesh.Clear();
+      mesh.SetVertices(dash_vertices_);
+      mesh.SetColors(dash_colours_);
       mesh.SetIndices(indices_,
                       indicesStart: 0,
                       indicesLength: dash_vertex_count,
@@ -502,62 +506,99 @@ class Plotter {
         PlanetariumCamera.Camera);
   }
 
-  // Fills `dash_vertices_`/`dash_colours_` with dashes of a fixed arc length
-  // along the polyline in the vertex buffer and returns the number of
-  // vertices used.  The dash-plus-gap period is a power of two of the total
-  // length, so it does not breathe as the line grows.
+  // Fills the dash buffers with dashes cut by apparent arc — the angle swept
+  // as seen from the camera — along the polyline, and returns the number of
+  // vertices used.  The boundaries are a function of that arc alone, so a
+  // re-plot that moves the vertices leaves the dashes still, and the dashes
+  // are pixel-sized on screen whatever their depth; the period grows only if
+  // the whole line sweeps too large an angle.  On a line plotted from a
+  // moving origin the pattern rides that origin.
   private int FillDashBuffers(int first_vertex,
                               int vertex_count,
-                              UnityEngine.Color colour) {
+                              UnityEngine.Color colour,
+                              bool camera_relative) {
     if (dash_vertices_ == null) {
-      dash_vertices_ = new UnityEngine.Vector3[2 * VertexBuffer.size];
-      dash_colours_ = new UnityEngine.Color[2 * VertexBuffer.size];
+      dash_vertices_ = new List<UnityEngine.Vector3>();
+      dash_colours_ = new List<UnityEngine.Color>();
     }
+    dash_vertices_.Clear();
+    dash_colours_.Clear();
     var vertices = VertexBuffer.vertices;
+    UnityEngine.Vector3 camera =
+        camera_relative
+            ? UnityEngine.Vector3.zero
+            : PlanetariumCamera.Camera.transform.position;
+
+    // The apparent arc of a segment over which the camera distance varies
+    // linearly is (ds / (r1 - r0)) ln(r1 / r0), and the position at a given
+    // arc inverts it exactly; both degenerate gracefully to ds / r as
+    // r1 → r0.  A segment through the camera subtends no more than π.
     double total = 0;
     for (int i = 1; i < vertex_count; ++i) {
-      total += (vertices[first_vertex + i] -
-                vertices[first_vertex + i - 1]).magnitude;
+      UnityEngine.Vector3 p0 = vertices[first_vertex + i - 1];
+      UnityEngine.Vector3 p1 = vertices[first_vertex + i];
+      total += SegmentApparentArc((p0 - camera).magnitude,
+                                  (p1 - camera).magnitude,
+                                  (p1 - p0).magnitude);
     }
-    if (!(total > 0)) {
+    if (!(total > 0) || double.IsInfinity(total)) {
       return 0;
     }
-    double period = Math.Pow(2, Math.Ceiling(Math.Log(total / 256, 2)));
+    // A 16-pixel dash and a 16-pixel gap, lengthened if the line sweeps such
+    // an angle that the dashes would not fit the buffers.
+    double period = Math.Max(32 * TanAngularResolution(),
+                             total / max_dash_periods);
 
     int n = 0;
     double s = 0;
-    for (int i = 1;
-         i < vertex_count && n + 2 <= dash_vertices_.Length;
-         ++i) {
+    for (int i = 1; i < vertex_count; ++i) {
       UnityEngine.Vector3 p0 = vertices[first_vertex + i - 1];
       UnityEngine.Vector3 p1 = vertices[first_vertex + i];
+      double r0 = Math.Max((p0 - camera).magnitude, minimal_camera_distance);
+      double r1 = Math.Max((p1 - camera).magnitude, minimal_camera_distance);
       double ds = (p1 - p0).magnitude;
-      if (ds == 0) {
+      double arc = SegmentApparentArc(r0, r1, ds);
+      if (arc == 0) {
         continue;
       }
-      double s1 = s + ds;
+      double k = (r1 - r0) / ds;
+      double s1 = s + arc;
       for (double on_start = Math.Floor(s / period) * period;
-           on_start < s1 && n + 2 <= dash_vertices_.Length;
+           on_start < s1;
            on_start += period) {
         double a = Math.Max(s, on_start);
         double b = Math.Min(s1, on_start + period / 2);
         if (b <= a) {
           continue;
         }
-        dash_vertices_[n] = UnityEngine.Vector3.Lerp(p0,
-                                                     p1,
-                                                     (float)((a - s) / ds));
-        dash_colours_[n] = colour;
-        ++n;
-        dash_vertices_[n] = UnityEngine.Vector3.Lerp(p0,
-                                                     p1,
-                                                     (float)((b - s) / ds));
-        dash_colours_[n] = colour;
-        ++n;
+        dash_vertices_.Add(UnityEngine.Vector3.Lerp(
+            p0, p1, (float)(PositionAtApparentArc(a - s, r0, k) / ds)));
+        dash_colours_.Add(colour);
+        dash_vertices_.Add(UnityEngine.Vector3.Lerp(
+            p0, p1, (float)(PositionAtApparentArc(b - s, r0, k) / ds)));
+        dash_colours_.Add(colour);
+        n += 2;
       }
       s = s1;
     }
     return n;
+  }
+
+  private static double SegmentApparentArc(double r0, double r1, double ds) {
+    if (!(ds > 0)) {
+      return 0;
+    }
+    r0 = Math.Max(r0, minimal_camera_distance);
+    r1 = Math.Max(r1, minimal_camera_distance);
+    double arc = Math.Abs(r1 - r0) < 1e-6 * r0
+                     ? ds / r0
+                     : ds * Math.Log(r1 / r0) / (r1 - r0);
+    return Math.Min(arc, Math.PI);
+  }
+
+  private static double PositionAtApparentArc(double arc, double r0, double k) {
+    return Math.Abs(k) < 1e-12 ? arc * r0
+                               : r0 * (Math.Exp(k * arc) - 1) / k;
   }
 
   private static UnityEngine.Mesh MakeDynamicMesh() {
@@ -609,8 +650,10 @@ class Plotter {
   private int[] indices_ = null;
   private UnityEngine.Color[] colours_ =
       new UnityEngine.Color[VertexBuffer.size];
-  private UnityEngine.Vector3[] dash_vertices_ = null;
-  private UnityEngine.Color[] dash_colours_ = null;
+  private List<UnityEngine.Vector3> dash_vertices_ = null;
+  private List<UnityEngine.Color> dash_colours_ = null;
+  private const int max_dash_periods = 6000;
+  private const double minimal_camera_distance = 1e-6;
 }
 
 }  // namespace ksp_plugin_adapter
