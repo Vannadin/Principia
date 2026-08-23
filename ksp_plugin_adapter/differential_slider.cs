@@ -244,8 +244,11 @@ internal class DifferentialSlider : ScalingRenderer {
         if (slider_position_ != 0.0) {
           value_changed = true;
           // Moving the slider doesn't always cause a loss of focus so we
-          // terminate input if necessary.
-          if (parser_(formatted_value_, out double v)) {
+          // terminate input if necessary — but only if the field was actually
+          // edited: reparsing a mere display would round the value to the
+          // displayed digits.
+          if (formatted_value_ != formatter_(value_.Value) &&
+              parser_(formatted_value_, out double v)) {
             value = v;
           }
           value += Math.Sign(slider_position_) *
