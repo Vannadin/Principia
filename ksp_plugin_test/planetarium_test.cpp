@@ -48,6 +48,7 @@
 #include "physics/discrete_trajectory.hpp"
 #include "physics/ephemeris.hpp"
 #include "physics/equipotential.hpp"
+#include "physics/extrapolated_trajectory.hpp"
 #include "physics/lagrange_equipotentials.hpp"
 #include "physics/massive_body.hpp"
 #include "physics/mock_continuous_trajectory.hpp"
@@ -59,6 +60,7 @@
 #include "physics/rotating_pulsating_reference_frame.hpp"
 #include "physics/sector.hpp"
 #include "physics/solar_system.hpp"
+#include "physics/trajectory.hpp"
 #include "quantities/numbers.hpp"  // 🧙 For π.
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
@@ -111,6 +113,7 @@ using namespace principia::physics::_degrees_of_freedom;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
 using namespace principia::physics::_equipotential;
+using namespace principia::physics::_extrapolated_trajectory;
 using namespace principia::physics::_lagrange_equipotentials;
 using namespace principia::physics::_massive_body;
 using namespace principia::physics::_mock_continuous_trajectory;
@@ -122,6 +125,7 @@ using namespace principia::physics::_rotating_body;
 using namespace principia::physics::_rotating_pulsating_reference_frame;
 using namespace principia::physics::_sector;
 using namespace principia::physics::_solar_system;
+using namespace principia::physics::_trajectory;
 using namespace principia::quantities::_named_quantities;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
@@ -871,6 +875,218 @@ TEST_F(PlanetariumTest, PlotMethod4ThroughAnExtrapolatingFrame) {
   EXPECT_EQ(oldest_anchor.x, before_anchor.x);
   EXPECT_EQ(oldest_anchor.y, before_anchor.y);
   EXPECT_EQ(oldest_anchor.z, before_anchor.z);
+}
+
+// The celestial-shaped call: the time-based overload over a celestial's
+// trajectory continued analytically, seamed at the plotting frame's own
+// horizon.  Without an extension the seam covers the whole plot and the
+// vertices are bit-identical to the unseamed call; a frame that cannot be
+// extended clamps the plot at the horizon.
+TEST_F(PlanetariumTest, TimeBasedPlotMethod4SeamsAnExtrapolatedCelestial) {
+  GravitationalParameter const μ_star = 4e14 * Pow<3>(Metre) / Pow<2>(Second);
+  GravitationalParameter const μ_planet = 1e-6 * μ_star;
+  Length const a = 1e9 * Metre;
+  Time const period = 2 * π * Sqrt(Pow<3>(a) / (μ_star + μ_planet));
+  Speed const v_orbit = Sqrt((μ_star + μ_planet) / a);
+  double const f_star = μ_planet / (μ_star + μ_planet);
+  double const f_planet = μ_star / (μ_star + μ_planet);
+  Displacement<Barycentric> const r({a, 0 * Metre, 0 * Metre});
+  Velocity<Barycentric> const v_relative(
+      {0 * Metre / Second, v_orbit, 0 * Metre / Second});
+  std::vector<not_null<std::unique_ptr<MassiveBody const>>> bodies;
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("star", μ_star)));
+  bodies.push_back(make_not_null_unique<MassiveBody>(
+      MassiveBody::Parameters("planet", μ_planet)));
+  std::vector<DegreesOfFreedom<Barycentric>> const initial_state{
+      {Barycentric::origin - f_star * r, -f_star * v_relative},
+      {Barycentric::origin + f_planet * r, f_planet * v_relative}};
+  Ephemeris<Barycentric> small_ephemeris(
+      std::move(bodies),
+      initial_state,
+      t0_,
+      Ephemeris<Barycentric>::AccuracyParameters(
+          /*fitting_tolerance=*/0.1 * Milli(Metre),
+          /*geopotential_tolerance=*/0x1p-24),
+      Ephemeris<Barycentric>::FixedStepParameters(
+          SymmetricLinearMultistepIntegrator<
+              QuinlanTremaine1990Order12,
+              Ephemeris<Barycentric>::NewtonianMotionEquation>(),
+          /*step=*/period / 300));
+  CHECK_OK(small_ephemeris.Prolong(t0_ + 2 * period));
+  Instant const horizon = small_ephemeris.t_max();
+  auto const star = small_ephemeris.bodies()[0];
+  auto const planet = small_ephemeris.bodies()[1];
+  BodyCentredNonRotatingReferenceFrame<Barycentric, Navigation> const
+      real_frame(&small_ephemeris, star);
+
+  std::vector<AnalyticSubsystemMotion<Barycentric>::Member> members;
+  for (int i = 0; i < 2; ++i) {
+    auto const body = small_ephemeris.bodies()[i];
+    members.push_back(AnalyticSubsystemMotion<Barycentric>::Member{
+        body->gravitational_parameter(),
+        small_ephemeris.trajectory(body)->EvaluateDegreesOfFreedom(horizon),
+        i == 0 ? std::nullopt : std::optional<int>(0)});
+  }
+  auto const model =
+      std::make_shared<AnalyticSubsystemMotion<Barycentric> const>(members,
+                                                                   horizon);
+
+  auto const& star_trajectory = *small_ephemeris.trajectory(star);
+  auto const& planet_trajectory = *small_ephemeris.trajectory(planet);
+  ExtrapolatedTrajectory<Barycentric> const extended_planet(
+      planet_trajectory,
+      /*horizon=*/model->epoch(),
+      *model,
+      /*member=*/1);
+
+  Planetarium::Parameters const parameters(
+      /*sphere_radius_multiplier=*/1,
+      /*angular_resolution=*/0.1 * Degree,
+      /*field_of_view=*/90 * Degree);
+  Planetarium::PlottingToScaledSpaceDisplacementConversion const
+      plotting_to_scaled_space_displacement =
+          [](Displacement<Navigation> const& displacement) {
+            constexpr auto inverse_scale_factor = 1 / (6000 * Metre);
+            return (displacement * inverse_scale_factor).coordinates();
+          };
+  Planetarium const clamped(parameters,
+                            perspective_,
+                            &small_ephemeris,
+                            &real_frame,
+                            plotting_to_scaled_space_);
+  Planetarium const extended(
+      parameters,
+      perspective_,
+      &small_ephemeris,
+      std::make_unique<ExtrapolatingPlottingFrame>(&small_ephemeris,
+                                                   &real_frame,
+                                                   star,
+                                                   model,
+                                                   /*member=*/0,
+                                                   horizon),
+      plotting_to_scaled_space_,
+      plotting_to_scaled_space_displacement);
+
+  auto const plot = [](Planetarium const& planetarium,
+                       Trajectory<Barycentric> const& trajectory,
+                       Instant const& first_time,
+                       Instant const& last_time,
+                       std::vector<ScaledSpacePoint>& points,
+                       Length* const minimal_distance,
+                       int* const seam_vertex_count) {
+    planetarium.PlotMethod4(
+        trajectory,
+        first_time,
+        last_time,
+        /*reverse=*/false,
+        [&points](ScaledSpacePoint const& point) { points.push_back(point); },
+        /*max_points=*/std::numeric_limits<int>::max(),
+        minimal_distance,
+        Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
+        /*anchor_out=*/nullptr,
+        /*registration=*/std::nullopt,
+        seam_vertex_count);
+  };
+
+  // A short head — the last eighth of a turn before the horizon — and a long
+  // tail sweeping the half-turn beyond it, through the camera-nearest point
+  // of the orbit.
+  Instant const t_first = horizon - period / 8;
+  Instant const t_last = horizon + period / 2;
+  std::vector<ScaledSpacePoint> points;
+  Length minimal_distance;
+  int seam_vertex_count = 0;
+  plot(extended, extended_planet, t_first, t_last,
+       points, &minimal_distance, &seam_vertex_count);
+  ASSERT_GT(seam_vertex_count, 0);
+  ASSERT_LT(seam_vertex_count, static_cast<int>(points.size()));
+
+  // The tail's first vertex sits exactly at the horizon; the last one follows
+  // the model, relative to the frame's own analytically continued centre.
+  R3Element<double> const expected_at_horizon =
+      ((planet_trajectory.EvaluatePosition(horizon) -
+        star_trajectory.EvaluatePosition(horizon)) /
+       (6000 * Metre)).coordinates();
+  R3Element<double> const expected_at_end =
+      ((model->EvaluateDegreesOfFreedom(1, t_last).position() -
+        model->EvaluateDegreesOfFreedom(0, t_last).position()) /
+       (6000 * Metre)).coordinates();
+  // The coordinates are ~1.7e5 scaled units, so the tolerance is a few float
+  // ULPs of that magnitude.
+  EXPECT_THAT(points[seam_vertex_count].x,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.x),
+                                   0.05f));
+  EXPECT_THAT(points[seam_vertex_count].y,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.y),
+                                   0.05f));
+  EXPECT_THAT(points[seam_vertex_count].z,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.z),
+                                   0.05f));
+  EXPECT_THAT(points.back().x,
+              ::testing::FloatNear(static_cast<float>(expected_at_end.x),
+                                   0.05f));
+  EXPECT_THAT(points.back().y,
+              ::testing::FloatNear(static_cast<float>(expected_at_end.y),
+                                   0.05f));
+  EXPECT_THAT(points.back().z,
+              ::testing::FloatNear(static_cast<float>(expected_at_end.z),
+                                   0.05f));
+
+  // The minimal distance aggregates over both runs: the tail passes the
+  // camera-nearest point of the orbit, which the head never reaches, and the
+  // aggregate is exactly the minimum of the two runs plotted separately.
+  std::vector<ScaledSpacePoint> head_points;
+  std::vector<ScaledSpacePoint> tail_points;
+  Length head_minimal_distance;
+  Length tail_minimal_distance;
+  plot(extended, extended_planet, t_first, horizon,
+       head_points, &head_minimal_distance, /*seam_vertex_count=*/nullptr);
+  plot(extended, extended_planet, horizon, t_last,
+       tail_points, &tail_minimal_distance, /*seam_vertex_count=*/nullptr);
+  EXPECT_LT(minimal_distance + 10 * Metre, head_minimal_distance);
+  EXPECT_EQ(minimal_distance,
+            std::min(head_minimal_distance, tail_minimal_distance));
+
+  // Without an extension the seam covers the whole plot and the vertices are
+  // bit-identical to the unseamed call.
+  Instant const t_within = horizon - period / 16;
+  std::vector<ScaledSpacePoint> unseamed_points;
+  std::vector<ScaledSpacePoint> seamed_points;
+  int parity_seam_vertex_count = 0;
+  plot(extended, extended_planet, t_first, t_within,
+       unseamed_points, /*minimal_distance=*/nullptr,
+       /*seam_vertex_count=*/nullptr);
+  plot(extended, extended_planet, t_first, t_within,
+       seamed_points, /*minimal_distance=*/nullptr,
+       &parity_seam_vertex_count);
+  ASSERT_FALSE(unseamed_points.empty());
+  ASSERT_GT(parity_seam_vertex_count, 0);
+  EXPECT_EQ(static_cast<int>(seamed_points.size()),
+            parity_seam_vertex_count);
+  ASSERT_EQ(unseamed_points.size(), seamed_points.size());
+  for (int i = 0; i < static_cast<int>(unseamed_points.size()); ++i) {
+    EXPECT_EQ(unseamed_points[i].x, seamed_points[i].x);
+    EXPECT_EQ(unseamed_points[i].y, seamed_points[i].y);
+    EXPECT_EQ(unseamed_points[i].z, seamed_points[i].z);
+  }
+
+  // A frame that cannot be extended clamps the plot at the horizon: all seam,
+  // no tail.
+  std::vector<ScaledSpacePoint> clamped_points;
+  int clamped_seam_vertex_count = 0;
+  plot(clamped, extended_planet, t_first, t_last,
+       clamped_points, /*minimal_distance=*/nullptr,
+       &clamped_seam_vertex_count);
+  ASSERT_FALSE(clamped_points.empty());
+  EXPECT_EQ(static_cast<int>(clamped_points.size()),
+            clamped_seam_vertex_count);
+  EXPECT_THAT(clamped_points.back().x,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.x),
+                                   0.05f));
+  EXPECT_THAT(clamped_points.back().y,
+              ::testing::FloatNear(static_cast<float>(expected_at_horizon.y),
+                                   0.05f));
 }
 
 // An anchored plot at an interstellar distance from the plotting frame's

@@ -370,46 +370,11 @@ void Planetarium::PlotMethod4(
   auto const begin_time = std::max(begin->time, plotting_frame_->t_min());
   auto const last_time =
       std::min({last->time, plotting_frame_->render_t_max(), t_max});
-  Instant const seam_time = plotting_frame_->t_max();
-  if (seam_vertex_count == nullptr || reverse || last_time <= seam_time) {
-    // No tail (or no seam requested; a reverse plot never extends): every
-    // vertex is at or before the horizon.
-    auto const counted_add_point =
-        [&add_point, seam_vertex_count](ScaledSpacePoint const& point) {
-          if (seam_vertex_count != nullptr) {
-            ++*seam_vertex_count;
-          }
-          add_point(point);
-        };
-    PlotMethod4(trajectory, begin_time, last_time, reverse, counted_add_point,
-                max_points, /*minimal_distance=*/nullptr, placement,
-                anchor_out, registration);
-  } else if (begin_time > seam_time) {
-    // Entirely beyond the horizon: all tail.
-    PlotMethod4(trajectory, begin_time, last_time, reverse, add_point,
-                max_points, /*minimal_distance=*/nullptr, placement,
-                anchor_out, registration);
-  } else {
-    // Emit the head up to the frame's own horizon and count it, then the
-    // tail from the horizon on: the tail's first vertex sits exactly at the
-    // seam, and the consumer styles the two ranges apart.
-    auto const counted_add_point =
-        [&add_point, seam_vertex_count](ScaledSpacePoint const& point) {
-          ++*seam_vertex_count;
-          add_point(point);
-        };
-    PlotMethod4(trajectory, begin_time, seam_time, reverse, counted_add_point,
-                max_points, /*minimal_distance=*/nullptr, placement,
-                anchor_out, registration);
-    // The tail run emits its initial vertex unconditionally, so it must not
-    // be started on an exhausted budget.
-    if (max_points - *seam_vertex_count > 0) {
-      PlotMethod4(trajectory, seam_time, last_time, reverse, add_point,
-                  max_points - *seam_vertex_count,
-                  /*minimal_distance=*/nullptr, placement, anchor_out,
-                  registration);
-    }
-  }
+  // The time-based overload seams the plot at the plotting frame's own
+  // horizon when a seam is requested.
+  PlotMethod4(trajectory, begin_time, last_time, reverse, add_point,
+              max_points, /*minimal_distance=*/nullptr, placement, anchor_out,
+              registration, seam_vertex_count);
 }
 
 ScaledSpacePoint Planetarium::PlotPoint(

@@ -238,7 +238,10 @@ class Planetarium {
 
   // The same method, operating on the `Trajectory` interface for any frame that
   // can be converted to `Navigation`.  `placement` and `registration` are only
-  // meaningful when `Frame` is `Barycentric`.
+  // meaningful when `Frame` is `Barycentric`.  If `seam_vertex_count` is not
+  // null the times are clamped to the plotting frame's own bounds and the plot
+  // is seamed at its horizon, as above; `minimal_distance` then aggregates
+  // over both runs.
   template<typename Frame>
   void PlotMethod4(
       Trajectory<Frame> const& trajectory,
@@ -251,7 +254,8 @@ class Planetarium {
       Ephemeris<Barycentric>::SubsystemPlacement const& placement =
           Ephemeris<Barycentric>::SubsystemPlacement::Stock(),
       R3Element<double>* anchor_out = nullptr,
-      std::optional<Registration> const& registration = std::nullopt) const;
+      std::optional<Registration> const& registration = std::nullopt,
+      int* seam_vertex_count = nullptr) const;
 
   // The scaled-space vertex of a single `position` — expressed in `placement`
   // and held at time `t` — as an anchored plot of one point would emit it: a

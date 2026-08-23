@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <limits>
+#include <memory>
+#include <utility>
 
 #include "absl/log/check.h"
 #include "absl/log/die_if_null.h"
@@ -22,6 +24,7 @@
 #include "ksp_plugin/vessel.hpp"
 #include "physics/discrete_trajectory.hpp"
 #include "physics/ephemeris.hpp"
+#include "physics/extrapolated_trajectory.hpp"
 #include "quantities/quantities.hpp"
 #include "quantities/si.hpp"
 
@@ -43,6 +46,7 @@ using namespace principia::ksp_plugin::_renderer;
 using namespace principia::ksp_plugin::_vessel;
 using namespace principia::physics::_discrete_trajectory;
 using namespace principia::physics::_ephemeris;
+using namespace principia::physics::_extrapolated_trajectory;
 using namespace principia::quantities::_quantities;
 using namespace principia::quantities::_si;
 
@@ -472,7 +476,8 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
     int const vertices_size,
     double* const minimal_distance_from_camera,
     int* const vertex_count,
-    XYZ* const anchor) {
+    XYZ* const anchor,
+    int* const seam_vertex_count) {
   journal::Method<journal::PlanetariumPlotCelestialFutureTrajectory> m(
       {planetarium,
        plugin,
@@ -480,10 +485,11 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
        vessel_guid,
        vertices,
        vertices_size},
-      {minimal_distance_from_camera, vertex_count, anchor});
+      {minimal_distance_from_camera, vertex_count, anchor, seam_vertex_count});
   CHECK(plugin != nullptr);
   CHECK(planetarium != nullptr);
   *vertex_count = 0;
+  *seam_vertex_count = 0;
   R3Element<double> anchor_coordinates;
 
   // Do not plot the past when there is a target vessel as it is misleading.
@@ -497,31 +503,57 @@ void __cdecl principia__PlanetariumPlotCelestialFutureTrajectory(
     auto const& celestial = plugin->GetCelestial(celestial_index);
     auto const& celestial_trajectory = celestial.trajectory();
     Instant const prediction_final_time = vessel.prediction()->t_max();
-    // A void flight plan may end beyond the ephemeris, where the celestial has
-    // no trajectory to plot.
-    Instant const final_time = std::min(
+    Instant const final_time =
         vessel.has_flight_plan()
             ? std::max(GetFlightPlan(*plugin, vessel_guid).actual_final_time(),
                        prediction_final_time)
-            : prediction_final_time,
-        celestial_trajectory.t_max());
+            : prediction_final_time;
     auto const registration = CelestialRegistration(*plugin, celestial);
     // No need to request reanimation here because the current time of the
     // plugin is necessarily covered.
     Length minimal_distance;
-    planetarium->PlotMethod4(
-        celestial_trajectory,
-        /*first_time=*/plugin->CurrentTime(),
-        /*last_time=*/final_time,
-        /*reverse=*/false,
+    auto const add_vertex =
         [vertices, vertex_count](ScaledSpacePoint const& vertex) {
           vertices[(*vertex_count)++] = vertex;
-        },
-        vertices_size,
-        &minimal_distance,
-        {celestial.subsystem(), std::nullopt},
-        AnchorFor(registration, anchor_coordinates),
-        registration);
+        };
+    if (final_time > celestial_trajectory.t_max()) {
+      // The plan or prediction ends beyond the ephemeris: continue the
+      // celestial analytically from the model's epoch — the C¹ splice — and
+      // seam the plot at the plotting frame's horizon to style the tail
+      // apart.
+      auto const [model, member] =
+          plugin->CelestialFutureMotionModel(celestial_index);
+      ExtrapolatedTrajectory<Barycentric> const extended_trajectory(
+          celestial_trajectory,
+          /*horizon=*/model->epoch(),
+          *model,
+          member);
+      planetarium->PlotMethod4(
+          extended_trajectory,
+          /*first_time=*/plugin->CurrentTime(),
+          /*last_time=*/final_time,
+          /*reverse=*/false,
+          add_vertex,
+          vertices_size,
+          &minimal_distance,
+          {celestial.subsystem(), std::nullopt},
+          AnchorFor(registration, anchor_coordinates),
+          registration,
+          seam_vertex_count);
+    } else {
+      planetarium->PlotMethod4(
+          celestial_trajectory,
+          /*first_time=*/plugin->CurrentTime(),
+          /*last_time=*/final_time,
+          /*reverse=*/false,
+          add_vertex,
+          vertices_size,
+          &minimal_distance,
+          {celestial.subsystem(), std::nullopt},
+          AnchorFor(registration, anchor_coordinates),
+          registration);
+      *seam_vertex_count = *vertex_count;
+    }
     *minimal_distance_from_camera = minimal_distance / Metre;
     *anchor = ToXYZ(anchor_coordinates);
     return m.Return();

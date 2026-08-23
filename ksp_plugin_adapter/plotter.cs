@@ -287,15 +287,27 @@ class Plotter {
             VertexBuffer.size,
             out double min_future_distance,
             out int vertex_count,
-            out XYZ anchor);
+            out XYZ anchor,
+            out int seam_vertex_count);
         min_distance_from_camera =
             Math.Min(min_distance_from_camera, min_future_distance);
         DrawLineMesh(ref trajectories.future,
-                     vertex_count,
+                     seam_vertex_count,
                      anchor,
                      colour,
                      GLLines.Style.Solid,
                      root.position);
+        if (seam_vertex_count < vertex_count) {
+          // The analytically extended tail, in the body's own colour so the
+          // line keeps its identity, set apart by the tail style.
+          DrawLineMesh(ref trajectories.future_tail,
+                       vertex_count - seam_vertex_count,
+                       anchor,
+                       colour,
+                       adapter_.flight_plan_tail_style,
+                       root.position,
+                       first_vertex: seam_vertex_count);
+        }
       }
     }
     foreach (CelestialBody child in root.orbitingBodies) {
@@ -659,6 +671,8 @@ class Plotter {
 
   private class CelestialTrajectories {
     public UnityEngine.Mesh future = MakeDynamicMesh();
+    // Created on demand: only a plot past the ephemeris grows a tail.
+    public UnityEngine.Mesh future_tail;
     public UnityEngine.Mesh past = MakeDynamicMesh();
   }
 

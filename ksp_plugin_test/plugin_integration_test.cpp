@@ -3385,6 +3385,14 @@ TEST_F(PluginIntegrationTestWithoutPlugin,
   EXPECT_TRUE(plugin->CelestialFutureDegreesOfFreedom(
                   star_a, star_trajectory.t_min())
                   .has_value());
+
+  // Beyond the ephemeris the two future sources agree: the model handed to
+  // the plotters is the one the ghost evaluates.
+  Instant const t_beyond = star_trajectory.t_max() + 1000 * Second;
+  auto const [model, member] = plugin->CelestialFutureMotionModel(star_a);
+  EXPECT_EQ(
+      plugin->CelestialFutureDegreesOfFreedom(star_a, t_beyond)->position(),
+      model->EvaluateDegreesOfFreedom(member, t_beyond).position());
 }
 
 // A void plan within the ephemeris's reach needs the ephemeris no more than

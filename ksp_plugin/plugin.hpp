@@ -306,6 +306,13 @@ class Plugin {
   virtual std::optional<DegreesOfFreedom<Barycentric>>
   CelestialFutureDegreesOfFreedom(Index index, Instant const& t) const;
 
+  // The analytic model of the future motion of the subsystem of the celestial
+  // with the given `Index`, and the celestial's member index in it; used to
+  // continue the celestial's trajectory past the ephemeris.
+  virtual std::pair<
+      std::shared_ptr<AnalyticSubsystemMotion<Barycentric> const>, int>
+  CelestialFutureMotionModel(Index index) const;
+
   // Makes the vessel with the given GUID inherit the placement — subsystem
   // and anchor — of its parent vessel, if it is fresh (no trajectory, parts,
   // or anchor of its own); a no-op otherwise.  Called by the adapter for a

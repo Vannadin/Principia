@@ -163,7 +163,59 @@ void Planetarium::PlotMethod4(
     Length* const minimal_distance,
     Ephemeris<Barycentric>::SubsystemPlacement const& placement,
     R3Element<double>* const anchor_out,
-    std::optional<Registration> const& registration) const {
+    std::optional<Registration> const& registration,
+    int* const seam_vertex_count) const {
+  if (seam_vertex_count != nullptr) {
+    *seam_vertex_count = 0;
+    Instant const begin_time = std::max(first_time, plotting_frame_->t_min());
+    Instant const end_time =
+        std::min(last_time, plotting_frame_->render_t_max());
+    Instant const seam_time = plotting_frame_->t_max();
+    auto const counted_add_point =
+        [&add_point, seam_vertex_count](ScaledSpacePoint const& point) {
+          ++*seam_vertex_count;
+          add_point(point);
+        };
+    if (reverse || end_time <= seam_time) {
+      // No tail (a reverse plot never extends): every vertex is at or before
+      // the horizon.
+      PlotMethod4(trajectory, begin_time, end_time, reverse, counted_add_point,
+                  max_points, minimal_distance, placement, anchor_out,
+                  registration);
+    } else if (begin_time > seam_time) {
+      // Entirely beyond the horizon: all tail.
+      PlotMethod4(trajectory, begin_time, end_time, reverse, add_point,
+                  max_points, minimal_distance, placement, anchor_out,
+                  registration);
+    } else {
+      // Emit the head up to the frame's own horizon and count it, then the
+      // tail from the horizon on: the tail's first vertex sits exactly at the
+      // seam, and the consumer styles the two ranges apart.  The runs share
+      // `anchor_out`: a non-null anchor implies a registration, and the
+      // anchored plot derives its anchor independently of the run's times.
+      Length head_minimal_distance = Infinity<Length>;
+      Length tail_minimal_distance = Infinity<Length>;
+      PlotMethod4(trajectory, begin_time, seam_time, reverse,
+                  counted_add_point, max_points,
+                  minimal_distance == nullptr ? nullptr
+                                              : &head_minimal_distance,
+                  placement, anchor_out, registration);
+      // The tail run emits its initial vertex unconditionally, so it must not
+      // be started on an exhausted budget.
+      if (max_points - *seam_vertex_count > 0) {
+        PlotMethod4(trajectory, seam_time, end_time, reverse, add_point,
+                    max_points - *seam_vertex_count,
+                    minimal_distance == nullptr ? nullptr
+                                                : &tail_minimal_distance,
+                    placement, anchor_out, registration);
+      }
+      if (minimal_distance != nullptr) {
+        *minimal_distance =
+            std::min(head_minimal_distance, tail_minimal_distance);
+      }
+    }
+    return;
+  }
   if (anchor_out != nullptr) {
     *anchor_out = R3Element<double>{};
   }

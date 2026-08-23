@@ -905,6 +905,11 @@ Plugin::CelestialFutureDegreesOfFreedom(Index const index,
   return model->EvaluateDegreesOfFreedom(member, t);
 }
 
+std::pair<std::shared_ptr<AnalyticSubsystemMotion<Barycentric> const>, int>
+Plugin::CelestialFutureMotionModel(Index const index) const {
+  return SubsystemMotionModelFor(FindOrDie(celestials_, index)->body());
+}
+
 void Plugin::InheritVesselPlacement(GUID const& vessel_guid,
                                     GUID const& parent_vessel_guid) const {
   not_null<Vessel*> const vessel = FindOrDie(vessels_, vessel_guid).get();
