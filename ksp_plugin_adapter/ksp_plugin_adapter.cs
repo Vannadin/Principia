@@ -160,10 +160,9 @@ public partial class PrincipiaPluginAdapter : ScenarioModule,
   internal GLLines.Style flight_plan_style = GLLines.Style.Dashed;
   // The analytically extended tail of a flight plan, beyond the plotting
   // frame's own horizon: a plausible continuation, not an integration, so it
-  // is set apart by colour.  The style also dashes a celestial's extended
-  // future track, which keeps its body's own colour.
+  // is set apart by colour.
   internal UnityEngine.Color flight_plan_tail_colour = XKCDColors.Orange;
-  internal GLLines.Style flight_plan_tail_style = GLLines.Style.Dashed;
+  internal GLLines.Style flight_plan_tail_style = GLLines.Style.Solid;
   internal UnityEngine.Color burn_colour = XKCDColors.Pink;
   internal GLLines.Style burn_style = GLLines.Style.Solid;
   internal UnityEngine.Color target_history_colour = XKCDColors.Goldenrod;

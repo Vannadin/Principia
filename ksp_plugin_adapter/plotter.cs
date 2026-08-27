@@ -299,12 +299,12 @@ class Plotter {
                      root.position);
         if (seam_vertex_count < vertex_count) {
           // The analytically extended tail, in the body's own colour so the
-          // line keeps its identity, set apart by the tail style.
+          // line keeps its identity, set apart by dashing.
           DrawLineMesh(ref trajectories.future_tail,
                        vertex_count - seam_vertex_count,
                        anchor,
                        colour,
-                       adapter_.flight_plan_tail_style,
+                       GLLines.Style.Dashed,
                        root.position,
                        first_vertex: seam_vertex_count);
         }
